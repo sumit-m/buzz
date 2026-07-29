@@ -9,8 +9,9 @@ On Windows every icon the user actually sees comes out of `icon.ico` --
 tauri-codegen wires it to `default_window_icon`, and Windows picks 16px for the
 title bar and 24/32px for the taskbar.
 
-Local-only: this artwork is not ours to ship. Never push this branch, and
-re-run after any rebase that touches `desktop/src-tauri/icons/`.
+Local-only: swapping the app's branding is a maintainer call, not a bug fix.
+Never push this branch, and re-run after any rebase that touches
+`desktop/src-tauri/icons/`.
 
     python scripts/local-transparent-icons.py
 """
@@ -23,7 +24,7 @@ from pathlib import Path
 from PIL import Image
 
 ICONS = Path(__file__).resolve().parent.parent / "desktop/src-tauri/icons"
-MASTER = ICONS / "local-art/docker.png"
+MASTER = ICONS / "local-art/bee-orange.png"
 
 PNG_TARGETS = {
     "icon.png": 512,

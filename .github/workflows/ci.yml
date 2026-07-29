@@ -181,6 +181,10 @@ jobs:
         run: scripts/test-ci-required-context-isolation.sh
       - name: CI path selection regression tests
         run: node --test scripts/ci-selection.test.mjs scripts/ci-required-gates.test.mjs scripts/ci-apt-retry.test.mjs scripts/ci-hermit-retry.test.mjs
+      - name: Desktop dev-state reset contract
+        run: |
+          scripts/test-reset-desktop-dev-state.sh
+          scripts/test-reset-desktop-standalone-state.sh
       - name: File size policy
         run: just file-size-check
 

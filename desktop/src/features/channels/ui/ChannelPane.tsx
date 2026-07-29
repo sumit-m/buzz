@@ -110,8 +110,6 @@ export const ChannelPane = React.memo(function ChannelPane({
   onRetryTimeline,
   entranceMessageId = null,
   onEntranceMessageComplete,
-  welcomeKickoffStage = null,
-  welcomeKickoffSettingUp = false,
   messages,
   threadSummaries,
   huddleThreadRepliesError = false,
@@ -754,11 +752,8 @@ export const ChannelPane = React.memo(function ChannelPane({
                   {isActiveWelcomeChannel && !timeoutActive ? (
                     <WelcomeComposerGuidanceLayer
                       onDismiss={handleDismissWelcomeBanner}
-                      settingUp={welcomeKickoffSettingUp}
                       state={welcomeComposerBannerState}
-                    >
-                      {welcomeKickoffStage}
-                    </WelcomeComposerGuidanceLayer>
+                    />
                   ) : null}
                   {timeoutActive ? <ComposerTimeoutBanner /> : null}
                   <ComposerDockBackdrop gutterClassName="inset-x-5" />

@@ -29,8 +29,7 @@ import {
 import { mergeChannelKnownAgentPubkeys } from "@/features/agents/knownAgentPubkeys";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
 import { pickWelcomeGuideAgent } from "@/features/onboarding/welcomeGuide";
-import { useWelcomeKickoffEntrance } from "@/features/onboarding/useWelcomeKickoffEntrance";
-import { useWelcomeKickoffStagePresence } from "@/features/onboarding/useWelcomeKickoffStagePresence";
+import { useWelcomeSurfaceReady } from "@/features/onboarding/useWelcomeSurfaceReady";
 import { useWelcomeAgentCreate } from "@/features/channels/useWelcomeAgentCreate";
 import { useCommunities } from "@/features/communities/useCommunities";
 import {
@@ -274,14 +273,6 @@ export function ChannelScreen({
     resolvedMessages,
   });
   const threadReplyEvents = threadRepliesQuery.data ?? EMPTY_RELAY_EVENTS;
-  const {
-    entranceMessageId: welcomeEntranceMessageId,
-    handleEntranceComplete: handleWelcomeEntranceComplete,
-  } = useWelcomeKickoffEntrance(
-    activeChannel,
-    resolvedMessages,
-    threadReplyEvents,
-  );
   const messageEventProfilePubkeys = useMessageEventProfilePubkeys(
     resolvedMessages,
     threadReplyEvents,
@@ -630,12 +621,7 @@ export function ChannelScreen({
         hasPersistedHydratedChannel(queryClient, activeChannelId),
     );
   settledChannelIdRef.current = settledChannelId;
-  const { welcomeKickoffStage, welcomeKickoffSettingUp } =
-    useWelcomeKickoffStagePresence(
-      activeChannel,
-      timelineMessages,
-      isTimelineLoading,
-    );
+  useWelcomeSurfaceReady(activeChannel, isTimelineLoading);
   useChannelTargetReset({
     activeChannelId,
     setEditTargetId,
@@ -859,10 +845,6 @@ export function ChannelScreen({
                   onOpenMembers={handleOpenMembersSidebar}
                   isFetchingOlder={isFetchingOlder}
                   isHuddleTranscript={isHuddleTranscript}
-                  entranceMessageId={welcomeEntranceMessageId}
-                  onEntranceMessageComplete={handleWelcomeEntranceComplete}
-                  welcomeKickoffStage={welcomeKickoffStage}
-                  welcomeKickoffSettingUp={welcomeKickoffSettingUp}
                   editTarget={
                     editTargetMessage
                       ? buildMessageComposerEditTarget(

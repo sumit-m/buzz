@@ -357,7 +357,14 @@ test("required Welcome creation failure keeps community onboarding open", async 
   );
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Take me to Buzz" }).click();
+  // Local build ships no starter illustrations, so the tiles fall back to the
+  // letter avatar — assert the roster, not the artwork.
+  for (const name of ["fizz", "honey", "bumble"]) {
+    await expect(page.getByTestId(`starter-persona-${name}`)).toBeVisible();
+  }
+
+  const enterButton = page.getByRole("button", { name: "Take me to Buzz" });
+  await enterButton.click();
 
   await expect(page.getByTestId("community-onboarding-flow")).toBeVisible();
   await expect(page.getByText(`${welcomeError} Try again.`)).toBeVisible();

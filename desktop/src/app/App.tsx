@@ -20,7 +20,6 @@ import {
   replaceCommunityDestinationRoute,
 } from "@/app/communityViewTransition";
 import { deriveShellRoute } from "@/app/AppShell.helpers";
-import { ThemeGrainientBackground } from "@/app/ThemeGrainientBackground";
 import { CommunityThemeController } from "@/shared/theme/CommunityThemeController";
 import { useReloadShortcut } from "@/app/useReloadShortcut";
 import { useCloseWindowShortcut } from "@/app/useCloseWindowShortcut";
@@ -76,7 +75,6 @@ import {
 } from "@/shared/deep-link";
 import { cn } from "@/shared/lib/cn";
 import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
-import { FlappingBee } from "@/shared/ui/buzz-logo/FlappingBee";
 import { FuzzyLogo } from "@/shared/ui/buzz-logo/FuzzyLogo";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 
@@ -168,10 +166,10 @@ function BeeLoader({
   );
 }
 
-// Cold boot gate: the theme-adaptive grainient background with a single
-// centered Buzz bee flying over it — the same static mark as before, now with
-// its wings flapping (ported from the Buzz website's wing-flap). Replaces the
-// old "Setting up your community" text, which stays as an sr-only caption.
+// Cold boot gate. Upstream fills this with a grainient background and a
+// flapping bee; local preference is a plain themed window while boot resolves
+// — the shell class still paints `--background`, so the window is never
+// transparent. The caption stays for screen readers.
 function AppLoadingGate() {
   return (
     <div
@@ -180,9 +178,7 @@ function AppLoadingGate() {
       role="status"
     >
       <StartupWindowDragRegion />
-      <ThemeGrainientBackground />
       <span className="sr-only">{LOADING_TEXT}</span>
-      <FlappingBee className="relative z-10 h-auto w-28" />
     </div>
   );
 }

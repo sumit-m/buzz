@@ -50,11 +50,9 @@ function isRelayMembershipDeniedError(error: unknown): boolean {
   );
 }
 
-const STARTER_PERSONA_ANIMATIONS: Record<string, string> = {
-  Fizz: "/onboarding/starter-team/fizz.png",
-  Honey: "/onboarding/starter-team/honey.png",
-  Pollen: "/onboarding/starter-team/pollen.png",
-};
+// No illustrations for the local starter personas — the lookup misses and the
+// render falls back to the letter avatar.
+const STARTER_PERSONA_ANIMATIONS: Record<string, string> = {};
 
 /** Fade duration for the "entering" curtain over the mounting app. */
 const ENTERING_CURTAIN_FADE_MS = 500;
@@ -214,7 +212,7 @@ export function CommunityOnboardingFlow({
     void listPersonas()
       .then((personas) =>
         setStarterPersonas(
-          ["Fizz", "Honey", "Pollen"].flatMap((name) => {
+          ["Opus", "Sonnet", "Fable"].flatMap((name) => {
             const persona = personas.find(
               (candidate) => candidate.displayName === name,
             );

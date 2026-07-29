@@ -22,9 +22,15 @@ import type {
 } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
-export const WELCOME_GUIDE_AGENT_NAME = "Fizz";
+export const WELCOME_GUIDE_AGENT_NAME = "Opus";
 export const WELCOME_GUIDE_PERSONA_ID = "builtin:fizz";
 export const WELCOME_TEAM_ID = "builtin-team:welcome";
+
+// LOCAL DIVERGENCE: upstream passes the build-time `agentAccessOwnerOnly`
+// flag here, which only release packaging sets. In every other build the
+// teammates land behind a lead-only allowlist and stop answering the owner
+// directly. All three starters should answer me, so force owner-only.
+const WELCOME_TEAM_OWNER_ONLY_ACCESS = true;
 export const WELCOME_GUIDE_INTRO_MARKER = "buzz-welcome-intro.v1";
 const LEGACY_WELCOME_GUIDE_AGENT_NAME = "Kit";
 export const LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT =
@@ -42,9 +48,9 @@ export type WelcomeTeamStarterDefinition = Readonly<{
 
 /** Stable identities used to provision the Rust-seeded Welcome Team. */
 export const WELCOME_TEAM_STARTERS = [
-  { name: "Fizz", personaId: "builtin:fizz", role: "lead" },
-  { name: "Honey", personaId: "builtin:honey", role: "teammate" },
-  { name: "Pollen", personaId: "builtin:bumble", role: "teammate" },
+  { name: "Opus", personaId: "builtin:fizz", role: "lead" },
+  { name: "Sonnet", personaId: "builtin:honey", role: "teammate" },
+  { name: "Fable", personaId: "builtin:bumble", role: "teammate" },
 ] as const satisfies readonly WelcomeTeamStarterDefinition[];
 
 export type WelcomeTeamAgents = [ManagedAgent, ManagedAgent, ManagedAgent];
@@ -325,13 +331,11 @@ async function provisionWelcomeTeam(
 ): Promise<WelcomeTeamAgents> {
   const existingAgents = await listManagedAgents();
   await ensureWelcomeTeamPersonasActive();
-  const [personas, runtimeCatalog, globalConfig, agentAccessOwnerOnly] =
-    await Promise.all([
-      listPersonas(),
-      discoverAcpRuntimes(),
-      getGlobalAgentConfig(),
-      getAgentAccessOwnerOnly(),
-    ]);
+  const [personas, runtimeCatalog, globalConfig] = await Promise.all([
+    listPersonas(),
+    discoverAcpRuntimes(),
+    getGlobalAgentConfig(),
+  ]);
   const personasById = new Map(
     personas.map((persona) => [persona.id, persona]),
   );
@@ -381,7 +385,7 @@ async function provisionWelcomeTeam(
     const accessUpdate = welcomeTeammateAccessUpdate(
       teammate,
       leadPubkey,
-      agentAccessOwnerOnly,
+      WELCOME_TEAM_OWNER_ONLY_ACCESS,
     );
     if (accessUpdate) {
       const updated = await updateManagedAgent(accessUpdate);

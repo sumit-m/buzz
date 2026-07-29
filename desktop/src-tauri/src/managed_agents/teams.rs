@@ -33,8 +33,8 @@ struct BuiltInTeam {
 
 const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
     id: "builtin-team:welcome",
-    name: "Core Team",
-    description: Some("Opus, Sonnet and Fable — pick the model that fits the task."),
+    name: "Claude - Opus, Sonnet and Fable",
+    description: Some("Pick the model that fits the task."),
     persona_ids: &["builtin:fizz", "builtin:honey", "builtin:bumble"],
 }];
 

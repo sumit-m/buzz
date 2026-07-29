@@ -170,6 +170,8 @@ _ensure-sidecar-stubs:
     #!/usr/bin/env bash
     set -euo pipefail
     TARGET=$(rustc -vV | sed -n 's|host: ||p')
+    EXT=""
+    [[ "$TARGET" == *windows* ]] && EXT=".exe"
     mkdir -p desktop/src-tauri/binaries
     SIDECARS=(buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz)
     if [[ "$TARGET" != *windows* ]]; then
@@ -179,7 +181,7 @@ _ensure-sidecar-stubs:
     # buzz-desktop) whenever an externalBin's mtime changes, so touching
     # existing files would invalidate every cached desktop test build.
     for bin in "${SIDECARS[@]}"; do
-        stub="desktop/src-tauri/binaries/${bin}-${TARGET}"
+        stub="desktop/src-tauri/binaries/${bin}-${TARGET}${EXT}"
         [[ -e "$stub" ]] || : > "$stub"
     done
 

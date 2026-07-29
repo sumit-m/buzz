@@ -1689,34 +1689,21 @@ pub(crate) fn format_event_block(
     block
 }
 
-/// Append a reply instruction when the agent is responding to a thread event.
+/// Append the top-level reply instruction.
 ///
-/// Tells the agent to default to `--reply-to <event_id>` for ordinary replies
-/// while still allowing an explicit human request to post at the channel root or
-/// top level.
-fn append_reply_instruction(s: &mut String, event_id: &str) {
-    s.push_str(&format!(
-        "\nIMPORTANT: For ordinary replies in this turn, use `--reply-to {event_id}` \
-         on `buzz messages send` so the conversation stays threaded. \
-         If the human explicitly asks for a channel-root, top-level, \
-         or broadcast post, send that message without `--reply-to`. \
-         If the requested destination is ambiguous, ask before sending."
-    ));
-}
-
-/// Append a new-thread reply instruction for a human-facing top-level mention.
-///
-/// The triggering mention has no thread tags, so the agent's reply becomes the
-/// thread root. Anchoring to the triggering event (rather than leaving the
-/// choice open) prevents replying into a stale/unrelated prior thread.
-fn append_new_thread_reply_instruction(s: &mut String, event_id: &str) {
-    s.push_str(&format!(
-        "\nIMPORTANT: This is a new top-level message. For ordinary replies in \
-         this turn, use `--reply-to {event_id}` on `buzz messages send` — the \
-         triggering message is the thread root. Do NOT reply into any other \
-         (older) thread. If the human explicitly asks for a channel-root, \
-         top-level, or broadcast post, send that message without `--reply-to`."
-    ));
+/// Every reply is posted flat in the channel — threads collapse behind a "1
+/// reply" affordance, which makes multi-agent discussion (consensus,
+/// orchestration) unreadable without expanding each one. Applied to thread and
+/// DM turns as well as top-level mentions, and to agent-to-agent turns, which
+/// upstream leaves free to nest.
+fn append_top_level_reply_instruction(s: &mut String) {
+    s.push_str(
+        "\nIMPORTANT: For ordinary replies in this turn, post at the channel \
+         top level — call `buzz messages send` WITHOUT `--reply-to`, so the \
+         reply appears inline in the channel. Do NOT reply into any existing \
+         thread. Use `--reply-to` only if the human explicitly asks you to \
+         thread the reply.",
+    );
 }
 
 /// Decide whether a turn is human-facing for reply-anchor purposes.
@@ -1943,18 +1930,17 @@ fn append_project_home(s: &mut String, channel_info: Option<&PromptChannelInfo>,
 
 /// Format a `<context>` section from the resolved session scope and turn routing.
 ///
-/// `reply_anchor` is the pre-resolved `--reply-to` target for this turn (see
-/// [`resolve_reply_anchor`]). In the thread/DM branches it threads ordinary
-/// replies; in the channel branch a `Some` anchor means a human-facing
-/// top-level mention whose reply should open a new thread rooted at the
-/// triggering event.
+/// `_reply_anchor` is upstream's pre-resolved `--reply-to` target (see
+/// [`resolve_reply_anchor`]). It is deliberately ignored: every reply is posted
+/// flat. The parameter and its resolver are left in place so this branch stays
+/// a small diff to rebase.
 fn format_context_hints(
     scope: &SessionScope,
     channel_info: Option<&PromptChannelInfo>,
     thread_tags: &ThreadTags,
     is_dm: bool,
     conversation_context_status: ConversationContextStatus,
-    reply_anchor: Option<&str>,
+    _reply_anchor: Option<&str>,
 ) -> String {
     let channel_id = scope.channel_id();
     let channel_display = match channel_info {
@@ -2007,10 +1993,8 @@ fn format_context_hints(
                     s.push_str(&format!("\nParent: {parent}"));
                 }
             }
-            if let Some(event_id) = reply_anchor {
-                append_reply_instruction(&mut s, event_id);
-            }
         }
+        append_top_level_reply_instruction(&mut s);
         crate::prompt_framing::semantic_section("context", &s)
     } else if let Some(root) = scope
         .root_event_id()
@@ -2044,13 +2028,7 @@ fn format_context_hints(
             }
         }
         s.push_str(&format!("\n{ctx_hint}"));
-        if let Some(event_id) = reply_anchor {
-            if thread_tags.root_event_id.is_some() {
-                append_reply_instruction(&mut s, event_id);
-            } else {
-                append_new_thread_reply_instruction(&mut s, event_id);
-            }
-        }
+        append_top_level_reply_instruction(&mut s);
         crate::prompt_framing::semantic_section("context", &s)
     } else {
         let mut s = format!(
@@ -2063,9 +2041,7 @@ fn format_context_hints(
         s.push_str(
             "\nHint: Use `buzz messages get --channel <UUID>` for recent messages if needed.",
         );
-        if let Some(event_id) = reply_anchor {
-            append_new_thread_reply_instruction(&mut s, event_id);
-        }
+        append_top_level_reply_instruction(&mut s);
         crate::prompt_framing::semantic_section("context", &s)
     }
 }
@@ -3020,13 +2996,13 @@ mod tests {
         assert_eq!(batch.events[0].event.content, "oldest");
         assert_eq!(batch.events[1].event.content, "newest");
 
-        // The rendered prompt's reply anchor must cite the newest event, so
-        // the agent's reply threads under the message it is responding to.
+        // Both events are top-level, so the reply is posted inline in the
+        // channel and cites no anchor.
         let newest_id = batch.events[1].event.id.to_hex();
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
         assert!(
-            prompt.contains(&format!("--reply-to {newest_id}")),
-            "reply anchor must target the newest event; prompt was:\n{prompt}"
+            !prompt.contains(&format!("--reply-to {newest_id}")),
+            "top-level events must not anchor a reply; prompt was:\n{prompt}"
         );
     }
 
@@ -3343,18 +3319,13 @@ mod tests {
 
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
 
-        // Reply instruction points at the thread root of the steering message
-        // (thread_b), not the steering event's own id — this matches the
-        // human-aware reply anchoring from PR #1281: for human-facing turns in
-        // a thread, the anchor is always the thread root.
-        assert!(
-            prompt.contains(&format!("--reply-to {thread_b}")),
-            "reply instruction should target the steering thread root: {prompt}"
-        );
-        assert!(
-            !prompt.contains(&format!("--reply-to {thread_a}")),
-            "reply instruction must NOT target the original thread: {prompt}"
-        );
+        // The reply is posted flat, so it anchors to neither thread.
+        for (label, id) in [("steering", &thread_b), ("original", &thread_a)] {
+            assert!(
+                !prompt.contains(&format!("--reply-to {id}")),
+                "reply instruction must not target the {label} thread: {prompt}"
+            );
+        }
         // Steer framing still frames the original as in-progress work to continue.
         assert!(prompt.contains("<what-you-were-working-on>"));
         assert!(prompt.contains("arrived while you were working"));
@@ -5851,25 +5822,20 @@ mod tests {
             cancel_reason: None,
         };
 
-        // No profile lookup → sender treated as human → human-facing thread
-        // reply anchors to the thread ROOT (flat at layer 1), not the
-        // triggering event id.
+        // Replies inside an existing thread are flattened too — the prompt
+        // must not anchor to the thread root.
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
         assert!(
-            prompt.contains(&format!("--reply-to {root_id}")),
-            "human-facing thread reply should anchor to the thread root"
+            !prompt.contains(&format!("--reply-to {root_id}")),
+            "thread reply should not anchor to the thread root"
         );
         assert!(
-            prompt.contains("For ordinary replies in this turn"),
-            "channel thread reply should describe reply-to as the default"
+            prompt.contains("WITHOUT `--reply-to`"),
+            "channel thread reply should use the top-level instruction"
         );
         assert!(
-            prompt.contains("send that message without `--reply-to`"),
-            "channel thread reply should allow explicit channel-root/top-level requests"
-        );
-        assert!(
-            !prompt.contains("Do not broadcast to the channel"),
-            "reply instruction should not forbid explicit human-requested root posts"
+            prompt.contains("Use `--reply-to` only if"),
+            "channel thread reply should still allow an explicit threading request"
         );
     }
 
@@ -5910,8 +5876,12 @@ mod tests {
         )
         .join("\n\n");
         assert!(
-            prompt.contains(&format!("--reply-to {event_id}")),
-            "DM thread reply should include reply instruction"
+            !prompt.contains(&format!("--reply-to {event_id}")),
+            "DM thread reply should not anchor to the triggering event"
+        );
+        assert!(
+            prompt.contains("WITHOUT `--reply-to`"),
+            "DM thread reply should use the top-level instruction"
         );
     }
 
@@ -5933,22 +5903,21 @@ mod tests {
             cancel_reason: None,
         };
 
-        // Top-level human message (no lookup → human): the reply opens a new
-        // thread anchored to the triggering event, preventing replies into a
-        // stale older thread.
+        // Top-level human message (no lookup → human): the reply is posted
+        // inline at the channel top level rather than opening a thread.
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
         assert!(
-            prompt.contains(&format!("--reply-to {event_id}")),
-            "top-level human message should anchor a new thread at the triggering event"
+            !prompt.contains(&format!("--reply-to {event_id}")),
+            "top-level human message should not anchor a thread at the triggering event"
         );
         assert!(
-            prompt.contains("new top-level message"),
-            "top-level human message should use the new-thread instruction"
+            prompt.contains("WITHOUT `--reply-to`"),
+            "top-level human message should use the top-level instruction"
         );
     }
 
     #[test]
-    fn test_reply_instruction_absent_for_dm_non_reply() {
+    fn test_dm_non_reply_uses_top_level_instruction() {
         let ch = Uuid::new_v4();
         let event = make_event("hey there");
         let batch = FlushBatch {
@@ -5979,13 +5948,13 @@ mod tests {
         )
         .join("\n\n");
         assert!(
-            !prompt.contains("--reply-to"),
-            "DM non-reply should NOT include reply instruction"
+            prompt.contains("WITHOUT `--reply-to`"),
+            "DM non-reply should use the top-level instruction"
         );
     }
 
     #[test]
-    fn test_human_thread_reply_anchors_to_root_not_triggering_or_parent() {
+    fn test_human_nested_reply_is_flattened() {
         let ch = Uuid::new_v4();
         let root_id = "a".repeat(64);
         let parent_id = "b".repeat(64);
@@ -6010,25 +5979,27 @@ mod tests {
             cancel_reason: None,
         };
 
-        // Human-facing (no lookup) deep reply: anchor to the thread ROOT to
-        // keep the conversation flat — NOT the triggering event or parent.
+        // A deep reply is posted flat in the channel — no anchor at all, not
+        // the thread root, the triggering event, or the parent.
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
+        for (label, id) in [
+            ("thread root", &root_id),
+            ("triggering event", &event_id),
+            ("parent event", &parent_id),
+        ] {
+            assert!(
+                !prompt.contains(&format!("--reply-to {id}")),
+                "instruction should NOT anchor to the {label} id"
+            );
+        }
         assert!(
-            prompt.contains(&format!("--reply-to {root_id}")),
-            "human-facing nested reply should anchor to the thread root"
-        );
-        assert!(
-            !prompt.contains(&format!("--reply-to {event_id}")),
-            "instruction should NOT anchor to the triggering event id"
-        );
-        assert!(
-            !prompt.contains(&format!("--reply-to {parent_id}")),
-            "instruction should NOT anchor to the parent event id"
+            prompt.contains("WITHOUT `--reply-to`"),
+            "nested reply should use the top-level instruction"
         );
     }
 
     #[test]
-    fn test_reply_instruction_allows_explicit_root_post_requests() {
+    fn test_reply_instruction_allows_explicit_threading_requests() {
         let ch = Uuid::new_v4();
         let root_id = "e".repeat(64);
         let event = make_event_with_tags(
@@ -6050,21 +6021,21 @@ mod tests {
 
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
         assert!(
-            prompt.contains(&format!("--reply-to {root_id}")),
-            "human-facing thread reply should anchor to the thread root"
+            !prompt.contains(&format!("--reply-to {root_id}")),
+            "thread reply should not anchor to the thread root"
         );
         assert!(
-            prompt.contains("channel-root, top-level"),
-            "instruction should tell agents to honor explicit root/top-level requests"
+            prompt.contains("Use `--reply-to` only if"),
+            "instruction should let agents honor an explicit threading request"
         );
         assert!(
-            !prompt.contains("on EVERY `buzz messages send` call"),
-            "instruction should not make reply-to absolute for every send"
+            !prompt.contains("never use `--reply-to`"),
+            "instruction should not forbid threading outright"
         );
     }
 
     #[test]
-    fn test_reply_instruction_batched_last_event_is_threaded() {
+    fn test_reply_instruction_batched_last_event_is_flattened() {
         let ch = Uuid::new_v4();
         let plain = make_event("unrelated");
         let root_id = "c".repeat(64);
@@ -6093,12 +6064,16 @@ mod tests {
             cancel_reason: None,
         };
 
-        // Scope derives from the last (threaded) event; human-facing → anchor
-        // to that thread's root.
+        // Scope derives from the last (threaded) event, but the reply is still
+        // posted flat rather than into that thread.
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
         assert!(
-            prompt.contains(&format!("--reply-to {root_id}")),
-            "batched prompt should anchor to the last (threaded) event's root"
+            !prompt.contains(&format!("--reply-to {root_id}")),
+            "batched prompt should not anchor to the last event's thread root"
+        );
+        assert!(
+            prompt.contains("WITHOUT `--reply-to`"),
+            "batched threaded-last prompt should use the top-level instruction"
         );
     }
 
@@ -6133,16 +6108,16 @@ mod tests {
             cancel_reason: None,
         };
 
-        // Last event is top-level and human-facing → opens a new thread
-        // anchored to that top-level event (NOT the earlier thread's root).
+        // Last event is top-level and human-facing → posts inline at the
+        // channel top level, and must not thread into the earlier root.
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
         assert!(
-            prompt.contains(&format!("--reply-to {plain_id}")),
-            "batched top-level-last prompt should anchor to the last (top-level) event"
+            !prompt.contains(&format!("--reply-to {plain_id}")),
+            "batched top-level-last prompt should not anchor to the last event"
         );
         assert!(
-            prompt.contains("new top-level message"),
-            "batched top-level-last prompt should use the new-thread instruction"
+            prompt.contains("WITHOUT `--reply-to`"),
+            "batched top-level-last prompt should use the top-level instruction"
         );
     }
 

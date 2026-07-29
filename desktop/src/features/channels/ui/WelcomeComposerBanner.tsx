@@ -285,13 +285,6 @@ function WelcomeComposerPersonaMention() {
 type WelcomeComposerBannerProps = {
   state: WelcomeComposerBannerState;
   /**
-   * While the Welcome kickoff is still setting up the team, the banner's
-   * prompt copy reads as a setup status ("Setting up your welcome team…")
-   * instead of the mention hint — the kickoff characters stand on top of the
-   * banner during this window.
-   */
-  settingUp?: boolean;
-  /**
    * Called when the user dismisses the banner manually via the close button.
    * Only rendered while `state === "prompt"`.
    */
@@ -300,7 +293,6 @@ type WelcomeComposerBannerProps = {
 
 export function WelcomeComposerBanner({
   onDismiss,
-  settingUp = false,
   state,
 }: WelcomeComposerBannerProps) {
   if (state === "hidden") {
@@ -390,18 +382,6 @@ export function WelcomeComposerBanner({
               >
                 Nice work.
               </motion.span>
-            ) : settingUp ? (
-              <motion.span
-                animate="animate"
-                className="min-w-0 flex-1"
-                data-testid="welcome-composer-setting-up-copy"
-                exit="exit"
-                initial="initial"
-                key="setting-up-copy"
-                variants={welcomeComposerBannerContentVariants}
-              >
-                Setting up your welcome team…
-              </motion.span>
             ) : (
               <motion.span
                 animate="animate"
@@ -416,7 +396,7 @@ export function WelcomeComposerBanner({
               </motion.span>
             )}
           </AnimatePresence>
-          {state === "prompt" && onDismiss && !settingUp ? (
+          {state === "prompt" && onDismiss ? (
             <button
               aria-label="Dismiss hint"
               className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted-foreground/60 transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -434,13 +414,14 @@ export function WelcomeComposerBanner({
 }
 
 type WelcomeComposerGuidanceLayerProps = WelcomeComposerBannerProps & {
-  children: React.ReactNode;
+  /** Optional overlay content; the kickoff choreography that used to fill it
+      was removed, so the layer usually renders the banner alone. */
+  children?: React.ReactNode;
 };
 
 export function WelcomeComposerGuidanceLayer({
   children,
   onDismiss,
-  settingUp,
   state,
 }: WelcomeComposerGuidanceLayerProps) {
   if (state === "hidden") {
@@ -454,11 +435,7 @@ export function WelcomeComposerGuidanceLayer({
         testId="welcome-composer-guidance-backdrop"
       />
       {children}
-      <WelcomeComposerBanner
-        onDismiss={onDismiss}
-        settingUp={settingUp}
-        state={state}
-      />
+      <WelcomeComposerBanner onDismiss={onDismiss} state={state} />
     </div>
   );
 }

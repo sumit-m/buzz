@@ -8,6 +8,7 @@ import {
 } from "@/features/onboarding/communityOnboarding";
 import { initializeStarterChannels } from "@/features/onboarding/hooks";
 import { useClaimInvite } from "@/features/onboarding/useClaimInvite";
+import { WELCOME_TEAM_STARTERS } from "@/features/onboarding/welcomeGuide";
 import { CommunityChangeOverlay } from "@/features/communities/ui/CommunityChangeOverlay";
 import {
   takePendingWelcomeChannelForDirectEntry,
@@ -212,9 +213,11 @@ export function CommunityOnboardingFlow({
     void listPersonas()
       .then((personas) =>
         setStarterPersonas(
-          ["Opus", "Sonnet", "Fable"].flatMap((name) => {
+          // Match on persona id, not display name — renaming the built-ins
+          // must not empty this screen.
+          WELCOME_TEAM_STARTERS.flatMap((starter) => {
             const persona = personas.find(
-              (candidate) => candidate.displayName === name,
+              (candidate) => candidate.id === starter.personaId,
             );
             return persona ? [persona] : [];
           }),

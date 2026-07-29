@@ -82,12 +82,11 @@ import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 
 const LOADING_TEXT = "Setting up your community...";
 
-// Minimum time the cold-boot splash stays on screen. A real boot resolves the
-// community in well under 100ms, and the native window setup plus first paint
-// can take longer than that — without a hold, the bee is unmounted before it is
-// ever visible. The hold runs as an overlay above the already-mounted app, so
-// time-to-interactive is unchanged; only the reveal waits.
-const BOOT_SPLASH_MIN_VISIBLE_MS = 1_200;
+// Minimum time the cold-boot splash stays on screen. Upstream holds it for
+// 1.2s so the bee is seen; local preference is no splash at all — the app is
+// already mounted underneath, so zero just reveals it immediately. E2E specs
+// set their own hold via __BUZZ_E2E__.bootSplashHoldMs and are unaffected.
+const BOOT_SPLASH_MIN_VISIBLE_MS = 0;
 const BOOT_SPLASH_FADE_MS = 200;
 const INITIAL_RENDER_READY_EVENT = "initial-render-ready";
 

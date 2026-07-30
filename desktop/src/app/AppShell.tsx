@@ -861,7 +861,11 @@ export function AppShell() {
                           onBackgroundClick={requestFocusedThreadClose}
                           onCreateChannelOpenChange={setIsCreateChannelOpen}
                           onOpenAddCommunity={addCommunityDialog.openDialog}
-                          onSendFeedback={() => setIsSendFeedbackOpen(true)}
+                          /* LOCAL DIVERGENCE: onSendFeedback deliberately not
+                           passed. The profile menu renders its "Send
+                           feedback" item only when this prop exists, so
+                           omitting it drops the action without unthreading
+                           the prop through four components. */
                           onUpdateCommunity={communitiesHook.updateCommunity}
                           onLeaveCommunity={handleLeaveCommunity}
                           onRemoveCommunityFromDevice={removeFromDevice}

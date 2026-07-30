@@ -104,8 +104,9 @@ export function CommunityEmojiIcon({
       ) : (
         // A community is one relay host, so fall back to a server glyph rather
         // than rendering nothing. Upstream returned null here, which left the
-        // name with no icon whenever no custom one had been uploaded.
-        <Server className="h-3 w-3 text-muted-foreground" />
+        // name with no icon whenever no custom one had been uploaded. Sized to
+        // match the WifiOff glyph that shares this badge when degraded.
+        <Server className="h-4 w-4 text-muted-foreground" />
       )}
     </span>
   );

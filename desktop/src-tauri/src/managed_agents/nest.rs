@@ -469,7 +469,11 @@ pub fn ensure_cli_symlink(exe_parent: &Path, _is_dev: bool) -> Result<(), String
     let link = bin_dir.join("buzz.exe");
     // Refreshed every boot: a hard link breaks when cargo replaces the binary
     // by rename, and a copy goes stale the same way.
-    if link.exists() {
+    //
+    // `symlink_metadata` rather than `exists`, which follows the link and
+    // reports false for a dangling one — leaving a broken link in place that
+    // every later boot would fail to replace.
+    if link.symlink_metadata().is_ok() {
         fs::remove_file(&link).map_err(|e| format!("remove {}: {e}", link.display()))?;
     }
     link_or_copy(&buzz_bin, &link)

@@ -5,6 +5,7 @@ import {
   commandsMatch,
   parseTimestamp,
   pickPreferredManagedAgent,
+  findPersonaAgentInChannel,
   findReusablePersonaAgent,
   findReusableGenericAgent,
   findReusableAgent,
@@ -394,5 +395,73 @@ test("resolveReusableAgentAccessPolicy uses explicit, persona, then safe default
       persona,
     ),
     { respondTo: "owner-only", respondToAllowlist: [] },
+  );
+});
+
+test("findPersonaAgentInChannel: finds the instance already in the channel", () => {
+  const inChannel = makeAgent({ pubkey: PUB_A, personaId: "p1" });
+  const elsewhere = makeAgent({ pubkey: PUB_B, personaId: "p1" });
+
+  assert.equal(
+    findPersonaAgentInChannel([elsewhere, inChannel], "p1", new Set([PUB_A]))
+      ?.pubkey,
+    PUB_A,
+  );
+});
+
+test("findPersonaAgentInChannel: is the exact complement of findReusablePersonaAgent", () => {
+  const agents = [makeAgent({ pubkey: PUB_A, personaId: "p1" })];
+  const members = new Set([PUB_A]);
+
+  // The member is claimed by exactly one of the two, never both and never
+  // neither — that mutual exclusivity is what makes the skip check safe to run
+  // ahead of the reuse check.
+  assert.ok(findPersonaAgentInChannel(agents, "p1", members));
+  assert.equal(findReusablePersonaAgent(agents, "p1", members), undefined);
+});
+
+test("findPersonaAgentInChannel: normalizes pubkey case when matching members", () => {
+  const agent = makeAgent({ pubkey: PUB_A.toUpperCase(), personaId: "p1" });
+
+  assert.ok(findPersonaAgentInChannel([agent], "p1", new Set([PUB_A])));
+});
+
+test("findPersonaAgentInChannel: ignores other personas in the same channel", () => {
+  const other = makeAgent({ pubkey: PUB_A, personaId: "p2" });
+
+  assert.equal(
+    findPersonaAgentInChannel([other], "p1", new Set([PUB_A])),
+    undefined,
+  );
+});
+
+test("findPersonaAgentInChannel: prefers a running member over a stopped one", () => {
+  const stopped = makeAgent({
+    pubkey: PUB_A,
+    personaId: "p1",
+    status: "stopped",
+  });
+  const running = makeAgent({
+    pubkey: PUB_B,
+    personaId: "p1",
+    status: "running",
+  });
+
+  assert.equal(
+    findPersonaAgentInChannel(
+      [stopped, running],
+      "p1",
+      new Set([PUB_A, PUB_B]),
+    )?.pubkey,
+    PUB_B,
+  );
+});
+
+test("findPersonaAgentInChannel: returns undefined when no instance is a member", () => {
+  const agent = makeAgent({ pubkey: PUB_A, personaId: "p1" });
+
+  assert.equal(
+    findPersonaAgentInChannel([agent], "p1", new Set([PUB_C])),
+    undefined,
   );
 });

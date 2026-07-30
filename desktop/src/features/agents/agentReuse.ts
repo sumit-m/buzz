@@ -63,6 +63,24 @@ export function findReusablePersonaAgent(
   return pickPreferredManagedAgent(candidates);
 }
 
+/**
+ * An instance of `personaId` that is already a member of the target channel.
+ * The mirror of `findReusablePersonaAgent`, which deliberately skips members —
+ * callers use this first to recognise a repeat deploy.
+ */
+export function findPersonaAgentInChannel(
+  agents: ManagedAgent[],
+  personaId: string,
+  channelMemberPubkeys: ReadonlySet<string>,
+): ManagedAgent | undefined {
+  const candidates = agents.filter(
+    (agent) =>
+      agent.personaId === personaId &&
+      channelMemberPubkeys.has(normalizePubkey(agent.pubkey)),
+  );
+  return pickPreferredManagedAgent(candidates);
+}
+
 export function findReusableGenericAgent(
   agents: ManagedAgent[],
   command: string,

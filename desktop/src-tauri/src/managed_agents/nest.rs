@@ -435,8 +435,79 @@ pub fn ensure_cli_symlink(exe_parent: &Path, is_dev: bool) -> Result<(), String>
     Ok(())
 }
 
-/// No-op on non-Unix platforms — symlink management is macOS/Linux only.
-#[cfg(not(unix))]
+/// Ensures `%USERPROFILE%\bin\buzz.exe` resolves to the bundled CLI.
+///
+/// Unlike Unix, this is not a convenience — it is the only way a Claude Code
+/// agent can run `buzz` at all. The PATH this process composes in
+/// `runtime::build_augmented_path` does reach the agent (its PowerShell tool
+/// sees the sidecar dir), but Claude Code rebuilds the environment for its Bash
+/// tool from the registry PATH, so the augmented entries never arrive there and
+/// `buzz messages send` — how an agent publishes every reply — exits 127.
+///
+/// `~\bin` rather than `~/.local/bin`: Git Bash's `/etc/profile` prepends
+/// `$HOME/bin` unconditionally, so it is on the agent's shell PATH on any
+/// machine. `.local/bin` is only there when the user happens to have put it on
+/// the Windows PATH.
+///
+/// The name is `buzz.exe` for both dev and prod, deliberately dropping the
+/// `buzz`/`buzz-dev` split: agents invoke bare `buzz`, so a dev-only
+/// `buzz-dev.exe` would leave them broken. That trades the dev/prod isolation
+/// [`cli_link_name`] describes for agents that work at all. Upstream owns that
+/// contract — see block/buzz#3664.
+#[cfg(windows)]
+pub fn ensure_cli_symlink(exe_parent: &Path, _is_dev: bool) -> Result<(), String> {
+    let buzz_bin = exe_parent.join("buzz.exe");
+    if !cli_binary_is_usable(&buzz_bin) {
+        return Ok(());
+    }
+
+    let bin_dir = dirs::home_dir()
+        .ok_or("cannot resolve home directory")?
+        .join("bin");
+    fs::create_dir_all(&bin_dir).map_err(|e| format!("create {}: {e}", bin_dir.display()))?;
+
+    let link = bin_dir.join("buzz.exe");
+    // Refreshed every boot: a hard link breaks when cargo replaces the binary
+    // by rename, and a copy goes stale the same way.
+    if link.exists() {
+        fs::remove_file(&link).map_err(|e| format!("remove {}: {e}", link.display()))?;
+    }
+    link_or_copy(&buzz_bin, &link)
+}
+
+/// True when `path` is a CLI worth linking.
+///
+/// Tauri stages zero-byte `externalBin` placeholders beside the app executable
+/// and the dev lane never replaces them (block/buzz#3664). Linking one yields a
+/// `buzz` that runs and silently does nothing — worse than no link, because the
+/// agent then reports success on a message it never sent.
+#[cfg(windows)]
+fn cli_binary_is_usable(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|meta| meta.len() > 0)
+        .unwrap_or(false)
+}
+
+/// Point `link` at `target`, preferring the cheapest mechanism that works.
+///
+/// A file symlink needs Developer Mode or elevation, so it cannot be the only
+/// path. A hard link needs neither but requires one volume. Copy always works
+/// and is the floor.
+#[cfg(windows)]
+fn link_or_copy(target: &Path, link: &Path) -> Result<(), String> {
+    if std::os::windows::fs::symlink_file(target, link).is_ok() {
+        return Ok(());
+    }
+    if fs::hard_link(target, link).is_ok() {
+        return Ok(());
+    }
+    fs::copy(target, link)
+        .map(|_| ())
+        .map_err(|e| format!("copy {} → {}: {e}", target.display(), link.display()))
+}
+
+/// No-op on platforms with neither a symlink nor a Windows fallback path.
+#[cfg(not(any(unix, windows)))]
 pub fn ensure_cli_symlink(_exe_parent: &Path, _is_dev: bool) -> Result<(), String> {
     Ok(())
 }

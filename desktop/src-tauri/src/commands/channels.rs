@@ -649,6 +649,7 @@ pub async fn delete_channel(channel_id: String, state: State<'_, AppState>) -> R
     let uuid = parse_channel_uuid(&channel_id)?;
     let builder = events::build_delete_channel(uuid)?;
     submit_event(builder, &state).await?;
+    crate::archive::purge_channel_locally(uuid.to_string()).await;
     Ok(())
 }
 

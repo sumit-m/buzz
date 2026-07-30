@@ -857,3 +857,109 @@ fn test_read_unindexed_observer_rows_excludes_processed_rows() {
         "ev-old must be excluded from unindexed rows after null-channel_id indexing"
     );
 }
+
+// ── Hard-delete purge (LOCAL DIVERGENCE) ─────────────────────────────────
+
+fn count(conn: &Connection, table: &str) -> i64 {
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn test_purge_event_removes_raw_scope_and_observer_rows() {
+    let conn = in_memory();
+    let (pk, relay) = ("pk", "wss://r");
+    upsert_archived_event(&conn, pk, relay, "gone", 1, "author", 100, "{}", 0).unwrap();
+    upsert_event_scope(&conn, pk, relay, "gone", "channel_h", "chan-a", 0).unwrap();
+    upsert_observer_channel_index(&conn, pk, relay, "gone", Some("chan-a"), 100).unwrap();
+    upsert_archived_event(&conn, pk, relay, "keep", 1, "author", 100, "{}", 0).unwrap();
+    upsert_event_scope(&conn, pk, relay, "keep", "channel_h", "chan-a", 0).unwrap();
+
+    assert_eq!(purge_event(&conn, "gone").unwrap(), 1);
+
+    assert_eq!(count(&conn, "archived_events"), 1, "only 'keep' survives");
+    assert_eq!(count(&conn, "archived_event_scopes"), 1);
+    assert_eq!(count(&conn, "observer_channel_index"), 0);
+}
+
+#[test]
+fn test_purge_event_is_idempotent_and_ignores_unknown_ids() {
+    let conn = in_memory();
+    upsert_archived_event(&conn, "pk", "wss://r", "gone", 1, "a", 1, "{}", 0).unwrap();
+    upsert_event_scope(&conn, "pk", "wss://r", "gone", "channel_h", "c", 0).unwrap();
+
+    assert_eq!(purge_event(&conn, "gone").unwrap(), 1);
+    assert_eq!(
+        purge_event(&conn, "gone").unwrap(),
+        0,
+        "second call is a no-op"
+    );
+    assert_eq!(purge_event(&conn, "never-existed").unwrap(), 0);
+}
+
+#[test]
+fn test_purge_event_crosses_identity_and_relay() {
+    // The point of the purge is that the content is gone from this machine, so
+    // a copy saved under another identity or relay must not survive.
+    let conn = in_memory();
+    upsert_archived_event(&conn, "pk1", "wss://r1", "same", 1, "a", 1, "{}", 0).unwrap();
+    upsert_event_scope(&conn, "pk1", "wss://r1", "same", "channel_h", "c", 0).unwrap();
+    upsert_archived_event(&conn, "pk2", "wss://r2", "same", 1, "a", 1, "{}", 0).unwrap();
+    upsert_event_scope(&conn, "pk2", "wss://r2", "same", "channel_h", "c", 0).unwrap();
+
+    assert_eq!(purge_event(&conn, "same").unwrap(), 2);
+    assert_eq!(count(&conn, "archived_events"), 0);
+    assert_eq!(count(&conn, "archived_event_scopes"), 0);
+}
+
+#[test]
+fn test_purge_channel_removes_events_scopes_observers_and_subscription() {
+    let conn = in_memory();
+    let (pk, relay) = ("pk", "wss://r");
+    upsert_archived_event(&conn, pk, relay, "a1", 1, "author", 100, "{}", 0).unwrap();
+    upsert_event_scope(&conn, pk, relay, "a1", "channel_h", "doomed", 0).unwrap();
+    upsert_archived_event(&conn, pk, relay, "obs", 24200, "agent", 100, "{}", 0).unwrap();
+    upsert_observer_channel_index(&conn, pk, relay, "obs", Some("doomed"), 100).unwrap();
+    upsert_save_subscription(&conn, pk, relay, "channel_h", "doomed", "[1]", 0).unwrap();
+
+    // A different channel must be untouched.
+    upsert_archived_event(&conn, pk, relay, "b1", 1, "author", 100, "{}", 0).unwrap();
+    upsert_event_scope(&conn, pk, relay, "b1", "channel_h", "other", 0).unwrap();
+    upsert_save_subscription(&conn, pk, relay, "channel_h", "other", "[1]", 0).unwrap();
+
+    purge_channel(&conn, "doomed").unwrap();
+
+    assert_eq!(count(&conn, "archived_events"), 1, "only 'b1' survives");
+    assert_eq!(count(&conn, "archived_event_scopes"), 1);
+    assert_eq!(count(&conn, "observer_channel_index"), 0);
+    assert_eq!(
+        count(&conn, "save_subscriptions"),
+        1,
+        "'other' subscription kept"
+    );
+}
+
+#[test]
+fn test_purge_channel_keeps_events_still_scoped_elsewhere() {
+    // An event saved under two scopes must survive losing only one of them —
+    // otherwise deleting one channel would silently strip a message the user
+    // saved from a thread or DM as well.
+    let conn = in_memory();
+    let (pk, relay) = ("pk", "wss://r");
+    upsert_archived_event(&conn, pk, relay, "shared", 1, "author", 100, "{}", 0).unwrap();
+    upsert_event_scope(&conn, pk, relay, "shared", "channel_h", "doomed", 0).unwrap();
+    upsert_event_scope(&conn, pk, relay, "shared", "referenced_e", "root-ev", 0).unwrap();
+
+    purge_channel(&conn, "doomed").unwrap();
+
+    assert_eq!(
+        count(&conn, "archived_event_scopes"),
+        1,
+        "the referenced_e scope must remain"
+    );
+    assert_eq!(
+        count(&conn, "archived_events"),
+        1,
+        "the raw row must survive while another scope still references it"
+    );
+}

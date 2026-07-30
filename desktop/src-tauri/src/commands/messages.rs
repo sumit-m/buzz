@@ -931,6 +931,7 @@ pub async fn delete_message(
     let target_eid = EventId::from_hex(&event_id).map_err(|e| format!("invalid event ID: {e}"))?;
     let builder = events::build_delete_compat(channel_uuid, target_eid)?;
     submit_event(builder, &state).await?;
+    crate::archive::purge_event_locally(target_eid.to_hex()).await;
     Ok(())
 }
 

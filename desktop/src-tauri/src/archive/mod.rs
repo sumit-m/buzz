@@ -74,6 +74,44 @@ fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
+async fn run_archive_db_task<T, F>(task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&Connection) -> Result<T, String> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let conn = open_db()?;
+        task(&conn)
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking failed: {e}"))?
+}
+
+/// Purge one event from the local archive, best-effort.
+///
+/// Called after a delete is published so the relay purge and the local copy
+/// agree. Never fails the caller: the relay-side delete has already happened by
+/// then, and a stale local row must not turn a successful delete into an error.
+pub async fn purge_event_locally(event_id: String) {
+    let purged = run_archive_db_task(move |conn| store::purge_event(conn, &event_id)).await;
+    match purged {
+        Ok(0) => {}
+        Ok(rows) => eprintln!("buzz-desktop: purged {rows} archived row(s) for deleted event"),
+        Err(error) => eprintln!("buzz-desktop: local archive purge failed: {error}"),
+    }
+}
+
+/// Purge a whole channel from the local archive, best-effort. See
+/// [`purge_event_locally`] for why this never propagates an error.
+pub async fn purge_channel_locally(channel_id: String) {
+    let purged = run_archive_db_task(move |conn| store::purge_channel(conn, &channel_id)).await;
+    match purged {
+        Ok(0) => {}
+        Ok(rows) => eprintln!("buzz-desktop: purged {rows} archived row(s) for deleted channel"),
+        Err(error) => eprintln!("buzz-desktop: local archive purge failed: {error}"),
+    }
+}
+
 // ── Scope type ───────────────────────────────────────────────────────────────
 
 /// The three supported archive scope discriminants.

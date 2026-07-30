@@ -340,10 +340,7 @@ fn welcome_team_is_seeded_and_idempotent() {
     let welcome = &records[0];
     assert_eq!(welcome.id, "builtin-team:welcome");
     assert_eq!(welcome.name, "Claude - Opus, Sonnet and Fable");
-    assert_eq!(
-        welcome.description.as_deref(),
-        Some("Pick the model that fits the task.")
-    );
+    assert_eq!(welcome.description, None);
     assert_eq!(
         welcome.persona_ids,
         vec![

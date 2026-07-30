@@ -5,6 +5,7 @@ import {
   Link2,
   MoreHorizontal,
   Plus,
+  Server,
   Settings2,
   LogOut,
   Ticket,
@@ -88,20 +89,24 @@ export function CommunityEmojiIcon({
   className: string;
   iconUrl?: string | null;
 }) {
-  if (!iconUrl) {
-    return null;
-  }
   return (
     <span
       aria-hidden="true"
       className={cn(className, "h-5 overflow-hidden rounded-md")}
     >
-      <img
-        alt=""
-        className="h-full w-full object-cover"
-        draggable={false}
-        src={iconUrl}
-      />
+      {iconUrl ? (
+        <img
+          alt=""
+          className="h-full w-full object-cover"
+          draggable={false}
+          src={iconUrl}
+        />
+      ) : (
+        // A community is one relay host, so fall back to a server glyph rather
+        // than rendering nothing. Upstream returned null here, which left the
+        // name with no icon whenever no custom one had been uploaded.
+        <Server className="h-3 w-3 text-muted-foreground" />
+      )}
     </span>
   );
 }

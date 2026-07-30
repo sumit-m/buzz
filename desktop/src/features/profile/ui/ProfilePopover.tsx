@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Smile } from "lucide-react";
+import { Settings, Smile } from "lucide-react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -291,6 +291,12 @@ export function ProfilePopover({
               role="menuitem"
               type="button"
             >
+              {/* Centred in a 20px box so the glyph lands on the same x as the
+                  community icon above, which sits in a same-width badge. A bare
+                  icon here would sit 2px to its left. */}
+              <span className="flex w-5 shrink-0 items-center justify-center">
+                <Settings className="h-4 w-4 text-muted-foreground" />
+              </span>
               <span className="flex-1">Settings</span>
               <kbd className="text-xs text-muted-foreground">
                 {settingsShortcutLabel}

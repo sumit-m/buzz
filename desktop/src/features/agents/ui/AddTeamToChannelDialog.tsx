@@ -147,9 +147,12 @@ export function AddTeamToChannelDialog({
           avatarUrl: persona.avatarUrl ?? undefined,
           model: persona.model ?? undefined,
           personaId: persona.id,
-          teamId: team.id,
-          // One persona can be deployed under multiple teams with different instructions.
-          forceNewInstance: true,
+          // Deliberately no `teamId` and no `forceNewInstance`: deploying a team
+          // is bulk "add each member to this channel", so it takes the same
+          // reuse path as adding one agent by hand. Binding `teamId` would make
+          // every persona need a team-specific instance (spawn resolves
+          // BUZZ_ACP_TEAM_INSTRUCTIONS from it), which is what used to mint a
+          // duplicate set of agents on every deploy.
           role,
         };
       });
@@ -169,9 +172,10 @@ export function AddTeamToChannelDialog({
           <DialogHeader className="shrink-0 border-b border-border/60 px-6 py-5 pr-14">
             <DialogTitle>Deploy team to channel</DialogTitle>
             <DialogDescription>
-              Create and attach one agent per member of{" "}
+              Attach every member of{" "}
               <strong>{team?.name ?? "this team"}</strong> to the selected
-              channel.
+              channel. Existing agents are reused, and members already in the
+              channel are left alone.
             </DialogDescription>
           </DialogHeader>
 

@@ -1,5 +1,10 @@
 import * as React from "react";
-import { AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Layers,
+} from "lucide-react";
 
 import {
   isAgentCardAvatarLoading,
@@ -26,6 +31,7 @@ import { AgentIdentityCard } from "./AgentIdentityCard";
 import { AgentRuntimeAvatarControl } from "./AgentRuntimeAvatarControl";
 import { CreateIdentityCard } from "./CreateIdentityCard";
 import { PersonaActionsMenu } from "./PersonaActionsMenu";
+import { RestartDiffBadge } from "./RestartDiffBadge";
 import { buildUnifiedGroups } from "./unifiedAgentGroups";
 
 type UnifiedAgentsSectionProps = {
@@ -164,6 +170,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
                   getAvailability={getAvailability}
                   defaultModel={defaultModel}
                   isBestie={profileAgent?.pubkey.toLowerCase() === bestiePubkey}
+                  instanceCount={group.agents.length}
                   key={group.persona.id}
                   persona={group.persona}
                   restartingAgentPubkey={restartingAgentPubkey}
@@ -240,6 +247,7 @@ function AgentPersonaCard({
   defaultModel,
   isBestie,
   getAvailability,
+  instanceCount,
   persona,
   restartingAgentPubkey,
   startingAgentPubkey,
@@ -258,6 +266,7 @@ function AgentPersonaCard({
   defaultModel: string;
   isBestie: boolean;
   getAvailability: AgentAvailabilityReader;
+  instanceCount: number;
   persona: AgentPersona;
   restartingAgentPubkey: string | null;
   startingAgentPubkey: string | null;
@@ -356,12 +365,31 @@ function AgentPersonaCard({
         onOpenPersonaProfile(persona);
       }}
       statusBadge={
-        agent?.personaOrphaned ? (
-          <Badge className="gap-1" variant="warning">
-            <AlertTriangle className="h-3 w-3" />
-            Configuration missing
-          </Badge>
-        ) : null
+        <>
+          {agent?.personaOrphaned ? (
+            <Badge className="gap-1" variant="warning">
+              <AlertTriangle className="h-3 w-3" />
+              Configuration missing
+            </Badge>
+          ) : agent?.needsRestart ? (
+            <RestartDiffBadge
+              autoRestartEnabled={agent.autoRestartOnConfigChange}
+              restartDiff={agent.restartDiff}
+            />
+          ) : null}
+          {/* The card shows one instance out of several; without this the extra
+              ones are invisible until the profile panel's Instances list. */}
+          {instanceCount > 1 ? (
+            <Badge
+              className="gap-1"
+              data-testid={`persona-instance-count-${persona.id}`}
+              variant="secondary"
+            >
+              <Layers className="h-3 w-3" />
+              {instanceCount} instances
+            </Badge>
+          ) : null}
+        </>
       }
     />
   );

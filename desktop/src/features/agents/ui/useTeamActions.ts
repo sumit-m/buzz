@@ -175,17 +175,21 @@ export function useTeamActions(
     result: CreateChannelManagedAgentsResult,
   ) {
     actions.setActionErrorMessage(null);
-    const successCount = result.successes.length;
+    const attachedCount = result.successes.filter(
+      (success) => success.created || success.membershipAdded,
+    ).length;
+    const alreadyPresentCount = result.successes.length - attachedCount;
     const failCount = result.failures.length;
-    if (failCount === 0) {
-      actions.setActionNoticeMessage(
-        `Deployed ${successCount} ${successCount === 1 ? "agent" : "agents"} to ${channel.name}.`,
-      );
-    } else {
-      actions.setActionNoticeMessage(
-        `Deployed ${successCount} ${successCount === 1 ? "agent" : "agents"} to ${channel.name}. ${failCount} failed.`,
-      );
+    const parts = [
+      `Deployed ${attachedCount} ${attachedCount === 1 ? "agent" : "agents"} to ${channel.name}.`,
+    ];
+    if (alreadyPresentCount > 0) {
+      parts.push(`${alreadyPresentCount} already there.`);
     }
+    if (failCount > 0) {
+      parts.push(`${failCount} failed.`);
+    }
+    actions.setActionNoticeMessage(parts.join(" "));
     setTeamToAddToChannel(null);
     refetch.refetchManagedAgents();
     refetch.refetchRelayAgents();

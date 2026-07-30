@@ -1,5 +1,6 @@
 import {
   commandsMatch,
+  findPersonaAgentInChannel,
   findReusableGenericAgent,
   findReusablePersonaAgent,
   pickPreferredManagedAgent,
@@ -432,6 +433,32 @@ export async function createChannelManagedAgent(
   input: CreateChannelManagedAgentInput,
   context?: ChannelAgentReuseContext,
 ): Promise<CreateChannelManagedAgentResult> {
+  // A repeat deploy: this persona already has an instance in the channel.
+  // `findReusablePersonaAgent` skips members, so without this the reuse path
+  // finds no candidate and mints a second identical agent — two instances then
+  // compete for the same @mention and only one of them answers.
+  if (
+    input.personaId &&
+    !input.forceNewInstance &&
+    context?.managedAgents &&
+    context.channelMemberPubkeys
+  ) {
+    const alreadyPresent = findPersonaAgentInChannel(
+      context.managedAgents,
+      input.personaId,
+      context.channelMemberPubkeys,
+    );
+    if (alreadyPresent) {
+      return {
+        agent: alreadyPresent,
+        membershipAdded: false,
+        started: false,
+        created: false,
+        runtimeId: input.runtime.id,
+      };
+    }
+  }
+
   const provisioned = await provisionChannelManagedAgent(input, context);
   const attached = await attachManagedAgentToChannel(channelId, {
     agent: provisioned.agent,

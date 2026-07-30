@@ -185,25 +185,19 @@ export function shouldAutoConnectDefaultRelay(relayUrl: string): boolean {
   }
 }
 
+/// The hostname, verbatim — `localhost` stays `localhost`.
+///
+/// LOCAL DIVERGENCE: upstream relabels hosts (`Local Dev` for loopback,
+/// `Buzz (staging)` for stage hosts, the first subdomain segment otherwise).
+/// Those names describe a deployment, not a community, and every loopback
+/// community collapsed onto the same string. This is only the fallback when the
+/// user supplies no name, and it is stored as the community's real `name`, so a
+/// predictable value beats a prettier guess — it can be renamed afterwards.
 export function deriveCommunityName(relayUrl: string): string {
   try {
-    const url = new URL(
+    return new URL(
       relayUrl.replace("ws://", "http://").replace("wss://", "https://"),
-    );
-    const host = url.hostname;
-    if (isLocalRelayHost(host)) {
-      return "Local Dev";
-    }
-    const parts = host.split(".");
-    // Detect staging environments (e.g. buzz-oss.stage.blox.sqprod.co)
-    if (parts.some((p) => p === "stage" || p === "staging")) {
-      return "Buzz (staging)";
-    }
-    // Use the first subdomain segment or the domain itself
-    if (parts.length >= 2) {
-      return parts[0] === "relay" ? parts[1] : parts[0];
-    }
-    return host;
+    ).hostname;
   } catch {
     return "Community";
   }

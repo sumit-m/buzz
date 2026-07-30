@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   clearCommunityStorage,
+  deriveCommunityName,
   initFirstCommunity,
   loadCommunities,
   loadCommunityDiscoveryAfterLeave,
@@ -131,4 +132,43 @@ test("clearCommunityStorage preserves completed final-leave discovery", () => {
 
   assert.equal(storage.length, 1);
   assert.equal(loadCommunityDiscoveryAfterLeave(storage), true);
+});
+
+test("deriveCommunityName keeps localhost as localhost", () => {
+  assert.equal(deriveCommunityName("ws://localhost:7777"), "localhost");
+  assert.equal(deriveCommunityName("ws://127.0.0.1:7777"), "127.0.0.1");
+});
+
+test("deriveCommunityName returns the hostname verbatim, not a prettified label", () => {
+  // Upstream turned these into "Buzz (staging)" and "buzz". A name that
+  // describes the deployment rather than the host is what this replaces.
+  assert.equal(
+    deriveCommunityName("wss://buzz-oss.stage.blox.sqprod.co"),
+    "buzz-oss.stage.blox.sqprod.co",
+  );
+  assert.equal(
+    deriveCommunityName("wss://relay.buzz.example"),
+    "relay.buzz.example",
+  );
+});
+
+test("deriveCommunityName drops port, path and scheme", () => {
+  assert.equal(
+    deriveCommunityName("wss://relay.example.com:443/path"),
+    "relay.example.com",
+  );
+});
+
+test("deriveCommunityName distinguishes hosts that upstream collapsed together", () => {
+  // Every loopback address used to derive the same name, so two local
+  // communities were indistinguishable in the switcher.
+  assert.notEqual(
+    deriveCommunityName("ws://localhost:1111"),
+    deriveCommunityName("ws://127.0.0.1:1111"),
+  );
+});
+
+test("deriveCommunityName falls back to Community for an unparseable url", () => {
+  assert.equal(deriveCommunityName("not a url"), "Community");
+  assert.equal(deriveCommunityName(""), "Community");
 });

@@ -392,6 +392,41 @@ fn cli_link_name_dev_follows_build_identity() {
     assert_eq!(cli_link_name(true), expected);
 }
 
+#[cfg(windows)]
+#[test]
+fn cli_binary_is_usable_rejects_the_tauri_stub() {
+    use super::cli_binary_is_usable;
+    let tmp = tempfile::tempdir().unwrap();
+
+    let stub = tmp.path().join("buzz.exe");
+    fs::write(&stub, "").unwrap();
+    assert!(
+        !cli_binary_is_usable(&stub),
+        "a zero-byte stub must not be linked"
+    );
+
+    assert!(!cli_binary_is_usable(&tmp.path().join("absent.exe")));
+
+    let real = tmp.path().join("real.exe");
+    fs::write(&real, "MZ").unwrap();
+    assert!(cli_binary_is_usable(&real));
+}
+
+#[cfg(windows)]
+#[test]
+fn link_or_copy_produces_a_readable_file_without_elevation() {
+    use super::link_or_copy;
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("buzz.exe");
+    fs::write(&target, "binary").unwrap();
+
+    // Whichever rung of symlink → hard link → copy the host allows, the caller
+    // only cares that the link resolves to the same bytes.
+    let link = tmp.path().join("bin-buzz.exe");
+    link_or_copy(&target, &link).unwrap();
+    assert_eq!(fs::read(&link).unwrap(), b"binary");
+}
+
 #[cfg(unix)]
 #[test]
 fn ensure_cli_symlink_creates_symlink_prod() {

@@ -2208,9 +2208,10 @@ test("owned agent absent from relay/managed lists still renders agent framing", 
   await messageRow.locator("button").first().click();
 
   await expect(page.getByTestId("user-profile-panel")).toBeVisible();
-  // The bot indicator only renders when isBot resolves true — the assertion
-  // that the OA-owner signal now drives agent framing.
-  await expect(page.getByTestId("profile-bot-indicator")).toBeVisible();
+  // With no channels, no relay agent and no managed record, the Channels tab
+  // only appears when isBot resolves true — the assertion that the OA-owner
+  // signal now drives agent framing.
+  await expect(page.getByTestId("user-profile-tab-channels")).toBeVisible();
 });
 
 test("renders settings in the app shell with a back button", async ({

@@ -102,10 +102,17 @@ export function ProfilePopover({
       <Popover open={open} onOpenChange={handlePopoverOpenChange}>
         <PopoverTrigger asChild>{children}</PopoverTrigger>
 
+        {/* The trigger is the display-name button, which sits 52px right of
+            the profile card's left edge (8px card padding + 32px avatar + 12px
+            gap) and 8px below its top. Both offsets cancel that inset so the
+            menu aligns with the card and clears it by 8px, instead of opening
+            indented and on top of the name. Radix has no `virtualRef` in this
+            version, so the card itself cannot be used as the anchor. */}
         <PopoverContent
           side="top"
           align="start"
-          sideOffset={-32}
+          alignOffset={-52}
+          sideOffset={16}
           className="w-[280px] p-1"
           data-testid="profile-popover"
           onInteractOutside={(event) => {

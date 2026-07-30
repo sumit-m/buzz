@@ -39,7 +39,6 @@ import {
   PopoverAnchor,
   PopoverContent,
 } from "@/shared/ui/popover";
-import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
 import { useNow } from "@/shared/lib/useNow";
 import { Button } from "@/shared/ui/button";
 import { Spinner } from "@/shared/ui/spinner";
@@ -63,9 +62,11 @@ type UserProfilePopoverProps = {
   enableProfilePanel?: boolean;
   /** Set false when a smaller, context-specific hover treatment is provided. */
   enableHoverPopover?: boolean;
-  /** When set to "bot", a BotIdenticon badge renders next to the display name. */
   role?: string;
-  /** Value used to generate the BotIdenticon glyph (typically the author name). */
+  /**
+   * Ignored: the bot identicon is not rendered. Kept so the ~10 call sites that
+   * still pass it keep type-checking.
+   */
   botIdenticonValue?: string;
 };
 
@@ -143,7 +144,6 @@ export function UserProfilePopover({
   enableProfilePanel = true,
   enableHoverPopover = true,
   role,
-  botIdenticonValue,
 }: UserProfilePopoverProps) {
   const [open, setOpen] = React.useState(false);
   const hoverTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
@@ -233,7 +233,6 @@ export function UserProfilePopover({
       </PopoverAnchor>
       {open ? (
         <UserProfilePopoverBody
-          botIdenticonValue={botIdenticonValue}
           canOpenProfilePanel={canOpenProfilePanel}
           onBeforeAction={clearHoverTimer}
           onContentMouseEnter={handleContentMouseEnter}
@@ -255,7 +254,6 @@ export function UserProfilePopover({
  * that render hundreds of instances (~40ms per card when this was eager).
  */
 function UserProfilePopoverBody({
-  botIdenticonValue,
   canOpenProfilePanel,
   onBeforeAction,
   onContentMouseEnter,
@@ -265,7 +263,6 @@ function UserProfilePopoverBody({
   role,
   setOpen,
 }: {
-  botIdenticonValue?: string;
   canOpenProfilePanel: boolean;
   onBeforeAction: () => void;
   onContentMouseEnter: () => void;
@@ -414,13 +411,6 @@ function UserProfilePopoverBody({
             ownerPubkey={ownerPubkey}
             testId="user-profile-popover-agent-provenance"
           />
-          {isBotProfile && botIdenticonValue ? (
-            <BotIdenticon
-              value={botIdenticonValue}
-              size={20}
-              className="shrink-0 rounded"
-            />
-          ) : null}
         </div>
         {isBotProfile && ownerLabel ? (
           <p

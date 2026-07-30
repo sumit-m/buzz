@@ -42,7 +42,6 @@ import {
   ProfilePrimaryActions,
 } from "@/features/profile/ui/UserProfilePrimaryActions";
 import { StatusEmoji } from "@/features/user-status/ui/StatusEmoji";
-import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
 import type { ManagedAgent, RelayAgent } from "@/shared/api/types";
 import type {
   ProfileChannelLink,
@@ -621,14 +620,6 @@ function ProfileHero({
   userStatus: ProfileSummaryViewProps["userStatus"];
 }) {
   const presenceDotClassName = isBot ? "h-4.5 w-4.5" : "h-3.5 w-3.5";
-  const botIndicator = isBot ? (
-    <BotIdenticon
-      className="shrink-0 rounded"
-      data-testid="profile-bot-indicator"
-      size={20}
-      value={displayName}
-    />
-  ) : null;
 
   return (
     <div className="flex flex-col items-center gap-3 text-center">
@@ -679,7 +670,6 @@ function ProfileHero({
               <span className="truncate text-xl font-semibold tracking-tight">
                 {displayName}
               </span>
-              {botIndicator}
               {notManagedOnDevice ? <OtherSetupAgentMarker /> : null}
               <span
                 aria-hidden="true"
@@ -696,7 +686,6 @@ function ProfileHero({
             data-testid="user-profile-name-row"
           >
             <span className="truncate">{displayName}</span>
-            {botIndicator}
             {notManagedOnDevice ? <OtherSetupAgentMarker /> : null}
           </h3>
         )}

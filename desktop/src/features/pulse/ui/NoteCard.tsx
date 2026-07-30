@@ -220,7 +220,7 @@ export function NoteCard({
           />
         ) : null}
 
-        <div className="mt-0.5 pb-3 text-sm text-foreground">
+        <div className="mt-1.5 pb-3 text-sm text-foreground">
           <Markdown content={note.content} />
         </div>
 

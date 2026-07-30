@@ -2857,7 +2857,8 @@ async fn handle_delete_group(
     let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     // Soft-delete the channel, capturing its members under the same lock so a
-    // concurrent join is either included or refused.
+    // concurrent join is either included or refused. The purge below then
+    // destroys what this hid.
     let deleted = state
         .db
         .soft_delete_channel_capturing_members(tenant.community(), channel_id)
@@ -2889,7 +2890,8 @@ async fn handle_delete_group(
     // client that re-reads on the notice no longer sees the channel. The
     // notices run off the request path, bounded like `handle_req`'s filter
     // reads, so a large channel neither holds the OK nor depends on the
-    // system message below.
+    // system message below. They are stored globally, so the purge below does
+    // not reach them; they name only the channel id and the actor.
     if let Some(deleted) = deleted {
         let (tenant, state, actor_bytes) = (tenant.clone(), state.clone(), actor_bytes.clone());
         tokio::spawn(async move {
@@ -2915,6 +2917,9 @@ async fn handle_delete_group(
         });
     }
 
+    // Announce before destroying. Emitting broadcasts to live subscribers, and
+    // the row it writes is then purged along with everything else — so clients
+    // watching now are told, and nothing is left behind afterwards.
     let actor_hex = hex::encode(&actor_bytes);
     emit_system_message(
         tenant,
@@ -2927,7 +2932,26 @@ async fn handle_delete_group(
     )
     .await?;
 
-    info!(channel = %channel_id, "NIP-29 DELETE_GROUP processed");
+    // LOCAL DIVERGENCE: upstream stamps `channels.deleted_at` and keeps every
+    // message. This destroys the channel row, its members, and every event
+    // carrying its channel_id — including the kind:9008 request being handled
+    // right now, since ingest stores that before side effects run. All
+    // unrecoverable.
+    let purged = state
+        .db
+        .hard_delete_channel_events(tenant.community(), channel_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("hard_delete_channel_events failed: {e}"))?;
+
+    // Clear both membership and accessible-channels caches. A stale
+    // is_member=true entry would point at a channel row that no longer exists.
+    state.invalidate_channel_deleted(tenant);
+
+    info!(
+        channel = %channel_id,
+        purged_events = purged,
+        "NIP-29 DELETE_GROUP processed (hard delete)"
+    );
     Ok(())
 }
 
@@ -3561,6 +3585,18 @@ pub(crate) async fn persist_deletion(
 
     let mut repaired = false;
     for (planned, deleted) in planned.iter().zip(deleted) {
+        // LOCAL DIVERGENCE: upstream keeps the soft-deleted row. This destroys
+        // it and everything referencing it, so the content is unrecoverable.
+        // Runs whether or not this commit hid the target, so a resend retries
+        // a purge that failed after an earlier commit. The target is already
+        // hidden, so a failure here is logged rather than refused.
+        if let Err(e) = state
+            .db
+            .purge_deleted_event(tenant.community(), &planned.id)
+            .await
+        {
+            error!(target_event = %hex::encode(&planned.id), "hard delete failed: {e}");
+        }
         if !deleted {
             continue;
         }

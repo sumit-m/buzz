@@ -881,6 +881,117 @@ pub fn gc_orphaned_events(
     Ok(affected)
 }
 
+/// Purge every local trace of one event. Returns the raw rows destroyed.
+///
+/// LOCAL DIVERGENCE: upstream keeps archived copies after a message is deleted
+/// ("retention is decoupled in v1"), so a saved message outlived its own
+/// deletion. Called from `delete_message` to make the delete mean what it says.
+///
+/// Deliberately not scoped to an identity or relay: the point is that the
+/// content is gone from this machine, and an event id identifies the same
+/// content wherever it was saved from.
+pub fn purge_event(conn: &Connection, event_id: &str) -> Result<usize, String> {
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("failed to begin purge_event: {e}"))?;
+
+    let result = (|| -> Result<usize, String> {
+        for table in ["archived_event_scopes", "observer_channel_index"] {
+            conn.execute(
+                &format!("DELETE FROM {table} WHERE id = ?1"),
+                params![event_id],
+            )
+            .map_err(|e| format!("failed to purge {table}: {e}"))?;
+        }
+        conn.execute(
+            "DELETE FROM archived_events WHERE id = ?1",
+            params![event_id],
+        )
+        .map_err(|e| format!("failed to purge archived_events: {e}"))
+    })();
+
+    match result {
+        Ok(affected) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| format!("failed to commit purge_event: {e}"))?;
+            Ok(affected)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+/// Purge every local trace of a channel: events saved under its `channel_h`
+/// scope, observer frames attributed to it, its save subscriptions, and any raw
+/// row left with no scope. Returns the raw rows destroyed.
+///
+/// LOCAL DIVERGENCE, same reasoning as [`purge_event`].
+pub fn purge_channel(conn: &Connection, channel_id: &str) -> Result<usize, String> {
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("failed to begin purge_channel: {e}"))?;
+
+    let result = (|| -> Result<usize, String> {
+        // Observer frames are scoped `owner_p`, not per channel, so the index is
+        // the only thing tying them to this channel — they have to go by id,
+        // scope rows included. Both statements must run before the index rows
+        // that identify them are dropped.
+        let mut affected = 0usize;
+        for statement in [
+            "DELETE FROM archived_event_scopes WHERE id IN (
+                 SELECT id FROM observer_channel_index WHERE channel_id = ?1
+             )",
+            "DELETE FROM archived_events WHERE id IN (
+                 SELECT id FROM observer_channel_index WHERE channel_id = ?1
+             )",
+        ] {
+            let rows = conn
+                .execute(statement, params![channel_id])
+                .map_err(|e| format!("failed to purge channel observer rows: {e}"))?;
+            if statement.contains("archived_events") {
+                affected += rows;
+            }
+        }
+
+        for statement in [
+            "DELETE FROM archived_event_scopes \
+             WHERE scope_type = 'channel_h' AND scope_value = ?1",
+            "DELETE FROM observer_channel_index WHERE channel_id = ?1",
+            "DELETE FROM save_subscriptions \
+             WHERE scope_type = 'channel_h' AND scope_value = ?1",
+        ] {
+            conn.execute(statement, params![channel_id])
+                .map_err(|e| format!("failed to purge channel scope rows: {e}"))?;
+        }
+
+        // Only now drop raw rows, and only those no scope references any more.
+        // Deleting by channel scope directly would also destroy an event the
+        // user saved under a second scope — a thread or DM save would vanish
+        // with the channel.
+        affected += conn
+            .execute(
+                "DELETE FROM archived_events
+                 WHERE id NOT IN (SELECT id FROM archived_event_scopes)",
+                params![],
+            )
+            .map_err(|e| format!("failed to gc scope-less events: {e}"))?;
+
+        Ok(affected)
+    })();
+
+    match result {
+        Ok(affected) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| format!("failed to commit purge_channel: {e}"))?;
+            Ok(affected)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

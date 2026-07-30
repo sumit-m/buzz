@@ -1740,6 +1740,122 @@ pub use super::event_deletion::{
     soft_delete_by_coordinate, soft_delete_event_and_update_thread, DeletionTarget,
 };
 
+/// Physically delete a soft-deleted event and every row that references it.
+///
+/// LOCAL DIVERGENCE from upstream, which soft-deletes (`deleted_at = NOW()`) and
+/// keeps the content forever. Nothing here is recoverable.
+///
+/// Runs after [`Db::insert_deletion_event`] has soft-deleted the target and
+/// decremented its thread counters in the deletion's own commit, so the
+/// counters are left alone here. The dependent tables carry no foreign key to
+/// the partitioned `events` table, so each one is purged explicitly — missing
+/// any of them would strand rows that no longer have an event to describe.
+///
+/// Returns false when the event was already gone.
+pub async fn purge_deleted_event(
+    pool: &PgPool,
+    community_id: CommunityId,
+    event_id: &[u8],
+) -> Result<bool> {
+    let mut tx = pool.begin().await?;
+
+    let result = sqlx::query("DELETE FROM events WHERE community_id = $1 AND id = $2")
+        .bind(community_id.as_uuid())
+        .bind(event_id)
+        .execute(&mut *tx)
+        .await?;
+
+    let deleted = result.rows_affected() > 0;
+
+    if deleted {
+        // `reactions` is hit on both columns: `event_id` when the deleted event
+        // was reacted to, `reaction_event_id` when it was itself the kind:7.
+        for statement in [
+            "DELETE FROM event_mentions WHERE community_id = $1 AND event_id = $2",
+            "DELETE FROM reactions WHERE community_id = $1              AND (event_id = $2 OR reaction_event_id = $2)",
+            "DELETE FROM thread_metadata WHERE community_id = $1 AND event_id = $2",
+            "DELETE FROM delivery_log WHERE community_id = $1 AND event_id = $2",
+            "DELETE FROM push_wake_outbox WHERE community_id = $1 AND event_id = $2",
+            "DELETE FROM push_match_queue WHERE community_id = $1 AND event_id = $2",
+            "DELETE FROM moderation_reports WHERE community_id = $1 AND target_event_id = $2",
+            "DELETE FROM moderation_actions WHERE community_id = $1 AND target_event_id = $2",
+        ] {
+            sqlx::query(statement)
+                .bind(community_id.as_uuid())
+                .bind(event_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+
+    tx.commit().await?;
+    Ok(deleted)
+}
+
+/// Physically delete every event in a channel, the channel row, and all
+/// dependent rows. Returns the number of events destroyed.
+///
+/// LOCAL DIVERGENCE from upstream, which only stamps `channels.deleted_at` and
+/// leaves the messages in place. Nothing here is recoverable.
+///
+/// Ordering is dictated by the foreign keys into `channels`: only
+/// `channel_members` cascades, so `thread_metadata`, `moderation_reports` and
+/// `moderation_actions` must be cleared before the channel row can go.
+/// `workflows.channel_id` is nulled rather than deleted — a workflow outlives
+/// the channel it happened to post into.
+pub async fn hard_delete_channel_events(
+    pool: &PgPool,
+    community_id: CommunityId,
+    channel_id: uuid::Uuid,
+) -> Result<u64> {
+    let mut tx = pool.begin().await?;
+
+    // Keyed by event id via subquery: these tables have no channel_id of their
+    // own, so they can only be reached through the events being destroyed.
+    for statement in [
+        "DELETE FROM event_mentions WHERE community_id = $1 AND event_id IN \
+         (SELECT id FROM events WHERE community_id = $1 AND channel_id = $2)",
+        "DELETE FROM reactions WHERE community_id = $1 AND (event_id IN \
+         (SELECT id FROM events WHERE community_id = $1 AND channel_id = $2) \
+         OR reaction_event_id IN \
+         (SELECT id FROM events WHERE community_id = $1 AND channel_id = $2))",
+        "DELETE FROM delivery_log WHERE community_id = $1 AND event_id IN \
+         (SELECT id FROM events WHERE community_id = $1 AND channel_id = $2)",
+        "DELETE FROM push_wake_outbox WHERE community_id = $1 AND event_id IN \
+         (SELECT id FROM events WHERE community_id = $1 AND channel_id = $2)",
+        "DELETE FROM push_match_queue WHERE community_id = $1 AND event_id IN \
+         (SELECT id FROM events WHERE community_id = $1 AND channel_id = $2)",
+        "DELETE FROM thread_metadata WHERE community_id = $1 AND channel_id = $2",
+        "DELETE FROM moderation_reports WHERE community_id = $1 AND channel_id = $2",
+        "DELETE FROM moderation_actions WHERE community_id = $1 AND channel_id = $2",
+        "UPDATE workflows SET channel_id = NULL \
+         WHERE community_id = $1 AND channel_id = $2",
+    ] {
+        sqlx::query(statement)
+            .bind(community_id.as_uuid())
+            .bind(channel_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    let events = sqlx::query("DELETE FROM events WHERE community_id = $1 AND channel_id = $2")
+        .bind(community_id.as_uuid())
+        .bind(channel_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+    // channel_members cascades from this.
+    sqlx::query("DELETE FROM channels WHERE community_id = $1 AND id = $2")
+        .bind(community_id.as_uuid())
+        .bind(channel_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(events)
+}
+
 /// Returns the `created_at` timestamp of the most recent non-deleted event in a channel.
 pub async fn get_last_message_at(
     pool: &PgPool,
@@ -2488,6 +2604,26 @@ impl Db {
         }
         tx.commit().await?;
         Ok(result)
+    }
+
+    /// Physically delete a soft-deleted event and every row referencing it.
+    /// Unrecoverable. False when the event was already gone.
+    pub async fn purge_deleted_event(
+        &self,
+        community_id: CommunityId,
+        event_id: &[u8],
+    ) -> Result<bool> {
+        crate::event::purge_deleted_event(&self.pool, community_id, event_id).await
+    }
+
+    /// Physically delete a channel, its events, and all dependent rows.
+    /// Returns the number of events destroyed. Unrecoverable.
+    pub async fn hard_delete_channel_events(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+    ) -> Result<u64> {
+        crate::event::hard_delete_channel_events(&self.pool, community_id, channel_id).await
     }
 
     /// Queries events matching the given filter parameters.

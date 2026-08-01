@@ -1123,16 +1123,20 @@ async fn fan_out_system_message(
 /// [`emit_live_thread_summary`]. The rows are already gone, so a client that
 /// refetches never sees them; this exists purely to correct stale copies.
 ///
-/// Includes the target id. Naming it twice is harmless — the client unions `e`
-/// tags into a set — and keeps this independent of who emitted the original.
+/// Emitted for every delete, not only cascades, and it names the target as well
+/// as the subtree. The channel timeline could get by on the human's own deletion
+/// event, but the home inbox's thread-activity accumulator never sees that one —
+/// its subscription is filtered to message kinds — so a single-message delete
+/// strands a row there just as a cascade does. Naming an id twice is harmless:
+/// clients union `e` tags into a set.
 pub fn emit_cascade_deletion(
     tenant: &TenantContext,
     state: &Arc<AppState>,
     channel_id: Uuid,
     destroyed: Vec<Vec<u8>>,
 ) {
-    if destroyed.len() < 2 {
-        return; // Target only — the human's own deletion event already names it.
+    if destroyed.is_empty() {
+        return;
     }
     let tenant = tenant.clone();
     let state = Arc::clone(state);

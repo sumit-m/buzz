@@ -18,6 +18,8 @@ import {
   CHANNEL_EVENT_KINDS,
   CHANNEL_MESSAGE_EVENT_KINDS,
   HOME_MENTION_EVENT_KINDS,
+  KIND_DELETION,
+  KIND_NIP29_DELETE_EVENT,
 } from "@/shared/constants/kinds";
 import type { Channel, RelayEvent } from "@/shared/api/types";
 import {
@@ -49,6 +51,12 @@ export type UseLiveChannelUpdatesOptions = {
    * Fired for thread replies that should be surfaced as Home inbox activity.
    */
   onThreadReplyNotification?: (channelId: string, event: RelayEvent) => void;
+  /**
+   * Fired for kind:5 / kind:9005 deletions so callers can retract anything they
+   * surfaced from the deleted events. The relay names the whole cascaded
+   * subtree in its `e` tags, not just the message the human clicked.
+   */
+  onDeletionNotification?: (event: RelayEvent) => void;
   /**
    * Fired for external thread replies that do not match the locally-known
    * interest sets. Callers can perform an async backfill and then decide
@@ -252,6 +260,18 @@ export function useLiveChannelUpdates(
       if (channelId !== activeChannelId) {
         invalidateChannelsDebounced();
       }
+      return;
+    }
+
+    // Deletions are already in CHANNEL_EVENT_KINDS but never reached a
+    // callback, so home-inbox activity rows outlived the messages they
+    // describe. Dispatched before the unread-trigger gate below, which is
+    // restricted to human-visible message kinds and would drop them.
+    if (
+      event.kind === KIND_DELETION ||
+      event.kind === KIND_NIP29_DELETE_EVENT
+    ) {
+      options.onDeletionNotification?.(event);
       return;
     }
 

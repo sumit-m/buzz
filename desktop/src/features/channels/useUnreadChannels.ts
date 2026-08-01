@@ -36,6 +36,7 @@ import { DM_NOTIFIABLE_EVENT_KINDS } from "./isDmNotifiableKind";
 import {
   addThreadActivityItems,
   projectActivityForScope,
+  removeThreadActivityItems,
   type ThreadActivityItem,
 } from "@/features/channels/threadActivityStorage";
 export type { ThreadActivityItem } from "@/features/channels/threadActivityStorage";
@@ -569,6 +570,43 @@ export function useUnreadChannels(
     [channels, currentActivityScope, activityPersistence, recordMentionedRoot],
   );
 
+  /**
+   * Drop activity rows named by a deletion event.
+   *
+   * The home inbox lists the server feed plus these client-accumulated rows
+   * (`HomeScreen.tsx`). The server half excludes deleted events in SQL; this
+   * half is persisted to localStorage and never hears about a deletion, so
+   * without this a deleted message keeps a row through every refetch and every
+   * restart.
+   *
+   * The relay names the whole cascaded subtree in its own deletion event, not
+   * just the message the human clicked, so replies removed by the cascade are
+   * cleared here too.
+   */
+  const handleDeletionNotification = React.useCallback(
+    (event: RelayEvent) => {
+      // Same scope fence as the reply handler: never mutate a buffer whose
+      // scope has drifted from the current identity.
+      if (!activityPersistence.isScopeLoaded()) return;
+
+      const deletedIds = new Set(
+        event.tags
+          .filter((tag) => tag[0] === "e" && typeof tag[1] === "string")
+          .map((tag) => tag[1]),
+      );
+      const removed = removeThreadActivityItems(
+        threadActivityRef.current,
+        deletedIds,
+      );
+      if (!removed.didRemove) return;
+      threadActivityRef.current = removed.items;
+      activityPersistence.schedule(currentActivityScope);
+      // Unread badges are derived from the same rows, so they recompute here.
+      bumpLatestVersion();
+    },
+    [currentActivityScope, activityPersistence],
+  );
+
   const muteThread = React.useCallback(
     (rootId: string) => {
       const didAdd = !mutedRootIdsRef.current.has(rootId);
@@ -604,6 +642,7 @@ export function useUnreadChannels(
     ...liveUpdateOptions,
     onChannelMessage: handleChannelMessage,
     onThreadReplyNotification: handleThreadReplyNotification,
+    onDeletionNotification: handleDeletionNotification,
     onSelfChannelMessage: handleSelfChannelMessage,
     participatedRootIds: participatedRootIdsRef.current,
     followedRootIds: liveUpdateOptions.followedRootIds,

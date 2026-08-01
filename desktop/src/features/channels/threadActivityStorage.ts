@@ -94,6 +94,33 @@ export function writeActivityToStorage(
   }
 }
 
+/**
+ * Drop activity rows for events that no longer exist.
+ *
+ * These rows are accumulated client-side and persisted to localStorage, so —
+ * unlike the server half of the home feed, whose SQL excludes deleted events —
+ * nothing removes them on its own. A deleted message's row survives every
+ * refetch and every app restart until it is evicted by the size cap.
+ *
+ * Callers pass the ids named by an arriving deletion event, which on this relay
+ * includes the whole cascaded subtree, not just the message the human clicked.
+ */
+export function removeThreadActivityItems(
+  existing: ThreadActivityItem[],
+  deletedIds: ReadonlySet<string>,
+) {
+  if (deletedIds.size === 0) {
+    return { didRemove: false, items: existing };
+  }
+
+  const items = existing.filter((item) => !deletedIds.has(item.id));
+  if (items.length === existing.length) {
+    return { didRemove: false, items: existing };
+  }
+
+  return { didRemove: true, items };
+}
+
 export function addThreadActivityItems(
   existing: ThreadActivityItem[],
   items: ThreadActivityItem[],

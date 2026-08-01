@@ -7,6 +7,7 @@ import {
   addThreadActivityItems,
   projectActivityForScope,
   readActivityFromStorage,
+  removeThreadActivityItems,
   writeActivityToStorage,
 } from "./threadActivityStorage.ts";
 import { normalizeRelayUrl } from "@/features/profile/lib/selfProfileStorage";
@@ -211,6 +212,65 @@ test("round-trip: non-array JSON in storage returns empty array", () => {
   } finally {
     isolated.restore();
   }
+});
+
+// ── removeThreadActivityItems ────────────────────────────────────────────────
+
+test("removeThreadActivityItems drops rows named by a deletion", () => {
+  const existing = [
+    makeItem("a", "ch", 1),
+    makeItem("b", "ch", 2),
+    makeItem("c", "ch", 3),
+  ];
+  const { didRemove, items } = removeThreadActivityItems(
+    existing,
+    new Set(["b"]),
+  );
+  assert.equal(didRemove, true);
+  assert.deepEqual(
+    items.map((item) => item.id),
+    ["a", "c"],
+  );
+});
+
+test("removeThreadActivityItems drops a whole cascaded subtree at once", () => {
+  // The relay names every destroyed id, not just the message the human clicked.
+  const existing = [
+    makeItem("parent", "ch", 1),
+    makeItem("reply-1", "ch", 2),
+    makeItem("reply-2", "ch", 3),
+    makeItem("unrelated", "ch", 4),
+  ];
+  const { didRemove, items } = removeThreadActivityItems(
+    existing,
+    new Set(["parent", "reply-1", "reply-2"]),
+  );
+  assert.equal(didRemove, true);
+  assert.deepEqual(
+    items.map((item) => item.id),
+    ["unrelated"],
+  );
+});
+
+test("removeThreadActivityItems reports no change when nothing matches", () => {
+  const existing = [makeItem("a", "ch", 1)];
+  const { didRemove, items } = removeThreadActivityItems(
+    existing,
+    new Set(["missing"]),
+  );
+  assert.equal(didRemove, false);
+  assert.equal(
+    items,
+    existing,
+    "must return the same reference to skip a write",
+  );
+});
+
+test("removeThreadActivityItems is a no-op for an empty deletion set", () => {
+  const existing = [makeItem("a", "ch", 1)];
+  const { didRemove, items } = removeThreadActivityItems(existing, new Set());
+  assert.equal(didRemove, false);
+  assert.equal(items, existing);
 });
 
 // ── addThreadActivityItems ───────────────────────────────────────────────────

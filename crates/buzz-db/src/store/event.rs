@@ -1762,13 +1762,16 @@ pub use super::event_deletion::{
 /// missing any of them would strand rows that no longer have an event to
 /// describe.
 ///
-/// Returns false when the event was already gone.
+/// Returns every destroyed event id, target included; empty means the target was
+/// already gone. Callers need the full list because a client only hides a
+/// message when some deletion event names it, and the human's own deletion event
+/// names the target alone.
 pub async fn purge_deleted_event(
     pool: &PgPool,
     community_id: CommunityId,
     event_id: &[u8],
     root_event_id: Option<&[u8]>,
-) -> Result<bool> {
+) -> Result<Vec<Vec<u8>>> {
     let mut tx = pool.begin().await?;
 
     let result = sqlx::query("DELETE FROM events WHERE community_id = $1 AND id = $2")
@@ -1779,7 +1782,7 @@ pub async fn purge_deleted_event(
 
     if result.rows_affected() == 0 {
         tx.commit().await?;
-        return Ok(false);
+        return Ok(Vec::new());
     }
 
     // Walk the reply tree. `thread_metadata` still holds the target's row — only
@@ -1873,7 +1876,7 @@ pub async fn purge_deleted_event(
     }
 
     tx.commit().await?;
-    Ok(true)
+    Ok(doomed)
 }
 
 /// Physically delete every event in a channel, the channel row, and all
@@ -2715,13 +2718,14 @@ impl Db {
     }
 
     /// Physically delete a soft-deleted event, its reply subtree, and every row
-    /// referencing them. Unrecoverable. False when the event was already gone.
+    /// referencing them. Unrecoverable. Returns every destroyed id; empty means
+    /// not found.
     pub async fn purge_deleted_event(
         &self,
         community_id: CommunityId,
         event_id: &[u8],
         root_event_id: Option<&[u8]>,
-    ) -> Result<bool> {
+    ) -> Result<Vec<Vec<u8>>> {
         crate::event::purge_deleted_event(&self.pool, community_id, event_id, root_event_id)
             .await
     }

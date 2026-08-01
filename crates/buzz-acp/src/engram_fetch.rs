@@ -3,7 +3,8 @@
 //!
 //! Scope per Tyler's spec:
 //! - Fire one synchronous query for the core head when a *new* session is born.
-//! - If a body is found, emit `<core-memory>…</core-memory>`.
+//! - If a body is found, emit `<core-memory>` carrying the profile and a
+//!   pointer for re-reading it.
 //! - If no body is found, emit an onboarding nudge so the agent learns how
 //!   to set its own core.
 //! - On any *error* (transport, parse), log and emit nothing. We must not
@@ -25,6 +26,20 @@ pub const ONBOARDING_NUDGE: &str = "No core memory found. \
 Use `buzz mem set core \"…\"` to create one (it will hold your identity, \
 lessons, and goals across sessions). Ask your user about yourself.";
 
+/// Re-read pointer appended to a populated core section.
+///
+/// This section is injected once, at session birth, and never refreshed. A long
+/// session outlives it: context compaction can drop it, and another agent — or
+/// this one, from a different session — can rewrite the core behind it. Without
+/// a pointer the agent has no way to know either happened.
+///
+/// The `[Channel Canvas]` section has carried the same affordance since it was
+/// written (`pool.rs` `render_canvas_section`); core memory was the one standing
+/// section that stated its content without stating how to re-read it. The
+/// onboarding nudge above does mention the CLI, but only when the core is
+/// *empty* — precisely when there is nothing to re-read.
+const REREAD_POINTER: &str = "Fetch current content with: buzz mem get core";
+
 /// Build the rendered prompt section for the agent's core.
 ///
 /// Returns:
@@ -41,8 +56,11 @@ pub async fn build_core_section(
     match fetch_core_body(rest, agent_keys, owner).await {
         Ok(Some(profile)) => Some(crate::prompt_framing::semantic_section(
             "core-memory",
-            &profile,
+            &format!("{profile}
+{REREAD_POINTER}"),
         )),
+        // No pointer on the nudge: it already names the CLI, and there is
+        // nothing to re-read until a core exists.
         Ok(None) => Some(crate::prompt_framing::semantic_section(
             "core-memory",
             ONBOARDING_NUDGE,
@@ -236,6 +254,21 @@ mod tests {
         let arr = vec![serde_json::to_value(&ev).unwrap()];
         let out = decode_core_body(&arr, &agent, &owner.public_key()).unwrap();
         assert_eq!(out, None);
+    }
+
+    /// The section is injected once at session birth and never refreshed, so a
+    /// populated core must say how to re-read itself — matching the affordance
+    /// `[Channel Canvas]` has always had.
+    #[test]
+    fn reread_pointer_names_a_real_command() {
+        assert_eq!(
+            REREAD_POINTER,
+            "Fetch current content with: buzz mem get core"
+        );
+        assert!(
+            ONBOARDING_NUDGE.contains("buzz mem set core"),
+            "the nudge covers creation; the pointer covers re-reading"
+        );
     }
 
     /// Non-empty array with only garbage entries (not even parseable as

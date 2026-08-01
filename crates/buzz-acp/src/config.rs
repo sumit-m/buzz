@@ -426,6 +426,15 @@ pub struct CliArgs {
           value_parser = clap::value_parser!(u32).range(0..=100))]
     pub context_message_limit: u32,
 
+    /// Maximum number of context messages for a plain channel mention.
+    ///
+    /// Deliberately its own knob, and larger than the thread/DM limit: a thread
+    /// is already a scoped conversation, whereas a channel mention arrives with
+    /// no surrounding context at all. Set to 0 to disable channel context. Max 100.
+    #[arg(long, env = "BUZZ_ACP_CHANNEL_CONTEXT_MESSAGE_LIMIT", default_value_t = 50,
+          value_parser = clap::value_parser!(u32).range(0..=100))]
+    pub channel_context_message_limit: u32,
+
     /// Maximum turns per session before proactive rotation. 0 = disabled
     /// (rotate only on MaxTokens / MaxTurnRequests).
     #[arg(long, env = "BUZZ_ACP_MAX_TURNS_PER_SESSION", default_value_t = 0,
@@ -607,6 +616,9 @@ pub struct Config {
     pub no_mention_filter: bool,
     pub config_path: PathBuf,
     pub context_message_limit: u32,
+    /// Context window for plain channel mentions. Separate from
+    /// `context_message_limit`; see the CLI arg for why.
+    pub channel_context_message_limit: u32,
     /// Maximum turns per session before proactive rotation. 0 = disabled.
     pub max_turns_per_session: u32,
     pub presence_enabled: bool,
@@ -1246,6 +1258,7 @@ impl Config {
             no_mention_filter: args.no_mention_filter,
             config_path: args.config,
             context_message_limit: args.context_message_limit,
+            channel_context_message_limit: args.channel_context_message_limit,
             max_turns_per_session: args.max_turns_per_session,
             presence_enabled: !args.no_presence,
             typing_enabled: !args.no_typing,
@@ -1291,7 +1304,7 @@ impl Config {
             format!(" allowed_respond_to=[{}]", modes.join(","))
         };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} session_policy={} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} session_policy={} meh={:?} ignore_self={} context_limit={} channel_context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -1307,6 +1320,7 @@ impl Config {
             self.multiple_event_handling,
             self.ignore_self,
             self.context_message_limit,
+            self.channel_context_message_limit,
             self.max_turns_per_session,
             self.presence_enabled,
             self.typing_enabled,
@@ -1627,6 +1641,7 @@ mod tests {
             no_mention_filter: false,
             config_path: PathBuf::from("./buzz-acp.toml"),
             context_message_limit: 12,
+            channel_context_message_limit: 50,
             max_turns_per_session: 0,
             presence_enabled: true,
             typing_enabled: true,

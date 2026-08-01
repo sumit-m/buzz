@@ -914,6 +914,10 @@ pub struct PromptContext {
     pub channel_info: ChannelInfoResolver,
     /// Max messages to include in thread/DM context. 0 = disabled.
     pub context_message_limit: u32,
+    /// Max messages to include for a plain channel mention. 0 = disabled.
+    /// Its own knob — a channel window is built from nothing, a thread is
+    /// already scoped.
+    pub channel_context_message_limit: u32,
     /// Max turns per session before proactive rotation. 0 = disabled.
     pub max_turns_per_session: u32,
     /// Permission mode to apply after session creation. `Default` = skip.
@@ -3050,7 +3054,7 @@ pub async fn run_prompt_task(
         let context_target = resolve_context_target(b, is_dm);
         let hydrated_thread_root = match &context_target {
             ContextTarget::Thread(root) => Some(root),
-            ContextTarget::Dm | ContextTarget::None => None,
+            ContextTarget::Dm | ContextTarget::Channel | ContextTarget::None => None,
         };
         let thread_context_is_hydrated = hydrated_thread_root.is_some_and(|root| {
             agent
@@ -3072,18 +3076,16 @@ pub async fn run_prompt_task(
             .map(|delivery| &delivery.delivered_event_ids)
             .cloned()
             .unwrap_or_default();
-        let conversation_context = if ctx.context_message_limit > 0 {
-            fetch_conversation_context_for_target(
-                b.channel_id,
-                &context_target,
-                &ctx,
-                thread_context_is_hydrated,
-                &delivered_ids,
-            )
-            .await
-        } else {
-            None
-        };
+        // Each context kind gates on its own limit inside; a caller-side gate
+        // on `context_message_limit` would silently disable channel context too.
+        let conversation_context = fetch_conversation_context_for_target(
+            b.channel_id,
+            &context_target,
+            &ctx,
+            thread_context_is_hydrated,
+            &delivered_ids,
+        )
+        .await;
         if let Some(root) =
             fetched_thread_root_to_hydrate(&context_target, conversation_context.as_ref(), is_dm)
         {
@@ -4038,7 +4040,8 @@ pub(crate) fn render_canvas_section(event_id: &str, timestamp: &str, channel_uui
 fn conversation_context_event_ids(context: Option<&ConversationContext>) -> HashSet<String> {
     match context {
         Some(ConversationContext::Thread { messages, .. })
-        | Some(ConversationContext::Dm { messages, .. }) => messages
+        | Some(ConversationContext::Dm { messages, .. })
+        | Some(ConversationContext::Channel { messages, .. }) => messages
             .iter()
             .filter(|message| !message.event_id.is_empty())
             .map(|message| message.event_id.clone())
@@ -4099,15 +4102,28 @@ fn conversation_context_delta(
                 truncated: truncated || omitted_from_prior_session,
             })
         }
+        ConversationContext::Channel {
+            messages,
+            total,
+            truncated,
+        } => {
+            let (messages, omitted_from_prior_session) = filter(messages);
+            (!messages.is_empty()).then_some(ConversationContext::Channel {
+                messages,
+                total,
+                truncated: truncated || omitted_from_prior_session,
+            })
+        }
     }
 }
 
-/// Fetch conversation context (thread or DM) for a batch before prompting.
+/// Fetch conversation context (thread, DM, or channel) for a batch before
+/// prompting.
 ///
 /// Returns `None` if:
-/// - The event is a plain channel message (not a thread reply, not a DM)
 /// - The REST fetch fails or times out (graceful degradation)
-/// - `context_message_limit` is 0
+/// - The relevant limit is 0
+/// - The channel has no messages at all
 ///
 /// Context is scoped by the batch's resolved [`SessionScope`], never inferred
 /// from whichever event happens to be last:
@@ -4133,6 +4149,7 @@ async fn fetch_conversation_context_for_target(
 ) -> Option<ConversationContext> {
     let limit = ctx.context_message_limit;
     match target {
+        ContextTarget::Thread(_) | ContextTarget::Dm if limit == 0 => None,
         ContextTarget::Thread(root_id) => {
             fetch_thread_context(
                 channel_id,
@@ -4146,6 +4163,19 @@ async fn fetch_conversation_context_for_target(
             .await
         }
         ContextTarget::Dm => fetch_dm_context(channel_id, limit, &ctx.rest_client).await,
+        ContextTarget::Channel => {
+            let channel_limit = ctx.channel_context_message_limit;
+            if channel_limit == 0 {
+                return None;
+            }
+            fetch_channel_context(
+                channel_id,
+                channel_limit,
+                ctx.agent_keys.public_key(),
+                &ctx.rest_client,
+            )
+            .await
+        }
         ContextTarget::None => None,
     }
 }
@@ -4157,7 +4187,14 @@ enum ContextTarget {
     Thread(String),
     /// Fetch recent DM conversation history.
     Dm,
-    /// No supplementary context (new thread's first turn, or plain channel).
+    /// Fetch recent channel history for a plain mention.
+    ///
+    /// LOCAL DIVERGENCE: upstream returns `None` here, so the most common way
+    /// an agent is addressed was the one that arrived with no surrounding
+    /// conversation at all. Its own limit, because a channel window is built
+    /// from nothing while a thread is already scoped.
+    Channel,
+    /// No supplementary context (new thread's first turn).
     None,
 }
 
@@ -4182,7 +4219,7 @@ fn resolve_context_target(batch: &FlushBatch, is_dm: bool) -> ContextTarget {
     if is_dm {
         return ContextTarget::Dm;
     }
-    ContextTarget::None
+    ContextTarget::Channel
 }
 
 /// Return the one canonical thread whose history this prompt successfully
@@ -4199,7 +4236,7 @@ fn fetched_thread_root_to_hydrate(
     }
     match target {
         ContextTarget::Thread(root) => Some(root.clone()),
-        ContextTarget::Dm | ContextTarget::None => None,
+        ContextTarget::Dm | ContextTarget::Channel | ContextTarget::None => None,
     }
 }
 
@@ -4233,7 +4270,8 @@ fn collect_prompt_pubkeys(
 
     let context_messages = match conversation_context {
         Some(ConversationContext::Thread { messages, .. })
-        | Some(ConversationContext::Dm { messages, .. }) => Some(messages),
+        | Some(ConversationContext::Dm { messages, .. })
+        | Some(ConversationContext::Channel { messages, .. }) => Some(messages),
         None => None,
     };
 
@@ -4517,26 +4555,134 @@ where
     Count: Fn(Vec<nostr::Filter>) -> CountFut,
     CountFut: std::future::Future<Output = Result<serde_json::Value, crate::relay::RelayError>>,
 {
-    let replies_count =
-        match timeout(CONTEXT_COUNT_TIMEOUT, count(vec![replies_filter.clone()])).await {
-            Ok(Ok(json)) => json.get("count").and_then(|v| v.as_u64())?,
+    let replies_count = fetch_exact_count(channel_id, replies_filter, count).await?;
+    Some(replies_count + usize::from(root_present))
+}
+
+/// Best-effort `/count` for a filter. `None` on failure or timeout — callers
+/// fall back to the sentinel-proven minimum rather than rendering an
+/// unsupported total.
+async fn fetch_exact_count<Count, CountFut>(
+    channel_id: Uuid,
+    filter: &nostr::Filter,
+    count: &Count,
+) -> Option<usize>
+where
+    Count: Fn(Vec<nostr::Filter>) -> CountFut,
+    CountFut: std::future::Future<Output = Result<serde_json::Value, crate::relay::RelayError>>,
+{
+    match timeout(CONTEXT_COUNT_TIMEOUT, count(vec![filter.clone()])).await {
+        Ok(Ok(json)) => Some(json.get("count").and_then(|v| v.as_u64())? as usize),
+        Ok(Err(e)) => {
+            tracing::debug!(
+                channel_id = %channel_id,
+                "context count failed; using sentinel minimum: {e}"
+            );
+            None
+        }
+        Err(_) => {
+            tracing::debug!(
+                channel_id = %channel_id,
+                "context count timed out; using sentinel minimum"
+            );
+            None
+        }
+    }
+}
+
+/// Fetch recent channel history for a plain (non-thread, non-DM) mention.
+async fn fetch_channel_context(
+    channel_id: Uuid,
+    limit: u32,
+    agent_pubkey: nostr::PublicKey,
+    rest: &RestClient,
+) -> Option<ConversationContext> {
+    fetch_channel_context_with(
+        channel_id,
+        limit,
+        agent_pubkey,
+        |filters| async move { rest.query(&filters).await },
+        |filters| async move { rest.count(&filters).await },
+    )
+    .await
+}
+
+/// Testable core of [`fetch_channel_context`], with `query`/`count` injected.
+///
+/// Mirrors [`fetch_thread_context_with`]: fetch `limit + 1` messages so an
+/// extra one *proves* truncation without trusting a boundary equality, pin the
+/// agent's own newest message when it falls outside the window, then upgrade
+/// the total with a best-effort `/count`.
+async fn fetch_channel_context_with<Query, QueryFut, Count, CountFut>(
+    channel_id: Uuid,
+    limit: u32,
+    agent_pubkey: nostr::PublicKey,
+    query: Query,
+    count: Count,
+) -> Option<ConversationContext>
+where
+    Query: Fn(Vec<nostr::Filter>) -> QueryFut,
+    QueryFut: std::future::Future<Output = Result<serde_json::Value, crate::relay::RelayError>>,
+    Count: Fn(Vec<nostr::Filter>) -> CountFut,
+    CountFut: std::future::Future<Output = Result<serde_json::Value, crate::relay::RelayError>>,
+{
+    use nostr::{Alphabet, SingleLetterTag};
+
+    let h_tag = SingleLetterTag::lowercase(Alphabet::H);
+    let ch_str = channel_id.to_string();
+    let messages_filter = nostr::Filter::new()
+        .kinds([
+            nostr::Kind::Custom(buzz_core::kind::KIND_STREAM_MESSAGE as u16),
+            nostr::Kind::Custom(buzz_core::kind::KIND_STREAM_MESSAGE_V2 as u16),
+        ])
+        .custom_tags(h_tag, [ch_str.as_str()])
+        .limit(limit.saturating_add(1) as usize);
+    let agent_message_filter = messages_filter.clone().author(agent_pubkey).limit(1);
+
+    let context = fetch_with_retry(|| async {
+        match timeout(
+            CONTEXT_FETCH_TIMEOUT,
+            query(vec![messages_filter.clone(), agent_message_filter.clone()]),
+        )
+        .await
+        {
+            Ok(Ok(json)) => parse_nostr_channel_response(json, limit, &agent_pubkey),
             Ok(Err(e)) => {
-                tracing::debug!(
+                tracing::warn!(
                     channel_id = %channel_id,
-                    "thread context count failed; using sentinel minimum: {e}"
+                    "channel context fetch failed: {e} — will retry"
                 );
-                return None;
+                None
             }
             Err(_) => {
-                tracing::debug!(
+                tracing::warn!(
                     channel_id = %channel_id,
-                    "thread context count timed out; using sentinel minimum"
+                    "channel context fetch timed out — will retry"
                 );
-                return None;
+                None
             }
-        };
+        }
+    })
+    .await;
 
-    Some(replies_count as usize + usize::from(root_present))
+    let mut context = context?;
+
+    if let ConversationContext::Channel {
+        total, truncated, ..
+    } = &mut context
+    {
+        if *truncated {
+            let count_filter = messages_filter.clone().limit(0);
+            if let Some(exact) = fetch_exact_count(channel_id, &count_filter, &count).await {
+                // Never render an impossible label like `51 of 50 messages`:
+                // messages deleted between the query and the count can push the
+                // exact total below the minimum the sentinel already proved.
+                *total = exact.max(*total);
+            }
+        }
+    }
+
+    Some(context)
 }
 
 /// Fetch DM context via Nostr query: recent messages in channel by `#h` tag.
@@ -4861,6 +5007,88 @@ fn parse_nostr_thread_response_with_meta(
         },
         root_present,
         needs_exact_count: relay_window_truncated,
+    })
+}
+
+/// Parse a Nostr query response (array of events) into channel context.
+///
+/// Keeps the newest `limit` messages the sentinel query returned, then sorts
+/// them chronologically for the prompt. If the agent's own newest message falls
+/// outside that window it replaces the oldest displayed message, so an agent is
+/// never shown a channel without its own most recent commitment in it.
+fn parse_nostr_channel_response(
+    json: serde_json::Value,
+    limit: u32,
+    agent_pubkey: &nostr::PublicKey,
+) -> Option<ConversationContext> {
+    let events = json.as_array()?;
+    let agent_pubkey_hex = agent_pubkey.to_hex();
+    let mut msgs = Vec::new();
+    let mut seen_ids = HashSet::new();
+
+    for ev in events {
+        let ev_id = ev.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        // The agent's pinning filter overlaps the window filter, so the same
+        // event can arrive twice.
+        if !seen_ids.insert(ev_id.to_string()) {
+            continue;
+        }
+        if let Some(msg) = json_to_context_message(ev) {
+            let is_agent = msg.pubkey.eq_ignore_ascii_case(&agent_pubkey_hex);
+            msgs.push((
+                ev_id.to_string(),
+                ev.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0),
+                is_agent,
+                msg,
+            ));
+        }
+    }
+
+    if msgs.is_empty() {
+        return None;
+    }
+
+    let fetched_total = msgs.len();
+    let newest_agent_msg = msgs
+        .iter()
+        .filter(|(_, _, is_agent, _)| *is_agent)
+        .max_by_key(|(_, ts, _, _)| *ts)
+        .cloned();
+
+    let truncated = msgs.len() > limit as usize;
+    if truncated {
+        // Relay REQ results come back newest-first, but sort explicitly so the
+        // sentinel dropped here is the oldest message, not whatever the HTTP
+        // bridge happened to return last.
+        msgs.sort_by_key(|(_, ts, _, _)| Reverse(*ts));
+        msgs.truncate(limit as usize);
+    }
+
+    if let Some(agent_msg) = newest_agent_msg {
+        let already_displayed = msgs.iter().any(|(id, _, _, _)| *id == agent_msg.0);
+        if !already_displayed {
+            msgs.sort_by_key(|(_, ts, _, _)| *ts);
+            if let Some(oldest) = msgs.first_mut() {
+                *oldest = agent_msg;
+            }
+        }
+    }
+
+    msgs.sort_by_key(|(_, ts, _, _)| *ts);
+    let messages: Vec<ContextMessage> = msgs.into_iter().map(|(_, _, _, msg)| msg).collect();
+
+    let total = if truncated {
+        // Every distinct message the query returned is proven history; `/count`
+        // may raise this afterwards, never lower it.
+        fetched_total
+    } else {
+        messages.len()
+    };
+
+    Some(ConversationContext::Channel {
+        messages,
+        total,
+        truncated,
     })
 }
 
@@ -5720,10 +5948,7 @@ pub(crate) mod tests {
         let session_new = json!({
             "modes": { "availableModes": [{ "id": "default" }, { "id": "auto" }] }
         });
-        assert!(agent_supports_mode(
-            &session_new,
-            "auto"
-        ));
+        assert!(agent_supports_mode(&session_new, "auto"));
     }
 
     #[test]
@@ -5731,19 +5956,13 @@ pub(crate) mod tests {
         let session_new = json!({
             "modes": { "availableModes": [{ "id": "default" }] }
         });
-        assert!(!agent_supports_mode(
-            &session_new,
-            "auto"
-        ));
+        assert!(!agent_supports_mode(&session_new, "auto"));
     }
 
     #[test]
     fn agent_supports_mode_missing_modes_field_is_false() {
         let session_new = json!({ "sessionId": "sess-1" });
-        assert!(!agent_supports_mode(
-            &session_new,
-            "auto"
-        ));
+        assert!(!agent_supports_mode(&session_new, "auto"));
     }
 
     #[test]
@@ -6934,6 +7153,243 @@ pub(crate) mod tests {
             "content": content,
             "created_at": created_at
         })
+    }
+
+    // ── channel context (S4) ──────────────────────────────────────────────────
+
+    fn hex_id(seed: char) -> String {
+        std::iter::repeat_n(seed, 64).collect()
+    }
+
+    /// The window is the newest `limit` messages, rendered oldest-first, and the
+    /// extra message the sentinel query returns proves truncation rather than
+    /// being displayed.
+    #[test]
+    fn test_parse_channel_response_keeps_newest_window_in_chronological_order() {
+        let agent = Keys::generate();
+        let json = json!([
+            thread_event(&hex_id('a'), "humanpub", "newest", 4000),
+            thread_event(&hex_id('b'), "humanpub", "middle", 3000),
+            thread_event(&hex_id('c'), "humanpub", "sentinel", 2000),
+        ]);
+
+        match parse_nostr_channel_response(json, 2, &agent.public_key()).expect("channel context") {
+            ConversationContext::Channel {
+                messages,
+                total,
+                truncated,
+            } => {
+                assert!(truncated);
+                assert_eq!(
+                    messages
+                        .iter()
+                        .map(|m| m.content.as_str())
+                        .collect::<Vec<_>>(),
+                    vec!["middle", "newest"]
+                );
+                // All three distinct messages are proven history.
+                assert_eq!(total, 3);
+            }
+            other => panic!("expected Channel context, got {other:?}"),
+        }
+    }
+
+    /// An agent that cannot see its own last message in a busy channel will
+    /// re-litigate decisions it already made. Its newest message displaces the
+    /// oldest message in the window rather than being dropped with the rest.
+    #[test]
+    fn test_parse_channel_response_pins_agents_own_newest_message() {
+        let agent = Keys::generate();
+        let agent_hex = agent.public_key().to_hex();
+        let json = json!([
+            thread_event(&hex_id('a'), "humanpub", "newest human", 5000),
+            thread_event(&hex_id('b'), "humanpub", "second human", 4000),
+            thread_event(&hex_id('c'), &agent_hex, "agent commitment", 2000),
+            thread_event(&hex_id('d'), "humanpub", "oldest human", 1000),
+        ]);
+
+        match parse_nostr_channel_response(json, 2, &agent.public_key()).expect("channel context") {
+            ConversationContext::Channel { messages, .. } => {
+                let contents: Vec<&str> = messages.iter().map(|m| m.content.as_str()).collect();
+                assert!(
+                    contents.contains(&"agent commitment"),
+                    "agent's own message must survive the window: {contents:?}"
+                );
+                assert!(contents.contains(&"newest human"), "got {contents:?}");
+                assert!(!contents.contains(&"second human"), "got {contents:?}");
+            }
+            other => panic!("expected Channel context, got {other:?}"),
+        }
+    }
+
+    /// The agent-pinning filter overlaps the window filter, so the relay can
+    /// return the same event twice. Counting it twice would inflate the total.
+    #[test]
+    fn test_parse_channel_response_dedups_overlapping_agent_filter() {
+        let agent = Keys::generate();
+        let agent_hex = agent.public_key().to_hex();
+        let duplicate = thread_event(&hex_id('a'), &agent_hex, "only message", 1000);
+        let json = json!([duplicate.clone(), duplicate]);
+
+        match parse_nostr_channel_response(json, 50, &agent.public_key()).expect("channel context")
+        {
+            ConversationContext::Channel {
+                messages,
+                total,
+                truncated,
+            } => {
+                assert_eq!(messages.len(), 1);
+                assert_eq!(total, 1);
+                assert!(!truncated);
+            }
+            other => panic!("expected Channel context, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_channel_response_empty_is_none() {
+        let agent = Keys::generate();
+        assert!(parse_nostr_channel_response(json!([]), 50, &agent.public_key()).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_channel_context_queries_window_and_agent_pin() {
+        let agent = Keys::generate();
+        let agent_pubkey = agent.public_key();
+        let channel_id = Uuid::new_v4();
+        let json = json!([thread_event(&hex_id('a'), "humanpub", "hello", 1000)]);
+
+        fetch_channel_context_with(
+            channel_id,
+            50,
+            agent_pubkey,
+            move |filters| {
+                assert_eq!(filters.len(), 2, "window and agent-pin filters");
+                let window = serde_json::to_value(&filters[0]).expect("serialize window filter");
+                assert_eq!(window.get("kinds"), Some(&json!([9, 40002])));
+                assert_eq!(window.get("#h"), Some(&json!([channel_id.to_string()])));
+                // limit + 1: the sentinel that proves truncation.
+                assert_eq!(window.get("limit"), Some(&json!(51)));
+                assert!(window.get("authors").is_none());
+                assert!(
+                    window.get("#e").is_none(),
+                    "channel scope, not thread scope"
+                );
+
+                let pin = serde_json::to_value(&filters[1]).expect("serialize pin filter");
+                assert_eq!(pin.get("authors"), Some(&json!([agent_pubkey.to_hex()])));
+                assert_eq!(pin.get("limit"), Some(&json!(1)));
+                std::future::ready(Ok(json.clone()))
+            },
+            |_filters| std::future::ready(Ok(json!({ "count": 0 }))),
+        )
+        .await
+        .expect("channel context");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_channel_context_uses_exact_count_when_truncated() {
+        let agent = Keys::generate();
+        let channel_id = Uuid::new_v4();
+        let json = json!([
+            thread_event(&hex_id('a'), "humanpub", "newest", 3000),
+            thread_event(&hex_id('b'), "humanpub", "middle", 2000),
+            thread_event(&hex_id('c'), "humanpub", "sentinel", 1000),
+        ]);
+
+        let ctx = fetch_channel_context_with(
+            channel_id,
+            2,
+            agent.public_key(),
+            move |_filters| std::future::ready(Ok(json.clone())),
+            move |filters| {
+                assert_eq!(filters.len(), 1);
+                let count = serde_json::to_value(&filters[0]).expect("serialize count filter");
+                assert_eq!(count.get("#h"), Some(&json!([channel_id.to_string()])));
+                assert_eq!(count.get("limit"), Some(&json!(0)));
+                assert!(count.get("authors").is_none());
+                std::future::ready(Ok(json!({ "count": 812 })))
+            },
+        )
+        .await
+        .expect("channel context");
+
+        match ctx {
+            ConversationContext::Channel {
+                messages,
+                total,
+                truncated,
+            } => {
+                assert!(truncated);
+                assert_eq!(messages.len(), 2);
+                assert_eq!(total, 812);
+            }
+            other => panic!("expected Channel context, got {other:?}"),
+        }
+    }
+
+    /// `/count` is a second request. If messages are deleted between the two, an
+    /// exact count below the already-proven sentinel minimum would render an
+    /// impossible label like `3 of 2 messages`.
+    #[tokio::test]
+    async fn test_fetch_channel_context_never_renders_count_below_sentinel_minimum() {
+        let agent = Keys::generate();
+        let json = json!([
+            thread_event(&hex_id('a'), "humanpub", "newest", 3000),
+            thread_event(&hex_id('b'), "humanpub", "middle", 2000),
+            thread_event(&hex_id('c'), "humanpub", "sentinel", 1000),
+        ]);
+
+        let ctx = fetch_channel_context_with(
+            Uuid::new_v4(),
+            2,
+            agent.public_key(),
+            move |_filters| std::future::ready(Ok(json.clone())),
+            |_filters| std::future::ready(Ok(json!({ "count": 1 }))),
+        )
+        .await
+        .expect("channel context");
+
+        match ctx {
+            ConversationContext::Channel { total, .. } => assert_eq!(total, 3),
+            other => panic!("expected Channel context, got {other:?}"),
+        }
+    }
+
+    /// A failed `/count` must degrade to the sentinel-proven minimum, not drop
+    /// the context the agent already has.
+    #[tokio::test]
+    async fn test_fetch_channel_context_falls_back_when_count_fails() {
+        let agent = Keys::generate();
+        let json = json!([
+            thread_event(&hex_id('a'), "humanpub", "newest", 3000),
+            thread_event(&hex_id('b'), "humanpub", "middle", 2000),
+            thread_event(&hex_id('c'), "humanpub", "sentinel", 1000),
+        ]);
+
+        let ctx = fetch_channel_context_with(
+            Uuid::new_v4(),
+            2,
+            agent.public_key(),
+            move |_filters| std::future::ready(Ok(json.clone())),
+            |_filters| {
+                std::future::ready(Err(crate::relay::RelayError::Http(
+                    "count unavailable".into(),
+                )))
+            },
+        )
+        .await
+        .expect("channel context");
+
+        match ctx {
+            ConversationContext::Channel {
+                total, truncated, ..
+            } => {
+                assert!(truncated);
+                assert_eq!(total, 3);
+            }
+            other => panic!("expected Channel context, got {other:?}"),
+        }
     }
 
     #[test]
@@ -8471,13 +8927,17 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
     }
 
     #[test]
-    fn context_target_conversation_channel_plain_has_none() {
-        // Channel-policy conversation scope + a plain (no-thread-tag) event =>
-        // no unrelated channel transcript is injected.
+    fn context_target_conversation_channel_plain_is_channel_history() {
+        // LOCAL DIVERGENCE: upstream injects nothing here. A plain mention is
+        // the most common way an agent is addressed, and it arrived with no
+        // surrounding conversation at all — see `ContextTarget::Channel`.
         let ch = Uuid::new_v4();
         let ev = signed_event_with_tags(vec![]);
         let batch = batch_with_scope(conv(ch), ev);
-        assert_eq!(resolve_context_target(&batch, false), ContextTarget::None);
+        assert_eq!(
+            resolve_context_target(&batch, false),
+            ContextTarget::Channel
+        );
     }
 
     #[test]
@@ -10476,6 +10936,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
                 },
             ),
             context_message_limit: 0,
+            channel_context_message_limit: 0,
             max_turns_per_session: 0,
             permission_mode: PermissionMode::new("default"),
             agent_keys: agent_keys.clone(),

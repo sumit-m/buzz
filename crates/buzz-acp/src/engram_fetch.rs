@@ -56,8 +56,7 @@ pub async fn build_core_section(
     match fetch_core_body(rest, agent_keys, owner).await {
         Ok(Some(profile)) => Some(crate::prompt_framing::semantic_section(
             "core-memory",
-            &format!("{profile}
-{REREAD_POINTER}"),
+            &format!("{profile}\n{REREAD_POINTER}"),
         )),
         // No pointer on the nudge: it already names the CLI, and there is
         // nothing to re-read until a core exists.

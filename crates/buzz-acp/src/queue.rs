@@ -1508,6 +1508,17 @@ pub enum ConversationContext {
         /// Whether the fetch filled its configured window and may omit history.
         truncated: bool,
     },
+    /// Recent history of a channel, for a mention that is not a thread reply.
+    ///
+    /// Unlike a thread there is no root to anchor on, so this is simply the
+    /// newest messages in the channel — including messages that live inside
+    /// threads, since a Nostr filter cannot exclude them and a decision reached
+    /// in a thread is still a decision the agent needs.
+    Channel {
+        messages: Vec<ContextMessage>,
+        total: usize,
+        truncated: bool,
+    },
 }
 
 /// A single message in a conversation context section.
@@ -2068,16 +2079,25 @@ fn format_context_hints(
         append_thread_reply_instruction(&mut s, reply_anchor.unwrap_or(root));
         crate::prompt_framing::semantic_section("context", &s)
     } else {
+        let ctx_hint = if has_conversation_context {
+            "Channel context included below. It is the newest messages only — \
+             use `buzz messages search --channel <UUID> --query \"...\"` for anything older."
+        } else {
+            "Hint: Use `buzz messages get --channel <UUID>` for recent messages if needed."
+        };
         let mut s = format!(
             "Scope: channel\n\
              Session scope: channel\n\
              Channel: {channel_display}"
         );
+        // Description first, so it reads as part of the channel identity; the
+        // hint that follows is about this turn's context, not the channel.
         append_channel_description(&mut s, channel_info);
         append_project_home(&mut s, channel_info, channel_id);
-        s.push_str(
-            "\nHint: Use `buzz messages get --channel <UUID>` for recent messages if needed.",
-        );
+        s.push_str(&format!(
+            "
+{ctx_hint}"
+        ));
         append_top_level_reply_instruction(&mut s);
         crate::prompt_framing::semantic_section("context", &s)
     }
@@ -2180,6 +2200,11 @@ fn format_conversation_context(
             total,
             truncated,
         } => ("conversation-context", messages, total, truncated),
+        ConversationContext::Channel {
+            messages,
+            total,
+            truncated,
+        } => ("channel-context", messages, total, truncated),
     };
 
     let mut body = String::new();
@@ -3099,8 +3124,9 @@ mod tests {
             .to_bech32()
             .unwrap_or_else(|_| event.pubkey.to_hex());
 
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -3271,8 +3297,9 @@ mod tests {
     fn test_format_prompt_steer_framing_multi_event() {
         // Multi-event header path must also branch on reason.
         let ch = Uuid::new_v4();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![
                 BatchEvent {
@@ -3332,8 +3359,9 @@ mod tests {
         );
         let _steering_id = steering.id.to_hex();
 
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -3504,8 +3532,9 @@ mod tests {
         let e2 = make_event("second message");
         let e3 = make_event("third message");
 
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![
                 BatchEvent {
@@ -3548,8 +3577,9 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hello");
 
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -3573,8 +3603,9 @@ mod tests {
     fn test_format_prompt_with_agent_core() {
         let ch = Uuid::new_v4();
         let event = make_event("hi");
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -3607,8 +3638,9 @@ mod tests {
         // user message — otherwise core would double-render.
         let ch = Uuid::new_v4();
         let event = make_event("hi");
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -3639,8 +3671,9 @@ mod tests {
     fn test_format_prompt_without_system_prompts_core_first() {
         let ch = Uuid::new_v4();
         let event = make_event("hi");
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -3668,8 +3701,9 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hello");
 
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -3694,8 +3728,9 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hello");
 
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -3751,14 +3786,115 @@ mod tests {
     }
 
     #[test]
+    fn test_channel_context_renders_upstream_label_wording() {
+        // Same paired-tag framing threads and DMs already use.
+        let ctx = ConversationContext::Channel {
+            messages: vec![ContextMessage {
+                event_id: "e1".into(),
+                pubkey: "abc".into(),
+                timestamp: "2026-08-01T10:00:00Z".into(),
+                content: "we agreed on Tuesday".into(),
+            }],
+            total: 812,
+            truncated: true,
+        };
+        let rendered = format_conversation_context(&ctx, None);
+        assert!(
+            rendered
+                .starts_with("<channel-context included=\"1\" total=\"812\" truncated=\"true\">"),
+            "got: {rendered}"
+        );
+        assert!(rendered.contains("we agreed on Tuesday"));
+    }
+
+    #[test]
+    fn test_channel_context_reaches_the_prompt_for_a_plain_mention() {
+        // The S4 gap itself: a plain channel mention used to carry no
+        // conversation at all, and the hint has to stop pretending none exists.
+        let channel_id = Uuid::new_v4();
+        let batch = FlushBatch {
+            scope: SessionScope::Conversation { channel_id },
+            channel_id,
+            events: vec![BatchEvent {
+                event: make_event("@agent what did we decide?"),
+                prompt_tag: "mention".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let ctx = ConversationContext::Channel {
+            messages: vec![ContextMessage {
+                event_id: "e1".into(),
+                pubkey: "abc".into(),
+                timestamp: "2026-08-01T10:00:00Z".into(),
+                content: "we agreed on Tuesday".into(),
+            }],
+            total: 812,
+            truncated: true,
+        };
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                conversation_context: Some(&ctx),
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+
+        assert!(prompt.contains("Scope: channel"), "got: {prompt}");
+        assert!(
+            prompt.contains("<channel-context included=\"1\" total=\"812\" truncated=\"true\">")
+        );
+        assert!(prompt.contains("we agreed on Tuesday"));
+        assert!(
+            prompt.contains("Channel context included below"),
+            "the hint must acknowledge the window it was given: {prompt}"
+        );
+        assert!(
+            prompt.contains("buzz messages search --channel"),
+            "and point at how to reach anything older"
+        );
+        let context_pos = prompt.find("<context>").expect("<context>");
+        let channel_pos = prompt.find("<channel-context").expect("<channel-context>");
+        let event_pos = prompt.find("<buzz-event").expect("<buzz-event>");
+        assert!(
+            context_pos < channel_pos && channel_pos < event_pos,
+            "got: {prompt}"
+        );
+    }
+
+    #[test]
+    fn test_plain_channel_mention_without_context_keeps_the_old_hint() {
+        // Channel context is best-effort: a failed fetch, an empty channel, or
+        // limit 0 must still produce a usable prompt.
+        let channel_id = Uuid::new_v4();
+        let batch = FlushBatch {
+            scope: SessionScope::Conversation { channel_id },
+            channel_id,
+            events: vec![BatchEvent {
+                event: make_event("@agent hello"),
+                prompt_tag: "mention".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
+        assert!(prompt.contains("Hint: Use `buzz messages get --channel <UUID>`"));
+        assert!(!prompt.contains("<channel-context"));
+    }
+
+    #[test]
     fn test_format_prompt_legacy_agent_omits_standing_after_first_message() {
         // The defect this pins: standing context was re-sent on every turn of a
         // legacy session, so the largest and least informative part of the
         // prompt was also the most recent — crowding out the conversation and
         // evicting real channel history sooner.
         let ch = Uuid::new_v4();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -3812,8 +3948,9 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hello");
 
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -3852,8 +3989,9 @@ mod tests {
     fn test_format_prompt_ordering_with_full_context() {
         let ch = Uuid::new_v4();
         let event = make_event("hello");
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -4114,8 +4252,9 @@ mod tests {
         let mut q = EventQueue::new(DedupMode::Queue);
         let ch = Uuid::new_v4();
         let scope = conv(ch);
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: scope.clone(),
             events: vec![BatchEvent {
                 edit: None,
@@ -4445,8 +4584,9 @@ mod tests {
     fn test_format_prompt_with_channel_info() {
         let ch = Uuid::new_v4();
         let event = make_event("hello");
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -4480,8 +4620,9 @@ mod tests {
     fn test_format_prompt_dm_scope() {
         let ch = Uuid::new_v4();
         let event = make_event("hey");
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -4577,22 +4718,36 @@ mod tests {
                                 "Scope: channel"
                             }));
                         }
-                        assert_eq!(
-                            prompt.contains("This is a new top-level message"),
-                            !is_dm && !is_reply
-                        );
-                        if !is_dm || is_reply {
-                            let anchor = if is_dm {
-                                reply.id.to_hex()
-                            } else if is_reply {
-                                root.to_uppercase()
+                        // LOCAL DIVERGENCE: our replies post at the channel
+                        // top level, so upstream's new-thread wording is
+                        // replaced by the flat-reply instruction, and a plain
+                        // mention is offered no anchor at all.
+                        //
+                        // Thread policy is excluded: it makes every turn a
+                        // thread scope, which the branch above already pins.
+                        let thread_scoped = !is_dm && policy == SessionPolicy::Thread;
+                        if !thread_scoped {
+                            assert_eq!(
+                                prompt.contains(
+                                    "For ordinary replies in this turn, post at the channel"
+                                ),
+                                !is_reply
+                            );
+                            if is_reply {
+                                // A DM reply anchors on the question's parent
+                                // rather than the question, so both surfaces
+                                // anchor on the thread root.
+                                let anchor = root.to_uppercase();
+                                assert!(prompt.contains(&format!("--reply-to {anchor}")));
                             } else {
-                                root.clone()
-                            };
-                            assert!(prompt.contains(&format!("--reply-to {anchor}")));
-                        } else {
-                            assert!(!prompt.contains("--reply-to"));
-                            assert!(prompt.contains("buzz messages get"));
+                                // The flat instruction names the flag while
+                                // telling the agent not to use it, so assert no
+                                // *anchor* is offered rather than no mention.
+                                assert!(!prompt.contains(&format!("--reply-to {root}")));
+                                assert!(
+                                    !prompt.contains(&format!("--reply-to {}", reply.id.to_hex()))
+                                );
+                            }
                         }
                     }
                 }
@@ -4612,8 +4767,9 @@ mod tests {
                 "reply".into(),
             ]],
         );
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -4640,8 +4796,9 @@ mod tests {
             "yes go ahead",
             vec![vec!["e".into(), root.clone(), "".into(), "reply".into()]],
         );
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -4686,9 +4843,11 @@ mod tests {
         assert!(complete_prompt
             .contains("<thread-context included=\"2\" total=\"2\" truncated=\"false\">"));
         assert!(complete_prompt.contains("Let's refactor auth"));
-        assert!(complete_prompt.contains(&format!(
-            "IMPORTANT: For ordinary replies in this turn, use `--reply-to {root}`"
-        )));
+        // This branch answers at the level it was asked at; with no anchor of
+        // its own the thread root is that level.
+        assert!(
+            complete_prompt.contains(&format!("use `--reply-to {root}` on `buzz messages send`"))
+        );
 
         let prompt_with_prior_delivery = format_prompt(
             &batch,
@@ -4828,8 +4987,9 @@ mod tests {
     fn test_format_prompt_with_dm_context() {
         let ch = Uuid::new_v4();
         let event = make_event("ok do that");
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -4886,8 +5046,9 @@ mod tests {
             ]],
         );
         let author_hex = event.pubkey.to_hex();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -5170,8 +5331,9 @@ mod tests {
                 "reply".into(),
             ]],
         );
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -5242,8 +5404,9 @@ mod tests {
                 "reply".into(),
             ]],
         );
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -5277,8 +5440,9 @@ mod tests {
     #[test]
     fn test_format_prompt_empty_dm_delta_distinguishes_trigger_only_from_delivered() {
         let ch = Uuid::new_v4();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -5329,8 +5493,9 @@ mod tests {
     fn test_format_prompt_dm_non_reply_hints_get_messages() {
         let ch = Uuid::new_v4();
         let event = make_event("hey there");
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -5373,8 +5538,9 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("test");
         let event_id = event.id.to_hex();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -5399,8 +5565,9 @@ mod tests {
         let event = make_event("test");
         let hex = event.pubkey.to_hex();
         let npub = event.pubkey.to_bech32().unwrap();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -5424,8 +5591,9 @@ mod tests {
         let ch = Uuid::new_v4();
         // Kind 9 (stream message) — tags were previously stripped.
         let event = make_event_with_tags("hello", vec![vec!["h".into(), ch.to_string()]]);
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -5855,8 +6023,9 @@ mod tests {
             "@bot help",
             vec![vec!["e".into(), root_id.clone(), "".into(), "reply".into()]],
         );
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -5894,8 +6063,9 @@ mod tests {
             vec![vec!["e".into(), root_id.clone(), "".into(), "reply".into()]],
         );
         let event_id = event.id.to_hex();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -5947,8 +6117,9 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hello world");
         let event_id = event.id.to_hex();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -5977,8 +6148,9 @@ mod tests {
     fn test_dm_non_reply_uses_top_level_instruction() {
         let ch = Uuid::new_v4();
         let event = make_event("hey there");
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -6023,8 +6195,9 @@ mod tests {
             ],
         );
         let event_id = event.id.to_hex();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -6060,8 +6233,9 @@ mod tests {
             "@bot post your summary in the channel root",
             vec![vec!["e".into(), root_id.clone(), "".into(), "reply".into()]],
         );
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -6097,8 +6271,9 @@ mod tests {
             "@bot help",
             vec![vec!["e".into(), root_id.clone(), "".into(), "reply".into()]],
         );
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![
                 BatchEvent {
@@ -6141,8 +6316,9 @@ mod tests {
         );
         let plain = make_event("latest top-level");
         let plain_id = plain.id.to_hex();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![
                 BatchEvent {
@@ -6482,8 +6658,9 @@ mod tests {
     fn test_format_prompt_canvas_injected_for_legacy_agent() {
         let canvas = "[Channel Canvas]\nCanvas revision (event ID): abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234\nLast modified: 2024-01-15T10:30:00+00:00\nFetch current content with: buzz canvas get --channel 00f1ccaf-1506-4dd7-9a0e-fa67e9e486ae";
         let ch = Uuid::new_v4();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -6513,8 +6690,9 @@ mod tests {
     fn test_format_prompt_canvas_omitted_for_modern_agent() {
         let canvas = "[Channel Canvas]\nCanvas revision (event ID): abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234\nLast modified: 2024-01-15T10:30:00+00:00\nFetch current content with: buzz canvas get --channel 00f1ccaf-1506-4dd7-9a0e-fa67e9e486ae";
         let ch = Uuid::new_v4();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,
@@ -6543,8 +6721,9 @@ mod tests {
     #[test]
     fn test_format_prompt_no_canvas_produces_no_canvas_section() {
         let ch = Uuid::new_v4();
+        let channel_id = ch;
         let batch = FlushBatch {
-            channel_id: ch,
+            channel_id,
             scope: conv(ch),
             events: vec![BatchEvent {
                 edit: None,

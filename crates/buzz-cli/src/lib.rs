@@ -295,6 +295,9 @@ enum Cmd {
     /// Organize your own sidebar: sections, sort modes, stars, mutes, and project pins
     #[command(subcommand)]
     Sidebar(SidebarCmd),
+    /// Read and curate a channel's durable facts
+    #[command(subcommand)]
+    Facts(FactsCmd),
     /// Add, remove, and list emoji reactions
     #[command(subcommand)]
     Reactions(ReactionsCmd),
@@ -1145,6 +1148,51 @@ pub enum CanvasCmd {
         /// Revision event ID to restore (64-char hex)
         #[arg(long)]
         revision: String,
+    },
+}
+
+/// Channel facts: a short shared list of durable statements.
+///
+/// Mutations are operations, not whole-document replacement — each one is
+/// rebased onto a freshly read head, so an agent acting on a stale view cannot
+/// erase facts written since its session began.
+#[derive(Subcommand)]
+pub enum FactsCmd {
+    /// List the channel's current facts
+    Get {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+    },
+    /// Record something new that outlives this turn
+    Add {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// The statement — one sentence, a pointer rather than a summary
+        #[arg(long)]
+        text: String,
+    },
+    /// Correct an existing fact in place, keeping its id
+    Supersede {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Id of the fact to replace (from 'buzz facts get')
+        #[arg(long)]
+        id: String,
+        /// The corrected statement
+        #[arg(long)]
+        text: String,
+    },
+    /// Remove a fact whose work has shipped
+    Retire {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Id of the fact to remove (from 'buzz facts get')
+        #[arg(long)]
+        id: String,
     },
 }
 
@@ -2754,6 +2802,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Channels(sub) => commands::channels::dispatch(sub, &client, &cli.format).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
         Cmd::Sidebar(sub) => commands::sidebar::dispatch(sub, &client).await,
+        Cmd::Facts(sub) => commands::facts::dispatch(sub, &client).await,
         Cmd::Reactions(sub) => commands::reactions::dispatch(sub, &client).await,
         Cmd::Emoji(sub) => commands::emoji::dispatch(sub, &client).await,
         Cmd::Gifs(sub) => commands::gifs::dispatch(sub, &client).await,
@@ -3048,6 +3097,7 @@ mod tests {
             "channels",
             "dms",
             "emoji",
+            "facts",
             "feed",
             "gifs",
             "huddles",

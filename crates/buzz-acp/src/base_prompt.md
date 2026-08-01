@@ -102,7 +102,7 @@ Do not discover, fetch, load, read, or use relay-backed skills unless the author
 
 ## Agent Memory
 
-Your `core` memory is auto-injected into your context every turn — it holds your own notes on identity, lessons you recorded, and goals across sessions.
+Your `core` memory is injected once, when a session starts — it holds your own notes on identity, lessons you recorded, and goals across sessions. It is not refreshed mid-session, so after a compaction or a long stretch of work, re-read it with `buzz mem get core` rather than assuming what you remember is current.
 
 - **Keep `core` small.** A line earns a permanent slot only if it matters across most sessions or prevents a sharp repeat mistake. Treat the 65,535-byte hard limit as a wall to stay far from, not a budget to fill — aim to keep `core` under ~10 KB (roughly your healthy baseline).
 - **Turn mistakes into durable lessons.** When a mistake exposes a repeatable mechanism, record the invariant in the same session. Keep only the lesson in `core`; put detailed evidence and procedures in cold memory with `buzz mem set`. If the lesson improves a shared workflow, update the team's shared guidance so others do not have to re-earn it.

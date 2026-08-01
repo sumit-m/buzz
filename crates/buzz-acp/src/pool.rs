@@ -157,6 +157,13 @@ pub struct SessionState {
     /// pool uses this fence to discard that stale provider session before the
     /// worker becomes claimable again.
     scope_owner_generations: HashMap<SessionScope, u64>,
+    /// Rendered `<channel-facts>` section per session scope.
+    ///
+    /// Same lifecycle as `canvas_sections`: populated once before session
+    /// creation, absent when the channel has no facts or the fetch fails (both
+    /// fail open), cleared on session invalidation so the next session picks up
+    /// any curation that happened since.
+    pub facts_sections: HashMap<SessionScope, String>,
 }
 
 impl SessionState {
@@ -186,6 +193,7 @@ impl SessionState {
         self.canvas_sections.remove(scope);
         self.deliveries.remove(scope);
         self.scope_owner_generations.remove(scope);
+        self.facts_sections.remove(scope);
         self.sessions.remove(scope).is_some()
     }
 
@@ -201,6 +209,7 @@ impl SessionState {
             .chain(self.canvas_sections.keys())
             .chain(self.deliveries.keys())
             .chain(self.scope_owner_generations.keys())
+            .chain(self.facts_sections.keys())
             .filter(|s| s.channel_id() == *channel_id)
             .cloned()
             .collect::<HashSet<_>>()
@@ -226,6 +235,7 @@ impl SessionState {
         self.canvas_sections.clear();
         self.deliveries.clear();
         self.scope_owner_generations.clear();
+        self.facts_sections.clear();
     }
 
     pub(crate) fn mark_scope_delivery_success(
@@ -257,6 +267,7 @@ impl SessionState {
             || self.core_sections.keys().any(matches)
             || self.canvas_sections.keys().any(matches)
             || self.deliveries.keys().any(matches)
+            || self.facts_sections.keys().any(matches)
     }
 }
 
@@ -1577,6 +1588,7 @@ async fn resolve_new_session_channel_context(
 struct NewSessionChannelContext<'a> {
     huddle_instructions: Option<&'a str>,
     canvas: Option<&'a str>,
+    facts: Option<&'a str>,
     name: Option<&'a str>,
     scope: Option<&'a SessionScope>,
     channel_type: Option<&'a str>,
@@ -1595,22 +1607,25 @@ async fn create_session_and_apply_model(
     // its own `<core-memory>` boundary, and canvas carries its own
     // `<channel-canvas>` boundary; both are appended with a blank-line separator.
     let is_goose = agent.agent_name == "goose";
-    let combined_system_prompt = with_canvas(
-        with_huddle_instructions(
-            with_core(
-                with_team(
-                    framed_system_prompt(
-                        &ctx.cwd,
-                        ctx.base_prompt.as_deref(),
-                        ctx.system_prompt.as_deref(),
+    let combined_system_prompt = with_facts(
+        with_canvas(
+            with_huddle_instructions(
+                with_core(
+                    with_team(
+                        framed_system_prompt(
+                            &ctx.cwd,
+                            ctx.base_prompt.as_deref(),
+                            ctx.system_prompt.as_deref(),
+                        ),
+                        ctx.team_instructions.as_deref(),
                     ),
-                    ctx.team_instructions.as_deref(),
+                    agent_core,
                 ),
-                agent_core,
+                channel.huddle_instructions,
             ),
-            channel.huddle_instructions,
+            channel.canvas,
         ),
-        channel.canvas,
+        channel.facts,
     );
 
     let session_title = ctx.session_title.as_deref().map(|agent_name| {
@@ -1882,6 +1897,7 @@ pub(crate) async fn run_isolated_prompt(
         NewSessionChannelContext {
             huddle_instructions: None,
             canvas: None,
+            facts: None,
             name: None,
             scope: None,
             channel_type: None,
@@ -2356,6 +2372,22 @@ fn with_huddle_instructions(prompt: Option<String>, instructions: Option<&str>) 
 /// The canvas section already carries its `<channel-canvas>` boundary (from
 /// `render_canvas_section`), so it is joined with a blank-line separator.
 /// Either side may be absent.
+/// Append the rendered `[Channel Facts]` section, which carries both the
+/// statements and their curation rules. Absent for DMs and heartbeats, so a
+/// session outside a channel sees neither.
+fn with_facts(prompt: Option<String>, facts: Option<&str>) -> Option<String> {
+    match (prompt, facts) {
+        (Some(prompt), Some(facts)) => Some(format!(
+            "{prompt}
+
+{facts}"
+        )),
+        (Some(prompt), None) => Some(prompt),
+        (None, Some(facts)) => Some(facts.to_string()),
+        (None, None) => None,
+    }
+}
+
 fn with_canvas(prompt: Option<String>, canvas: Option<&str>) -> Option<String> {
     let canvas = canvas.map(|canvas| {
         crate::prompt_framing::normalize_semantic_section(
@@ -2633,6 +2665,11 @@ pub async fn run_prompt_task(
     // the next attempt after the canvas was cleared.
     let mut pending_canvas: Option<(SessionScope, String)> = None;
     let mut huddle_instructions: Option<String> = None;
+    // Channel facts ride the same lifecycle and the same DM gate: a DM has no
+    // shared channel to hold facts, and its content must never be curated into
+    // one. `PromptSource::Heartbeat` has no channel at all and never reaches
+    // here, so it is excluded by construction.
+    let mut pending_facts: Option<(SessionScope, String)> = None;
     // Channel name for the session title, from the same single resolve the
     // canvas DM check uses — see `resolve_new_session_channel_context`.
     let mut title_channel: Option<String> = None;
@@ -2642,6 +2679,7 @@ pub async fn run_prompt_task(
         let is_new_channel_session = !agent.state.sessions.contains_key(scope);
         let needs_canvas =
             is_new_channel_session && !agent.state.canvas_sections.contains_key(scope);
+        let needs_facts = is_new_channel_session && !agent.state.facts_sections.contains_key(scope);
         if is_new_channel_session {
             let (is_dm, resolved_channel, resolved_channel_type) =
                 resolve_new_session_channel_context(resolved_channel_info.as_ref()).await;
@@ -2655,6 +2693,13 @@ pub async fn run_prompt_task(
             if needs_canvas && !is_dm {
                 if let Some(section) = fetch_canvas_section(cid, &ctx.rest_client).await {
                     pending_canvas = Some((scope.clone(), section));
+                }
+            }
+            if needs_facts && !is_dm {
+                if let Some(section) =
+                    crate::facts_fetch::fetch_facts_section(cid, &ctx.rest_client).await
+                {
+                    pending_facts = Some((scope.clone(), section));
                 }
             }
         }
@@ -2679,6 +2724,17 @@ pub async fn run_prompt_task(
         PromptSource::Heartbeat => None,
     };
 
+    // The channel facts section — same sourcing rule as the canvas.
+    let agent_facts: Option<String> = match &source {
+        PromptSource::Channel(cid) => agent
+            .state
+            .facts_sections
+            .get(cid)
+            .cloned()
+            .or_else(|| pending_facts.as_ref().map(|(_, s)| s.clone())),
+        PromptSource::Heartbeat => None,
+    };
+
     let (session_id, is_new_session) = match &source {
         PromptSource::Channel(scope) => {
             let cid = &scope.channel_id();
@@ -2695,6 +2751,7 @@ pub async fn run_prompt_task(
                     NewSessionChannelContext {
                         huddle_instructions: huddle_instructions.as_deref(),
                         canvas: agent_canvas.as_deref(),
+                        facts: agent_facts.as_deref(),
                         name: title_channel.as_deref(),
                         scope: Some(scope),
                         channel_type: origin_channel_type.as_deref(),
@@ -2716,9 +2773,14 @@ pub async fn run_prompt_task(
                         // Seed a zero usage baseline: buzz-acp spawned this session
                         // so prior usage is zero by definition — first turn is reliable.
                         agent.acp.notify_session_spawned(&sid);
-                        // Commit canvas only after session creation succeeds (I3).
+                        // Commit canvas and facts only after session creation
+                        // succeeds (I3) — a stale revision must not survive a
+                        // failed create and be reused by the next attempt.
                         if let Some((pending_scope, section)) = pending_canvas.take() {
                             agent.state.canvas_sections.insert(pending_scope, section);
+                        }
+                        if let Some((pending_scope, section)) = pending_facts.take() {
+                            agent.state.facts_sections.insert(pending_scope, section);
                         }
                         (sid, true)
                     }
@@ -2761,6 +2823,7 @@ pub async fn run_prompt_task(
                     NewSessionChannelContext {
                         huddle_instructions: None,
                         canvas: None,
+                        facts: None,
                         name: None,
                         scope: None,
                         channel_type: None,
@@ -2837,6 +2900,7 @@ pub async fn run_prompt_task(
         agent_core: agent_core.as_deref(),
         huddle_instructions: huddle_instructions.as_deref(),
         agent_canvas: agent_canvas.as_deref(),
+        agent_facts: agent_facts.as_deref(),
     };
     // Delivery state is committed only after ACP confirms success. Existing
     // sessions created before this field existed fail safe by behaving as
@@ -3142,6 +3206,7 @@ pub async fn run_prompt_task(
                 system_prompt: standing.system_prompt,
                 team_instructions: standing.team_instructions,
                 agent_canvas: standing.agent_canvas,
+                agent_facts: standing.agent_facts,
                 standing_context_sent,
             },
         )
@@ -6066,6 +6131,7 @@ pub(crate) mod tests {
             agent_core: Some("[Agent Memory — core]\nremember this"),
             huddle_instructions: Some("reply immediately"),
             agent_canvas: Some("[Channel Canvas]\ncanvas content"),
+            agent_facts: Some("[Channel Facts]\nfacts content"),
         }
     }
 
@@ -12032,6 +12098,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12069,6 +12136,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12103,6 +12171,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12136,6 +12205,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12176,6 +12246,7 @@ exit 0"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12340,6 +12411,7 @@ done"#
                     NewSessionChannelContext {
                         huddle_instructions: None,
                         canvas: None,
+                        facts: None,
                         name,
                         scope,
                         channel_type,
@@ -12457,6 +12529,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12528,6 +12601,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12583,6 +12657,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12625,6 +12700,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12666,6 +12742,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12732,6 +12809,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12769,6 +12847,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12842,6 +12921,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12883,6 +12963,7 @@ done"#
             NewSessionChannelContext {
                 huddle_instructions: None,
                 canvas: None,
+                facts: None,
                 name: None,
                 scope: None,
                 channel_type: None,

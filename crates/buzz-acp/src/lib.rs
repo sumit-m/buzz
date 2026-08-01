@@ -8,6 +8,7 @@ mod acp;
 mod config;
 mod edit_routing;
 mod engram_fetch;
+mod facts_fetch;
 mod filter;
 mod isolated_execution;
 mod observer;

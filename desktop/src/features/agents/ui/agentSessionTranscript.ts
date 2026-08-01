@@ -899,6 +899,31 @@ export function processTranscriptEvent(
       }
     } else if (
       event.kind === "acp_write" &&
+      method === "_goose/unstable/session/system-prompt/set"
+    ) {
+      // Goose's route is a separate request sent just after session/new, not a
+      // field on it — so without this branch a goose agent showed no System
+      // prompt card at all. Same card, same placement as the other two routes:
+      // the request lands before the session's first turn, so acpSource
+      // "session/new" puts it in the same standalone slot.
+      const params = asRecord(payload.params);
+      const systemPrompt = asString(params.text);
+      if (systemPrompt) {
+        const sections = parseSystemPromptSections(systemPrompt);
+        if (sections.length > 0) {
+          upsertMetadata(
+            d,
+            `system-prompt:${ch}:${event.seq}:${event.timestamp}`,
+            "System prompt",
+            sections,
+            event.timestamp,
+            { ...ctx, turnId: null },
+            "session/new",
+          );
+        }
+      }
+    } else if (
+      event.kind === "acp_write" &&
       method === "_goose/unstable/session/steer"
     ) {
       const promptBlocks = extractPromptBlocks(payload);

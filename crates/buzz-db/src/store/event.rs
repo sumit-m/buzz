@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use buzz_core::kind::{
     event_kind_i32, is_ephemeral, is_parameterized_replaceable, KIND_AUTH, KIND_CANVAS,
-    KIND_EVENT_REMINDER, KIND_HUDDLE_STARTED, SHARED_GATED_KINDS,
+    KIND_EVENT_REMINDER, KIND_HUDDLE_STARTED, KIND_MEMBER_ADDED_NOTIFICATION, SHARED_GATED_KINDS,
 };
 use buzz_core::{CommunityId, StoredEvent};
 use buzz_datastore_tracing::datastore_span;
@@ -1882,11 +1882,19 @@ pub async fn purge_deleted_event(
 /// LOCAL DIVERGENCE from upstream, which only stamps `channels.deleted_at` and
 /// leaves the messages in place. Nothing here is recoverable.
 ///
+/// Everything in the channel goes regardless of author: messages, replies,
+/// thread metadata, and reactions written by anyone.
+///
 /// Ordering is dictated by the foreign keys into `channels`: only
 /// `channel_members` cascades, so `thread_metadata`, `moderation_reports` and
 /// `moderation_actions` must be cleared before the channel row can go.
 /// `workflows.channel_id` is nulled rather than deleted — a workflow outlives
 /// the channel it happened to post into.
+///
+/// Most rows are reached through `events.channel_id`. Member-added
+/// notifications are the exception: they are stored globally with no
+/// `channel_id` and name their channel only in an `h` tag, so they are swept
+/// separately by kind.
 pub async fn hard_delete_channel_events(
     pool: &PgPool,
     community_id: CommunityId,
@@ -1929,6 +1937,22 @@ pub async fn hard_delete_channel_events(
         .await?
         .rows_affected();
 
+    // "You were added to #channel" notifications are stored globally
+    // (`channel_id = None`) and reach the channel only through their `h` tag, so
+    // the delete above misses them and they outlive the channel they name.
+    // Scoped to this one kind deliberately: other globally-stored kinds may
+    // legitimately outlive a channel, and an h-tag sweep would take them too.
+    let notifications = sqlx::query(
+        "DELETE FROM events WHERE community_id = $1 AND kind = $2 \
+         AND tags @> jsonb_build_array(jsonb_build_array('h', $3::text))",
+    )
+    .bind(community_id.as_uuid())
+    .bind(KIND_MEMBER_ADDED_NOTIFICATION as i32)
+    .bind(channel_id.to_string())
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
     // channel_members cascades from this.
     sqlx::query("DELETE FROM channels WHERE community_id = $1 AND id = $2")
         .bind(community_id.as_uuid())
@@ -1937,7 +1961,7 @@ pub async fn hard_delete_channel_events(
         .await?;
 
     tx.commit().await?;
-    Ok(events)
+    Ok(events + notifications)
 }
 
 /// Returns the `created_at` timestamp of the most recent non-deleted event in a channel.

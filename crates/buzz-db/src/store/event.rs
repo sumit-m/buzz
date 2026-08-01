@@ -1861,7 +1861,8 @@ pub async fn purge_deleted_event(
 /// Most rows are reached through `events.channel_id`. Member-added
 /// notifications are the exception: they are stored globally with no
 /// `channel_id` and name their channel only in an `h` tag, so they are swept
-/// separately by kind.
+/// separately by kind — together with their own dependent rows, which the
+/// `channel_id`-keyed purges above cannot see either.
 pub async fn hard_delete_channel_events(
     pool: &PgPool,
     community_id: CommunityId,
@@ -1909,16 +1910,39 @@ pub async fn hard_delete_channel_events(
     // the delete above misses them and they outlive the channel they name.
     // Scoped to this one kind deliberately: other globally-stored kinds may
     // legitimately outlive a channel, and an h-tag sweep would take them too.
-    let notifications = sqlx::query(
-        "DELETE FROM events WHERE community_id = $1 AND kind = $2 \
+    // Collected before deleting: the purges above are keyed on `channel_id`,
+    // which is NULL on these rows, so their dependent rows have to be reached
+    // by id. A notification carries a `p` tag for its target, so skipping this
+    // strands one `event_mentions` row per notification.
+    let notification_ids: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT id FROM events WHERE community_id = $1 AND kind = $2 \
          AND tags @> jsonb_build_array(jsonb_build_array('h', $3::text))",
     )
     .bind(community_id.as_uuid())
     .bind(KIND_MEMBER_ADDED_NOTIFICATION as i32)
     .bind(channel_id.to_string())
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
+    .fetch_all(&mut *tx)
+    .await?;
+
+    for statement in [
+        "DELETE FROM event_mentions WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM delivery_log WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM push_wake_outbox WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM push_match_queue WHERE community_id = $1 AND event_id = ANY($2)",
+    ] {
+        sqlx::query(statement)
+            .bind(community_id.as_uuid())
+            .bind(&notification_ids)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    let notifications = sqlx::query("DELETE FROM events WHERE community_id = $1 AND id = ANY($2)")
+        .bind(community_id.as_uuid())
+        .bind(&notification_ids)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
 
     // channel_members cascades from this.
     sqlx::query("DELETE FROM channels WHERE community_id = $1 AND id = $2")

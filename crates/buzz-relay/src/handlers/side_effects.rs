@@ -1114,6 +1114,67 @@ pub(super) async fn fan_out_system_message(
     }
 }
 
+/// Fan out a relay-signed `kind:9005` naming every event a cascading delete
+/// destroyed, so open clients stop rendering them.
+///
+/// A client hides a message only when some deletion event names it in an `e`
+/// tag. The human's own deletion event names the message they clicked and
+/// nothing else, so the replies and reactions the cascade removed keep
+/// rendering in any view already holding them — including the mention-scoped
+/// Home inbox, which can hold an agent's reply whose parent the human never had
+/// on screen.
+///
+/// Fan-out only, never stored — the same reasoning as
+/// [`emit_live_thread_summary`]. The rows are already gone, so a client that
+/// refetches never sees them; this exists purely to correct stale copies.
+///
+/// Includes the target id. Naming it twice is harmless — the client unions `e`
+/// tags into a set — and keeps this independent of who emitted the original.
+pub fn emit_cascade_deletion(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    channel_id: Uuid,
+    destroyed: Vec<Vec<u8>>,
+) {
+    if destroyed.len() < 2 {
+        return; // Target only — the human's own deletion event already names it.
+    }
+    let tenant = tenant.clone();
+    let state = Arc::clone(state);
+    tokio::spawn(async move {
+        let mut tags = match Tag::parse(["h", &channel_id.to_string()]) {
+            Ok(tag) => vec![tag],
+            Err(e) => {
+                warn!(channel = %channel_id, error = %e, "cascade deletion: bad h tag");
+                return;
+            }
+        };
+        for id in &destroyed {
+            match Tag::parse(["e", &hex::encode(id)]) {
+                Ok(tag) => tags.push(tag),
+                Err(e) => warn!(error = %e, "cascade deletion: bad e tag"),
+            }
+        }
+        let event = match EventBuilder::new(Kind::Custom(9005), "")
+            .tags(tags)
+            .sign_with_keys(&state.relay_keypair)
+        {
+            Ok(event) => event,
+            Err(e) => {
+                warn!(error = %e, "cascade deletion: signing failed");
+                return;
+            }
+        };
+        if let Err(e) = state
+            .pubsub
+            .publish_event(&tenant, EventTopic::Channel(channel_id), &event)
+            .await
+        {
+            warn!("cascade deletion fan-out failed: {e}");
+        }
+    });
+}
+
 /// Sign and fan out a fresh relay-signed `kind:39005` thread-summary overlay
 /// for `root_id` after a thread mutation (reply insert or threaded delete).
 ///
@@ -3605,12 +3666,19 @@ pub(crate) async fn persist_deletion(
         // Runs whether or not this commit hid the target, so a resend retries
         // a purge that failed after an earlier commit. The target is already
         // hidden, so a failure here is logged rather than refused.
-        if let Err(e) = state
+        match state
             .db
             .purge_deleted_event(tenant.community(), &planned.id, planned.root_id.as_deref())
             .await
         {
-            error!(target_event = %hex::encode(&planned.id), "hard delete failed: {e}");
+            Ok(destroyed) => {
+                if let Some(channel_id) = planned.target.channel_id {
+                    emit_cascade_deletion(tenant, state, channel_id, destroyed);
+                }
+            }
+            Err(e) => {
+                error!(target_event = %hex::encode(&planned.id), "hard delete failed: {e}");
+            }
         }
         if !deleted {
             continue;

@@ -1704,22 +1704,34 @@ pub use super::event_deletion::{
     soft_delete_by_coordinate, soft_delete_event_and_update_thread, DeletionTarget,
 };
 
-/// Physically delete a soft-deleted event and every row that references it.
+/// Physically delete a soft-deleted event, everything it anchors, and every
+/// row that references any of them.
 ///
 /// LOCAL DIVERGENCE from upstream, which soft-deletes (`deleted_at = NOW()`) and
 /// keeps the content forever. Nothing here is recoverable.
 ///
+/// The cascade covers the deleted message's replies at any depth and the
+/// reaction events on all of them. A reply whose parent is gone is unreachable
+/// in the UI and references a topic nobody can read, so leaving it behind
+/// strands content rather than preserving it. Note this destroys messages
+/// written by *other people*: an author deleting their own root removes replies
+/// they did not write, irreversibly.
+///
 /// Runs after [`Db::insert_deletion_event`] has soft-deleted the target and
-/// decremented its thread counters in the deletion's own commit, so the
-/// counters are left alone here. The dependent tables carry no foreign key to
-/// the partitioned `events` table, so each one is purged explicitly — missing
-/// any of them would strand rows that no longer have an event to describe.
+/// decremented its thread counters in the deletion's own commit, so only the
+/// root's count of the target's live descendants is adjusted here. The target
+/// row goes first so `rows_affected` still drives idempotency: a second purge
+/// finds nothing and skips the cascade. The dependent tables carry no foreign
+/// key to the partitioned `events` table, so each one is purged explicitly —
+/// missing any of them would strand rows that no longer have an event to
+/// describe.
 ///
 /// Returns false when the event was already gone.
 pub async fn purge_deleted_event(
     pool: &PgPool,
     community_id: CommunityId,
     event_id: &[u8],
+    root_event_id: Option<&[u8]>,
 ) -> Result<bool> {
     let mut tx = pool.begin().await?;
 
@@ -1729,31 +1741,103 @@ pub async fn purge_deleted_event(
         .execute(&mut *tx)
         .await?;
 
-    let deleted = result.rows_affected() > 0;
+    if result.rows_affected() == 0 {
+        tx.commit().await?;
+        return Ok(false);
+    }
 
-    if deleted {
-        // `reactions` is hit on both columns: `event_id` when the deleted event
-        // was reacted to, `reaction_event_id` when it was itself the kind:7.
-        for statement in [
-            "DELETE FROM event_mentions WHERE community_id = $1 AND event_id = $2",
-            "DELETE FROM reactions WHERE community_id = $1              AND (event_id = $2 OR reaction_event_id = $2)",
-            "DELETE FROM thread_metadata WHERE community_id = $1 AND event_id = $2",
-            "DELETE FROM delivery_log WHERE community_id = $1 AND event_id = $2",
-            "DELETE FROM push_wake_outbox WHERE community_id = $1 AND event_id = $2",
-            "DELETE FROM push_match_queue WHERE community_id = $1 AND event_id = $2",
-            "DELETE FROM moderation_reports WHERE community_id = $1 AND target_event_id = $2",
-            "DELETE FROM moderation_actions WHERE community_id = $1 AND target_event_id = $2",
-        ] {
-            sqlx::query(statement)
-                .bind(community_id.as_uuid())
-                .bind(event_id)
-                .execute(&mut *tx)
-                .await?;
+    // Walk the reply tree. `thread_metadata` still holds the target's row — only
+    // the `events` row is gone — so the walk seeds from the target itself.
+    // `UNION` rather than `UNION ALL` so a malformed parent cycle terminates.
+    let thread: Vec<Vec<u8>> = sqlx::query_scalar(
+        "WITH RECURSIVE tree AS ( \
+             SELECT $2::bytea AS event_id \
+             UNION \
+             SELECT t.event_id FROM thread_metadata t \
+               JOIN tree ON t.parent_event_id = tree.event_id \
+              WHERE t.community_id = $1 \
+         ) SELECT event_id FROM tree",
+    )
+    .bind(community_id.as_uuid())
+    .bind(event_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    // Reaction events are kind:7 rows in `events`; purging the `reactions`
+    // aggregate alone would leave them behind pointing at a dead id.
+    let reaction_events: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT reaction_event_id FROM reactions \
+          WHERE community_id = $1 AND event_id = ANY($2) \
+            AND reaction_event_id IS NOT NULL",
+    )
+    .bind(community_id.as_uuid())
+    .bind(&thread)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let mut doomed = thread.clone();
+    doomed.extend(reaction_events);
+
+    // Live descendants only: the target's own count went with its soft delete,
+    // and so did that of any reply soft-deleted before.
+    let descendants_removed: i64 = match root_event_id {
+        Some(root_id) => {
+            sqlx::query_scalar(
+                "SELECT count(*) FROM thread_metadata t \
+                   JOIN events e ON e.community_id = t.community_id AND e.id = t.event_id \
+                  WHERE t.community_id = $1 AND t.event_id = ANY($2) \
+                    AND t.root_event_id = $3 AND e.deleted_at IS NULL",
+            )
+            .bind(community_id.as_uuid())
+            .bind(&thread)
+            .bind(root_id)
+            .fetch_one(&mut *tx)
+            .await?
         }
+        None => 0,
+    };
+
+    sqlx::query("DELETE FROM events WHERE community_id = $1 AND id = ANY($2)")
+        .bind(community_id.as_uuid())
+        .bind(&doomed)
+        .execute(&mut *tx)
+        .await?;
+
+    if let (Some(root_id), true) = (root_event_id, descendants_removed > 0) {
+        sqlx::query(
+            "UPDATE thread_metadata \
+             SET descendant_count = GREATEST(descendant_count - $3, 0) \
+             WHERE community_id = $1 AND event_id = $2",
+        )
+        .bind(community_id.as_uuid())
+        .bind(root_id)
+        .bind(descendants_removed as i32)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // `reactions` is hit on both columns: `event_id` when a destroyed event was
+    // reacted to, `reaction_event_id` when it was itself the kind:7.
+    for statement in [
+        "DELETE FROM event_mentions WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM reactions WHERE community_id = $1 \
+         AND (event_id = ANY($2) OR reaction_event_id = ANY($2))",
+        "DELETE FROM thread_metadata WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM delivery_log WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM push_wake_outbox WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM push_match_queue WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM moderation_reports WHERE community_id = $1 AND target_event_id = ANY($2)",
+        "DELETE FROM moderation_actions WHERE community_id = $1 AND target_event_id = ANY($2)",
+    ] {
+        sqlx::query(statement)
+            .bind(community_id.as_uuid())
+            .bind(&doomed)
+            .execute(&mut *tx)
+            .await?;
     }
 
     tx.commit().await?;
-    Ok(deleted)
+    Ok(true)
 }
 
 /// Physically delete every event in a channel, the channel row, and all
@@ -2570,14 +2654,16 @@ impl Db {
         Ok(result)
     }
 
-    /// Physically delete a soft-deleted event and every row referencing it.
-    /// Unrecoverable. False when the event was already gone.
+    /// Physically delete a soft-deleted event, its reply subtree, and every row
+    /// referencing them. Unrecoverable. False when the event was already gone.
     pub async fn purge_deleted_event(
         &self,
         community_id: CommunityId,
         event_id: &[u8],
+        root_event_id: Option<&[u8]>,
     ) -> Result<bool> {
-        crate::event::purge_deleted_event(&self.pool, community_id, event_id).await
+        crate::event::purge_deleted_event(&self.pool, community_id, event_id, root_event_id)
+            .await
     }
 
     /// Physically delete a channel, its events, and all dependent rows.

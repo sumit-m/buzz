@@ -3607,7 +3607,7 @@ pub(crate) async fn persist_deletion(
         // hidden, so a failure here is logged rather than refused.
         if let Err(e) = state
             .db
-            .purge_deleted_event(tenant.community(), &planned.id)
+            .purge_deleted_event(tenant.community(), &planned.id, planned.root_id.as_deref())
             .await
         {
             error!(target_event = %hex::encode(&planned.id), "hard delete failed: {e}");

@@ -2262,6 +2262,9 @@ pub struct FormatPromptArgs<'a> {
     /// For modern agents (protocol_version >= 2) the section is delivered via
     /// the system role in session/new; omit here to avoid duplication.
     pub agent_canvas: Option<&'a str>,
+    /// Rendered `[Channel Facts]` section for legacy agents. Same delivery
+    /// semantics as the canvas: absent for DMs and heartbeats.
+    pub agent_facts: Option<&'a str>,
     /// Set once this session's standing context has already been delivered —
     /// see [`StandingContext`]. Only meaningful for legacy agents; modern
     /// agents are gated by `has_system_prompt_support` regardless.
@@ -2291,6 +2294,7 @@ pub(crate) struct StandingContext<'a> {
     pub agent_core: Option<&'a str>,
     pub huddle_instructions: Option<&'a str>,
     pub agent_canvas: Option<&'a str>,
+    pub agent_facts: Option<&'a str>,
 }
 
 impl StandingContext<'_> {
@@ -2339,6 +2343,9 @@ impl StandingContext<'_> {
                 "Channel Canvas",
                 canvas,
             ));
+        }
+        if let Some(facts) = self.agent_facts {
+            sections.push(facts.to_string());
         }
         sections
     }
@@ -2409,6 +2416,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
                 agent_core: args.agent_core,
                 huddle_instructions: args.huddle_instructions,
                 agent_canvas: args.agent_canvas,
+                agent_facts: args.agent_facts,
             }
             .sections(),
         );
@@ -5282,19 +5290,13 @@ mod tests {
         let agent_only = batch(vec![agent_event.clone()]);
         assert!(reply_anchor_is_trigger(&agent_only, false, Some(&lookup)));
         let prompt = format_prompt(&agent_only, &args).join("\n\n");
-        assert!(
-            prompt.contains(&format!("--reply-to {mid}")),
-            "{prompt}"
-        );
+        assert!(prompt.contains(&format!("--reply-to {mid}")), "{prompt}");
 
         let merged = batch(vec![agent_event, in_thread(&human, "human asks", None)]);
         assert!(!reply_anchor_is_trigger(&merged, false, Some(&lookup)));
         let prompt = format_prompt(&merged, &args).join("\n\n");
         assert!(prompt.contains(&format!("--reply-to {root}")), "{prompt}");
-        assert!(
-            !prompt.contains(&format!("--reply-to {mid}")),
-            "{prompt}"
-        );
+        assert!(!prompt.contains(&format!("--reply-to {mid}")), "{prompt}");
 
         // A DM renders its own anchor rule, which the steer guard handles
         // separately.

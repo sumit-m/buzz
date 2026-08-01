@@ -577,6 +577,18 @@ pub const PINNABLE_KINDS: [u32; 5] = [
 ];
 /// Canvas (shared document) for a channel.
 pub const KIND_CANVAS: u32 = 40100;
+/// Channel facts (shared durable statements) for a channel.
+///
+/// Same storage semantics as [`KIND_CANVAS`]: channel-scoped, client-submitted
+/// by any member with `Scope::ChannelsWrite`, resolved newest-event-wins per
+/// channel. Deliberately **not** in the parameterized-replaceable range, which
+/// keys on `(pubkey, kind, d_tag)` and would give every agent its own private
+/// copy of what is meant to be one shared list.
+///
+/// Regular range, so every revision is retained: a clobbered write stays
+/// recoverable, and the `prev` tag each event carries makes a collision
+/// detectable by walking history.
+pub const KIND_CHANNEL_FACTS: u32 = 40101;
 /// System message for channel state changes (join, leave, rename, etc.).
 pub const KIND_SYSTEM_MESSAGE: u32 = 40099;
 
@@ -807,6 +819,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_PIN_MESSAGE,
     KIND_UNPIN_MESSAGE,
     KIND_CANVAS,
+    KIND_CHANNEL_FACTS,
     KIND_SYSTEM_MESSAGE,
     KIND_CHANNEL_SUMMARY,
     KIND_PRESENCE_SNAPSHOT,
@@ -1005,6 +1018,7 @@ const _: () = assert!(
 // Compile-time: all Buzz kind constants fit in nostr's u16-backed Kind.
 const _: () = assert!(KIND_AUTH <= u16::MAX as u32);
 const _: () = assert!(KIND_CANVAS <= u16::MAX as u32);
+const _: () = assert!(KIND_CHANNEL_FACTS <= u16::MAX as u32);
 const _: () = assert!(KIND_HUDDLE_GUIDELINES <= u16::MAX as u32);
 const _: () = assert!(EPHEMERAL_KIND_MIN < EPHEMERAL_KIND_MAX);
 // Compile-time: KIND_AGENT_TURN_METRIC is a regular stored kind (not ephemeral, not replaceable).

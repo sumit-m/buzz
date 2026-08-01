@@ -815,6 +815,24 @@ pub fn canvas_write_survived(our_id: &str, revisions: &[(String, Option<String>)
     false // depth exhausted → fail safe (superseded)
 }
 
+/// Build a channel facts event (kind 40101).
+///
+/// `content` is a JSON array of `{id, text}` records. `prev` names the facts
+/// event this one was computed from, so a lost update is detectable by walking
+/// history — two heads naming the same `prev` is a collision. It is omitted for
+/// the first write to a channel, which has no predecessor.
+pub fn build_set_facts(
+    channel_id: Uuid,
+    content: &str,
+    prev: Option<&str>,
+) -> Result<EventBuilder, SdkError> {
+    let mut tags = vec![tag(&["h", &channel_id.to_string()])?];
+    if let Some(prev) = prev {
+        tags.push(tag(&["prev", prev])?);
+    }
+    Ok(EventBuilder::new(Kind::Custom(40101), content).tags(tags))
+}
+
 /// Build a NIP-01 profile metadata event (kind 0).
 ///
 /// Only present (Some) fields are included in the JSON object.

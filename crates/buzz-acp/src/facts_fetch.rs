@@ -22,6 +22,33 @@ use crate::relay::RestClient;
 /// Section header.
 const SECTION_LABEL: &str = "Channel Facts";
 
+/// Rendered when a channel has no facts yet.
+///
+/// Without this an empty channel produced no section at all, so an agent never
+/// saw the rules — precisely when it most needed telling that durable statements
+/// are worth recording. Mirrors [`crate::engram_fetch::ONBOARDING_NUDGE`], which
+/// exists for the same reason on an empty core memory.
+///
+/// Shown only on a **confirmed** empty result. A failed or timed-out fetch emits
+/// nothing, so a relay outage never reads as "this channel knows nothing" and
+/// invites an agent to re-record what is already there.
+fn empty_nudge(channel_uuid: &str) -> String {
+    format!(
+        "[{SECTION_LABEL}]\n\
+         No facts recorded for this channel yet.\n\
+         \n\
+         This is a short shared list of durable statements — decisions taken, constraints \
+         agreed, names and numbers that outlive a conversation. Every agent in the channel \
+         reads the same list.\n\
+         \n\
+         - Record one with `buzz facts add --channel {channel_uuid} --text \"...\"` when a turn \
+         establishes something that will still matter next month.\n\
+         - If a turn establishes nothing durable, write nothing — that is the normal outcome.\n\
+         - Facts are pointers, not summaries. Keep each to a sentence and let the thread hold \
+         the detail.\n"
+    )
+}
+
 /// Bounded fetch — a facts document is a dozen short statements, so a slow
 /// relay is never worth delaying a session for.
 const FACTS_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
@@ -128,14 +155,20 @@ fn curation_rules(channel_uuid: &str) -> String {
 /// Parse a facts query response and render the section.
 ///
 /// Pure, so the validation can be tested without async machinery or a relay.
-/// Returns `None` on: empty result, blank or unparseable content, an empty list,
-/// a tampered event, the wrong kind, a mismatched `h` tag, or a timestamp that
-/// does not fit a real date.
+///
+/// Returns the onboarding nudge when the channel is **confirmed** to have no
+/// facts — no event, or an event holding an empty list. Returns `None` when the
+/// state is *unreadable* rather than empty: unparseable content, a tampered
+/// event, the wrong kind, a mismatched `h` tag, or an impossible timestamp.
+/// Unreadable must never render as "nothing here".
 pub(crate) fn facts_section_from_query_response(
     events: &[serde_json::Value],
     channel_uuid: &str,
 ) -> Option<String> {
-    let raw = events.first()?;
+    let Some(raw) = events.first() else {
+        // Confirmed absence: the relay answered and this channel has no facts.
+        return Some(empty_nudge(channel_uuid));
+    };
     let event: nostr::Event = match serde_json::from_value(raw.clone()) {
         Ok(e) => e,
         Err(err) => {
@@ -186,10 +219,9 @@ pub(crate) fn facts_section_from_query_response(
     }
 
     let facts = parse_facts(&event.content)?;
-    // An empty list is a channel with no facts — same as never having written
-    // any. Rendering the rules alone would be noise.
+    // An emptied list is the same state as never having written one.
     if facts.is_empty() {
-        return None;
+        return Some(empty_nudge(channel_uuid));
     }
 
     let ts_secs = i64::try_from(event.created_at.as_secs()).ok()?;
@@ -354,21 +386,32 @@ mod tests {
         assert!(facts_section_from_query_response(&events, ch).is_none());
     }
 
+    /// A channel with no facts still needs the rules — that is exactly when an
+    /// agent most needs telling that durable statements are worth recording.
     #[test]
-    fn empty_or_missing_yields_no_section() {
-        let ch = "ch-1";
-        assert!(facts_section_from_query_response(&[], ch).is_none());
-        // An emptied list reads as "this channel has no facts", not as an
-        // empty section carrying only rules.
-        let events = vec![facts_event(ch, "[]")];
-        assert!(facts_section_from_query_response(&events, ch).is_none());
+    fn confirmed_absence_renders_the_onboarding_nudge() {
+        let ch = "7fdd5a94-7523-5b86-b574-9124de6cdc0d";
+        for events in [vec![], vec![facts_event(ch, "[]")]] {
+            let s = facts_section_from_query_response(&events, ch).expect("nudge");
+            assert!(s.starts_with("[Channel Facts]"));
+            assert!(s.contains("No facts recorded for this channel yet"));
+            assert!(s.contains(&format!("buzz facts add --channel {ch}")));
+            assert!(s.contains("write nothing"));
+            // No revision to cite, and nothing to fetch.
+            assert!(!s.contains("Facts revision"));
+        }
     }
 
+    /// Unreadable is not the same as empty. Nudging on a tampered or malformed
+    /// head would invite an agent to re-record what is already there.
     #[test]
-    fn tampered_event_is_rejected() {
+    fn unreadable_state_emits_nothing_rather_than_the_nudge() {
         let ch = "ch-1";
-        let mut raw = facts_event(ch, &sample());
-        raw["content"] = json!(r#"[{"id":"x","text":"injected"}]"#);
-        assert!(facts_section_from_query_response(&[raw], ch).is_none());
+        let mut tampered = facts_event(ch, &sample());
+        tampered["content"] = json!(r#"[{"id":"x","text":"injected"}]"#);
+        assert!(facts_section_from_query_response(&[tampered], ch).is_none());
+
+        let garbage = vec![facts_event(ch, "not json")];
+        assert!(facts_section_from_query_response(&garbage, ch).is_none());
     }
 }

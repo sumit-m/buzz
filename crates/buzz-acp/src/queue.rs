@@ -1716,15 +1716,15 @@ fn append_top_level_reply_instruction(s: &mut String) {
 /// showing no answer. So thread turns stay threaded even though top-level turns
 /// are flattened.
 ///
-/// The anchor is the thread ROOT, not the triggering event, so replies stay flat
-/// at layer 1 rather than nesting one level deeper every turn.
+/// `event_id` is the triggering message's PARENT (see [`resolve_reply_anchor`]),
+/// which places the reply at the same depth as the question it answers.
 fn append_thread_reply_instruction(s: &mut String, event_id: &str) {
     s.push_str(&format!(
-        "\nIMPORTANT: This turn is inside a thread. For ordinary replies, use \
-         `--reply-to {event_id}` on `buzz messages send` so the reply stays in \
-         the thread where it was asked. Do NOT post at the channel top level \
-         unless the human explicitly asks for a channel-root, top-level, or \
-         broadcast post."
+        "\nIMPORTANT: This turn is inside a thread. Reply at the same level you \
+         were asked at: use `--reply-to {event_id}` on `buzz messages send`, \
+         which places your reply directly alongside the message you are \
+         answering. Do NOT post at the channel top level, and do NOT jump to the \
+         thread root, unless the human explicitly asks for a different level."
     ));
 }
 
@@ -1757,38 +1757,42 @@ fn turn_is_human_facing(
 
 /// Resolve the `--reply-to` anchor for a non-DM turn.
 ///
-/// Human-facing turns (see [`turn_is_human_facing`]) stay flat:
-///   - in a thread → the thread ROOT, keeping the reply at layer 1
-///   - top-level   → the triggering event id, which becomes the new thread root
+/// In a thread → the triggering event's PARENT, so the agent answers at the same
+/// depth it was asked at: its reply becomes a sibling of the question rather
+/// than jumping up to the thread root. Anchoring to the root instead makes a
+/// reply to a depth-2 question surface at depth 1, detached from what it
+/// answers.
 ///
-/// Agent↔agent turns may nest (intentional for agent coordination):
-///   - in a thread → the triggering event id, so the reply stays in the thread
-///   - top-level   → `None`, leaving the destination to the agent
+/// This ignores [`turn_is_human_facing`] deliberately — a depth rule that
+/// depends on who spoke is harder to predict than one that always mirrors.
+///
+/// Top-level → the triggering event id for human-facing turns, `None` for
+/// agent↔agent. The channel branch posts flat and ignores both.
 fn resolve_reply_anchor(
     sender_pubkey: &str,
     thread_tags: &ThreadTags,
     triggering_event_id: &str,
     profile_lookup: Option<&PromptProfileLookup>,
 ) -> Option<String> {
-    if !turn_is_human_facing(sender_pubkey, thread_tags, profile_lookup) {
-        return thread_tags
-            .root_event_id
-            .is_some()
-            .then(|| triggering_event_id.to_string());
+    // `parse_thread_tags` sets `parent_event_id` whenever the event is in a
+    // thread at all, so this covers every thread turn.
+    if let Some(parent) = thread_tags.parent_event_id.clone() {
+        return Some(parent);
     }
-    Some(
-        thread_tags
-            .root_event_id
-            .clone()
-            .unwrap_or_else(|| triggering_event_id.to_string()),
-    )
+    if !turn_is_human_facing(sender_pubkey, thread_tags, profile_lookup) {
+        return None;
+    }
+    Some(triggering_event_id.to_string())
 }
 
-/// Whether `format_prompt` anchors `batch`'s ordinary replies to its
-/// triggering message instead of the thread every same-thread message
-/// shares: an agent↔agent turn inside a channel thread (see
+/// Whether `format_prompt` anchors `batch`'s ordinary replies somewhere other
+/// than the thread root every same-thread message shares: a channel thread turn
+/// asked below depth 1, answered beside its question (see
 /// [`resolve_reply_anchor`]). The prompt task records this for the
 /// native-steer guard (see [`EventQueue::in_flight_accepts_steer`]).
+///
+/// LOCAL DIVERGENCE: upstream compares the anchor with the trigger, which our
+/// same-level rule never returns inside a thread.
 pub fn reply_anchor_is_trigger(
     batch: &FlushBatch,
     is_dm: bool,
@@ -1808,7 +1812,7 @@ pub fn reply_anchor_is_trigger(
             profile_lookup,
         )
         .as_deref()
-            == Some(routing_event_id.as_str())
+            != thread_tags.root_event_id.as_deref()
 }
 
 /// Maximum length (in characters) of a channel description rendered into `<context>`.
@@ -2050,8 +2054,8 @@ fn format_context_hints(
             }
         }
         s.push_str(&format!("\n{ctx_hint}"));
-        // Agent↔agent turns resolve to no anchor; fall back to the root so a
-        // thread mention never escapes to the top level regardless of who asked.
+        // `resolve_reply_anchor` returns the triggering event's parent for every
+        // thread turn; the root is a safety net for a malformed tag set.
         append_thread_reply_instruction(&mut s, reply_anchor.unwrap_or(root));
         crate::prompt_framing::semantic_section("context", &s)
     } else {
@@ -2376,16 +2380,15 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
         );
     }
 
-    // 2. Context hints (with a human-aware reply anchor).
+    // 2. Context hints (with a same-level reply anchor).
     //
-    // Human-facing turns are anchored so replies stay readable at layer 1:
-    //   - in a thread  → anchor to the thread ROOT (no depth-2 nesting)
-    //   - top-level     → anchor to the triggering event (it becomes the root)
-    // Agent↔agent turns in a thread anchor to the triggering event — deep
-    // nesting is intentional there — and top-level ones get no anchor.
+    // In a thread every turn anchors to the triggering event's parent, so the
+    // reply sits beside its question (see `resolve_reply_anchor`). Top-level,
+    // human-facing turns anchor to the triggering event (it becomes the root);
+    // agent↔agent ones get no anchor.
     // DMs are always 1:1 with a human, so they always anchor.
     // `ReplyRoute::accepts_steer` mirrors this DM rule, and
-    // `reply_anchor_is_trigger` reports the agent↔agent thread anchor to the
+    // `reply_anchor_is_trigger` reports a below-root thread anchor to the
     // native-steer guard; keep them in sync.
     let sender_pubkey = last_event.event.pubkey.to_hex();
     let reply_anchor = if is_dm {
@@ -5019,12 +5022,12 @@ mod tests {
     }
 
     #[test]
-    fn test_anchor_agent_to_agent_in_thread_uses_triggering_event() {
-        // Agent pings agent inside a thread → reply to the triggering event:
-        // stays in the thread, nesting allowed.
+    fn test_anchor_agent_to_agent_in_thread_mirrors_depth() {
+        // Thread turns anchor to the triggering event's parent regardless of who
+        // spoke — a depth rule that varies by sender is harder to predict.
         let tags = thread_tags(Some(ROOT_ID), &[AGENT_B_PK]);
         let anchor = resolve_reply_anchor(AGENT_A_PK, &tags, TRIGGER_ID, Some(&id_lookup()));
-        assert_eq!(anchor.as_deref(), Some(TRIGGER_ID));
+        assert_eq!(anchor.as_deref(), tags.parent_event_id.as_deref());
     }
 
     #[test]
@@ -5053,19 +5056,23 @@ mod tests {
     #[test]
     fn test_anchor_agent_only_p_tags_do_not_flatten() {
         // Raw p-tag presence must NOT flatten when every tagged pubkey is an
-        // agent — this is the regression Pinky flagged.
-        let tags = thread_tags(Some(ROOT_ID), &[AGENT_A_PK, AGENT_B_PK]);
+        // agent — this is the regression Pinky flagged. Inside a thread the
+        // anchor is the parent either way; the top-level case below is where
+        // the human-facing distinction still bites.
+        let tags = thread_tags(None, &[AGENT_A_PK, AGENT_B_PK]);
         let anchor = resolve_reply_anchor(AGENT_A_PK, &tags, TRIGGER_ID, Some(&id_lookup()));
-        assert_eq!(anchor.as_deref(), Some(TRIGGER_ID));
+        assert_eq!(anchor, None);
     }
 
     #[test]
     fn test_human_merged_into_agent_thread_turn_anchors_to_root() {
-        // An agent↔agent turn in a thread anchors to its trigger. When a
-        // human's message in that thread joins the batch (the steer guard's
-        // cancel+merge path), the merged prompt anchors to the root again.
+        // LOCAL DIVERGENCE: thread turns anchor to the trigger's parent, so a
+        // depth-2 question anchors below the root. When a depth-1 message in
+        // that thread joins the batch (the steer guard's cancel+merge path),
+        // the merged prompt anchors to the root again.
         let ch = Uuid::new_v4();
         let root = "a".repeat(64);
+        let mid = "b".repeat(64);
         let agent = Keys::generate();
         let human = Keys::generate();
         let other_agent = Keys::generate().public_key().to_hex();
@@ -5073,13 +5080,20 @@ mod tests {
             (agent.public_key().to_hex(), profile(true)),
             (other_agent.clone(), profile(true)),
         ]);
-        let in_thread = |keys: &Keys, content: &str| BatchEvent {
+        let in_thread = |keys: &Keys, content: &str, parent: Option<&str>| BatchEvent {
             edit: None,
             event: EventBuilder::new(Kind::Custom(9), content)
-                .tags([
-                    nostr::Tag::parse(["e", root.as_str(), "", "reply"]).unwrap(),
-                    nostr::Tag::parse(["p", other_agent.as_str()]).unwrap(),
-                ])
+                .tags(match parent {
+                    Some(parent) => vec![
+                        nostr::Tag::parse(["e", root.as_str(), "", "root"]).unwrap(),
+                        nostr::Tag::parse(["e", parent, "", "reply"]).unwrap(),
+                        nostr::Tag::parse(["p", other_agent.as_str()]).unwrap(),
+                    ],
+                    None => vec![
+                        nostr::Tag::parse(["e", root.as_str(), "", "reply"]).unwrap(),
+                        nostr::Tag::parse(["p", other_agent.as_str()]).unwrap(),
+                    ],
+                })
                 .sign_with_keys(keys)
                 .unwrap(),
             prompt_tag: "@mention".into(),
@@ -5096,23 +5110,22 @@ mod tests {
             profile_lookup: Some(&lookup),
             ..Default::default()
         };
-        let agent_event = in_thread(&agent, "agent asks");
-        let agent_event_id = agent_event.event.id.to_hex();
+        let agent_event = in_thread(&agent, "agent asks", Some(&mid));
 
         let agent_only = batch(vec![agent_event.clone()]);
         assert!(reply_anchor_is_trigger(&agent_only, false, Some(&lookup)));
         let prompt = format_prompt(&agent_only, &args).join("\n\n");
         assert!(
-            prompt.contains(&format!("--reply-to {agent_event_id}")),
+            prompt.contains(&format!("--reply-to {mid}")),
             "{prompt}"
         );
 
-        let merged = batch(vec![agent_event, in_thread(&human, "human asks")]);
+        let merged = batch(vec![agent_event, in_thread(&human, "human asks", None)]);
         assert!(!reply_anchor_is_trigger(&merged, false, Some(&lookup)));
         let prompt = format_prompt(&merged, &args).join("\n\n");
         assert!(prompt.contains(&format!("--reply-to {root}")), "{prompt}");
         assert!(
-            !prompt.contains(&format!("--reply-to {agent_event_id}")),
+            !prompt.contains(&format!("--reply-to {mid}")),
             "{prompt}"
         );
 
@@ -5861,8 +5874,8 @@ mod tests {
             "thread reply must not get the top-level instruction; prompt was:\n{prompt}"
         );
         assert!(
-            prompt.contains("channel-root, top-level, or broadcast"),
-            "thread reply should still allow an explicit top-level request"
+            prompt.contains("unless the human explicitly asks for a different level"),
+            "thread reply should still allow an explicit request for another level"
         );
     }
 
@@ -5981,7 +5994,7 @@ mod tests {
     }
 
     #[test]
-    fn test_human_nested_reply_anchors_to_thread_root() {
+    fn test_human_nested_reply_answers_at_the_same_depth() {
         let ch = Uuid::new_v4();
         let root_id = "a".repeat(64);
         let parent_id = "b".repeat(64);
@@ -6006,18 +6019,15 @@ mod tests {
             cancel_reason: None,
         };
 
-        // A deep reply stays in its thread, but anchors to the ROOT — not the
-        // triggering event or the immediate parent — so the thread stays flat
-        // at layer 1 instead of nesting one level deeper every turn.
+        // A depth-2 question gets a depth-2 answer: the anchor is the question's
+        // PARENT, making the reply its sibling. Anchoring to the root instead
+        // surfaces the answer at depth 1, detached from what it answers.
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
         assert!(
-            prompt.contains(&format!("--reply-to {root_id}")),
-            "nested reply should anchor to the thread root; prompt was:\n{prompt}"
+            prompt.contains(&format!("--reply-to {parent_id}")),
+            "nested reply should anchor to the question's parent; prompt was:\n{prompt}"
         );
-        for (label, id) in [
-            ("triggering event", &event_id),
-            ("parent event", &parent_id),
-        ] {
+        for (label, id) in [("thread root", &root_id), ("triggering event", &event_id)] {
             assert!(
                 !prompt.contains(&format!("--reply-to {id}")),
                 "instruction should NOT anchor to the {label} id"
@@ -6052,8 +6062,8 @@ mod tests {
             "thread reply should anchor to the thread root"
         );
         assert!(
-            prompt.contains("channel-root, top-level, or broadcast"),
-            "instruction should let agents honor an explicit top-level request"
+            prompt.contains("unless the human explicitly asks for a different level"),
+            "instruction should let agents honor an explicit request for another level"
         );
         assert!(
             !prompt.contains("never post at the channel top level"),

@@ -2020,7 +2020,16 @@ fn format_context_hints(
                 }
             }
         }
-        append_top_level_reply_instruction(&mut s);
+        // A DM nests exactly like a channel does, so it answers at the level it
+        // was asked at for the same reason. `reply_anchor` is already the
+        // triggering event for a threaded DM — the anchor the channel arm uses
+        // — and this branch collected the thread structure above only to
+        // discard it, stranding every nested DM reply at the DM root.
+        if let Some(root) = thread_tags.root_event_id.as_deref() {
+            append_thread_reply_instruction(&mut s, reply_anchor.unwrap_or(root));
+        } else {
+            append_top_level_reply_instruction(&mut s);
+        }
         crate::prompt_framing::semantic_section("context", &s)
     } else if let Some(root) = scope
         .root_event_id()
@@ -5915,13 +5924,18 @@ mod tests {
             },
         )
         .join("\n\n");
+        // Previously this asserted the opposite: a threaded DM was answered at
+        // the DM root on the reasoning that a 1:1 is already linear. In practice
+        // that stranded the answer away from the message it replied to, exactly
+        // as it did in channels before `resolve_reply_anchor` — so a DM now
+        // answers at the level it was asked at too.
         assert!(
-            !prompt.contains(&format!("--reply-to {event_id}")),
-            "DM thread reply should not anchor to the triggering event"
+            prompt.contains(&format!("--reply-to {event_id}")),
+            "DM thread reply should anchor to the message it answers; prompt was:\n{prompt}"
         );
         assert!(
-            prompt.contains("WITHOUT `--reply-to`"),
-            "DM thread reply should use the top-level instruction"
+            !prompt.contains("WITHOUT `--reply-to`"),
+            "DM thread reply must not get the top-level instruction"
         );
     }
 

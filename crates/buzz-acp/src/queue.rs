@@ -1755,7 +1755,7 @@ fn turn_is_human_facing(
     thread_tags.mentioned_pubkeys.iter().any(|pk| !is_agent(pk))
 }
 
-/// Resolve the `--reply-to` anchor for a non-DM turn.
+/// Resolve the `--reply-to` anchor for a turn.
 ///
 /// In a thread → the triggering event's PARENT, so the agent answers at the same
 /// depth it was asked at: its reply becomes a sibling of the question rather
@@ -1767,7 +1767,7 @@ fn turn_is_human_facing(
 /// depends on who spoke is harder to predict than one that always mirrors.
 ///
 /// Top-level → the triggering event id for human-facing turns, `None` for
-/// agent↔agent. The channel branch posts flat and ignores both.
+/// agent↔agent. Both top-level branches post flat and ignore it either way.
 fn resolve_reply_anchor(
     sender_pubkey: &str,
     thread_tags: &ThreadTags,
@@ -1957,9 +1957,9 @@ fn append_project_home(s: &mut String, channel_info: Option<&PromptChannelInfo>,
 /// Format a `<context>` section from the resolved session scope and turn routing.
 ///
 /// `reply_anchor` is the pre-resolved `--reply-to` target (see
-/// [`resolve_reply_anchor`]). It is honoured only in the thread branch: a turn
-/// inside a thread answers in that thread. Top-level and DM turns ignore it and
-/// post flat.
+/// [`resolve_reply_anchor`]). It is honoured wherever the turn is threaded —
+/// in a channel thread or a DM thread alike. Top-level turns of either kind
+/// ignore it and post flat.
 fn format_context_hints(
     scope: &SessionScope,
     channel_info: Option<&PromptChannelInfo>,
@@ -2400,19 +2400,16 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
     // `reply_anchor_is_trigger` reports a below-root thread anchor to the
     // native-steer guard; keep them in sync.
     let sender_pubkey = last_event.event.pubkey.to_hex();
-    let reply_anchor = if is_dm {
-        thread_tags
-            .root_event_id
-            .is_some()
-            .then(|| routing_event_id.clone())
-    } else {
-        resolve_reply_anchor(
-            &sender_pubkey,
-            &thread_tags,
-            &routing_event_id,
-            args.profile_lookup,
-        )
-    };
+    // One rule for both. The DM arm used to anchor to the triggering event
+    // itself, which makes the reply a *child* of the question — so every
+    // exchange sank another level. `resolve_reply_anchor` returns the parent,
+    // making the reply a sibling: the same depth it was asked at.
+    let reply_anchor = resolve_reply_anchor(
+        &sender_pubkey,
+        &thread_tags,
+        &routing_event_id,
+        args.profile_lookup,
+    );
     sections.push(format_context_hints(
         &batch.scope,
         args.channel_info,
@@ -5894,7 +5891,7 @@ mod tests {
         let root_id = "b".repeat(64);
         let event = make_event_with_tags(
             "thanks",
-            vec![vec!["e".into(), root_id, "".into(), "reply".into()]],
+            vec![vec!["e".into(), root_id.clone(), "".into(), "reply".into()]],
         );
         let event_id = event.id.to_hex();
         let batch = FlushBatch {
@@ -5924,14 +5921,20 @@ mod tests {
             },
         )
         .join("\n\n");
-        // Previously this asserted the opposite, from the original spec: every
-        // reply went to the top level. That spec was later refined to "answer at
-        // the level you were asked at" and the refinement reached channels only,
-        // so DMs kept the superseded rule and stranded nested replies at the DM
-        // root. This is the refinement catching up, not a change of mind.
+        // The original spec sent every reply to the top level. It was refined to
+        // "answer at the level you were asked at" and the refinement reached
+        // channels only, so DMs kept the superseded rule.
+        //
+        // Same depth means anchoring to the question's PARENT, so the reply is
+        // its sibling. Anchoring to the triggering event makes the reply its
+        // child, and a conversation of them sinks a level per exchange.
         assert!(
-            prompt.contains(&format!("--reply-to {event_id}")),
-            "DM thread reply should anchor to the message it answers; prompt was:\n{prompt}"
+            prompt.contains(&format!("--reply-to {root_id}")),
+            "DM thread reply should be a sibling of the question; prompt was:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains(&format!("--reply-to {event_id}")),
+            "anchoring to the triggering event nests one level deeper every turn"
         );
         assert!(
             !prompt.contains("WITHOUT `--reply-to`"),

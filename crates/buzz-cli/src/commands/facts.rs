@@ -88,7 +88,8 @@ fn enforce_caps(facts: &[Fact]) -> Result<(), CliError> {
         // else in the section — see `facts_fetch::facts_block`.
         if fact.text.chars().any(char::is_control) {
             return Err(CliError::Usage(
-                "fact contains a line break or control character. A fact is a single                  statement on one line — put the detail in the thread."
+                "fact contains a line break or control character. A fact is a single \
+                 statement on one line — put the detail in the thread."
                     .to_string(),
             ));
         }

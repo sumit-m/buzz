@@ -58,7 +58,13 @@ const NEST_SKILL_VERSION: u32 = 7;
 const BEGIN_MARKER: &str = "<!-- BEGIN BUZZ MANAGED";
 const END_MARKER: &str = "<!-- END BUZZ MANAGED -->";
 
-/// Canonical skill directory path relative to the nest root.
+/// Shared skills directory, relative to the nest root.
+///
+/// Harness-agnostic on purpose: every skill here is linked into every runtime,
+/// so one written by any agent is usable by all of them.
+const CANONICAL_SKILLS_ROOT: &str = ".agents/skills";
+
+/// Canonical directory for the bundled `buzz-cli` skill.
 const CANONICAL_SKILL_DIR: &str = ".agents/skills/buzz-cli";
 
 /// Nest directory name for production builds.
@@ -352,40 +358,78 @@ pub fn ensure_nest_at(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Link target for `<skill_dir>/buzz-cli`, given the nest `root`.
+/// Link target for `<skill_dir>/<skill_name>`, given the nest `root`.
 ///
 /// Unix uses a target relative to the link so the nest stays movable. Windows
 /// cannot: when symlink creation is denied, [`create_dir_link`] falls back to a
 /// junction, and junctions store only absolute targets. Pinning to `root` is
 /// the cost of not requiring Developer Mode or elevation.
-fn skill_link_target(root: &Path, skill_dir: &str) -> PathBuf {
+fn skill_link_target(root: &Path, skill_dir: &str, skill_name: &str) -> PathBuf {
     #[cfg(unix)]
     {
         let _ = root;
         let depth = Path::new(skill_dir).components().count();
-        PathBuf::from(format!("{}{CANONICAL_SKILL_DIR}", "../".repeat(depth)))
+        PathBuf::from(format!(
+            "{}{CANONICAL_SKILLS_ROOT}/{skill_name}",
+            "../".repeat(depth)
+        ))
     }
     #[cfg(not(unix))]
     {
         let _ = skill_dir;
-        root.join(CANONICAL_SKILL_DIR)
+        root.join(CANONICAL_SKILLS_ROOT).join(skill_name)
     }
 }
 
-/// Create harness-specific skill symlinks for each known provider.
+/// Names of every skill in the canonical directory.
+///
+/// Sorted so link creation is deterministic across boots, which keeps failure
+/// messages and test expectations stable.
+fn canonical_skill_names(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = match fs::read_dir(root.join(CANONICAL_SKILLS_ROOT)) {
+        Ok(entries) => entries
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                // Directories only — a stray file in the skills root is not a skill.
+                entry.file_type().ok()?.is_dir().then(|| entry.file_name())
+            })
+            .filter_map(|name| name.into_string().ok())
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    names.sort();
+    names
+}
+
+/// Link every canonical skill into each known provider's skill directory.
+///
+/// The canonical directory is the shared one: a skill written there by any
+/// agent becomes available to every runtime, which is the point — a procedure
+/// is not a property of the harness that happened to record it. Linking only
+/// the bundled `buzz-cli` would leave an agent-authored skill invisible to
+/// everyone, including its author.
+///
+/// New links appear on the next `ensure_nest()`, i.e. the next app start.
+/// Harnesses read skills when a session begins, so a skill written mid-session
+/// was never going to load before then anyway.
+///
 /// Idempotent: skips any path where `symlink_metadata` succeeds — real
 /// directories, valid symlinks, and dangling symlinks are all left alone.
 fn ensure_skill_symlinks(root: &Path) -> Result<(), String> {
+    let skills = canonical_skill_names(root);
     for skill_dir in known_skill_dirs() {
         let parent = root.join(skill_dir);
         fs::create_dir_all(&parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-        let link = parent.join("buzz-cli");
-        if link.symlink_metadata().is_ok() {
-            continue; // symlink or real path exists — skip
+        for skill_name in &skills {
+            let link = parent.join(skill_name);
+            if link.symlink_metadata().is_ok() {
+                continue; // symlink or real path exists — skip
+            }
+            let target = skill_link_target(root, skill_dir, skill_name);
+            create_dir_link(&target, &link).map_err(|e| {
+                format!("skill link {} → {}: {e}", link.display(), target.display())
+            })?;
         }
-        let target = skill_link_target(root, skill_dir);
-        create_dir_link(&target, &link)
-            .map_err(|e| format!("skill link {} → {}: {e}", link.display(), target.display()))?;
     }
     Ok(())
 }
@@ -660,7 +704,7 @@ fn refresh_skill_md_if_stale(root: &Path) -> Result<(), String> {
             remove_dir_link(&symlink_path)
                 .map_err(|e| format!("remove symlink {}: {e}", symlink_path.display()))?;
         }
-        let target = skill_link_target(root, ".claude/skills");
+        let target = skill_link_target(root, ".claude/skills", "buzz-cli");
         create_dir_link(&target, &symlink_path)
             .map_err(|e| format!("symlink {}: {e}", symlink_path.display()))?;
     }

@@ -308,6 +308,57 @@ fn ensure_skill_symlinks_are_idempotent() {
     }
 }
 
+/// A skill written into the shared directory by any agent must reach every
+/// runtime — including the ones that did not write it. Linking only the bundled
+/// `buzz-cli` left an agent-authored skill invisible to everyone, its author
+/// included, because a harness reads its own skills directory and nothing else.
+#[test]
+fn agent_authored_skills_are_linked_into_every_runtime() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    ensure_nest_at(&root).unwrap();
+
+    // An agent writes a skill to the shared directory, as the base prompt says.
+    let authored = root.join(".agents/skills/channel-health-check");
+    fs::create_dir_all(&authored).unwrap();
+    fs::write(
+        authored.join("SKILL.md"),
+        "---\nname: channel-health-check\n---\n",
+    )
+    .unwrap();
+
+    // Links are created on the next nest ensure, i.e. the next app start.
+    ensure_nest_at(&root).unwrap();
+
+    for dir in [".goose/skills", ".claude/skills", ".codex/skills"] {
+        let link = root.join(dir).join("channel-health-check");
+        assert!(
+            link.symlink_metadata().is_ok(),
+            "{dir} should carry a link to the agent-authored skill"
+        );
+        assert!(
+            link.join("SKILL.md").exists(),
+            "link at {dir}/channel-health-check should resolve to the skill"
+        );
+        // The bundled skill is still linked alongside it.
+        assert!(root.join(dir).join("buzz-cli").join("SKILL.md").exists());
+    }
+}
+
+/// A loose file in the shared directory is not a skill and must not be linked.
+#[test]
+fn non_directories_in_the_shared_skills_root_are_ignored() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    ensure_nest_at(&root).unwrap();
+    fs::write(root.join(".agents/skills/NOTES.md"), "not a skill").unwrap();
+    ensure_nest_at(&root).unwrap();
+    assert!(
+        !root.join(".claude/skills/NOTES.md").exists(),
+        "a stray file must not be linked as a skill"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn ensure_skill_symlinks_use_relative_targets_on_unix() {

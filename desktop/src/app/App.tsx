@@ -67,6 +67,7 @@ import { EncryptedBackupProvider } from "@/features/settings/EncryptedBackupProv
 import { createBuzzQueryClient } from "@/shared/api/queryClient";
 import { hydrateChannelHeads } from "@/features/messages/lib/channelHeadCache";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { installWindowFocusManager } from "@/shared/api/queryFocus";
 import { isSharedIdentity as isSharedIdentityCmd } from "@/shared/api/tauri";
 import { getProfile } from "@/shared/api/tauriProfiles";
 import {
@@ -823,6 +824,10 @@ export function App() {
   useInitialRenderReady();
   const [sharedIdentity, setSharedIdentity] = useState<boolean | null>(null);
   const [queryClient] = useState(createBuzzQueryClient);
+
+  // React Query's focus manager is a module singleton shared by every client,
+  // so this is installed once for the whole app rather than per provider.
+  useEffect(() => installWindowFocusManager(), []);
 
   useEffect(() => {
     isSharedIdentityCmd()

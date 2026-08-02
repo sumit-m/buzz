@@ -65,6 +65,32 @@ export function recordObservedUnreadEvent(
   return true;
 }
 
+/**
+ * Forget observed unread events named by a deletion.
+ *
+ * Badge counts are derived from this map, not from the home-inbox activity
+ * rows, so a destroyed message keeps counting until its id is dropped here.
+ * A top-level DM has no activity row at all, which is why deleting one used to
+ * leave its badge behind entirely.
+ *
+ * Scans every channel rather than taking a channel id: a cascade names the
+ * whole destroyed subtree, and the caller has the ids without knowing which
+ * channel each belonged to.
+ */
+export function removeObservedUnreadEvents(
+  eventsByChannel: Map<string, Map<string, ObservedUnreadEvent>>,
+  deletedIds: ReadonlySet<string>,
+): boolean {
+  if (deletedIds.size === 0) return false;
+  let removed = false;
+  for (const eventsById of eventsByChannel.values()) {
+    for (const id of deletedIds) {
+      if (eventsById.delete(id)) removed = true;
+    }
+  }
+  return removed;
+}
+
 export function countUnreadObservedEvents(
   eventsById: ReadonlyMap<string, ObservedUnreadEvent> | undefined,
   getReadAt: (event: ObservedUnreadEvent) => number | null,

@@ -11,6 +11,7 @@ import {
   makeObservedUnreadEvent,
   observedUnreadEventReadAt,
   recordObservedUnreadEvent,
+  removeObservedUnreadEvents,
   type ObservedUnreadEvent,
 } from "@/features/channels/unreadChannelCounts";
 import { useReadState } from "@/features/channels/readState/useReadState";
@@ -582,27 +583,44 @@ export function useUnreadChannels(
    * The relay names the whole cascaded subtree in its own deletion event, not
    * just the message the human clicked, so replies removed by the cascade are
    * cleared here too.
+   *
+   * Badge counts live in a different map and are cleared here as well — see
+   * the body.
    */
   const handleDeletionNotification = React.useCallback(
     (event: RelayEvent) => {
-      // Same scope fence as the reply handler: never mutate a buffer whose
-      // scope has drifted from the current identity.
-      if (!activityPersistence.isScopeLoaded()) return;
-
       const deletedIds = new Set(
         event.tags
           .filter((tag) => tag[0] === "e" && typeof tag[1] === "string")
           .map((tag) => tag[1]),
       );
-      const removed = removeThreadActivityItems(
-        threadActivityRef.current,
+
+      // Two separate stores, and a deletion has to reach both. Badge counts
+      // come from the observed-unread map; the home inbox rows come from
+      // thread activity. Clearing only the rows left a destroyed message
+      // counting forever — and a top-level DM has no row at all, so the old
+      // early return meant nothing happened.
+      const clearedBadges = removeObservedUnreadEvents(
+        observedUnreadEventsByChannelRef.current,
         deletedIds,
       );
-      if (!removed.didRemove) return;
-      threadActivityRef.current = removed.items;
-      activityPersistence.schedule(currentActivityScope);
-      // Unread badges are derived from the same rows, so they recompute here.
-      bumpLatestVersion();
+
+      let clearedRows = false;
+      // Same scope fence as the reply handler: never mutate a buffer whose
+      // scope has drifted from the current identity.
+      if (activityPersistence.isScopeLoaded()) {
+        const removed = removeThreadActivityItems(
+          threadActivityRef.current,
+          deletedIds,
+        );
+        if (removed.didRemove) {
+          threadActivityRef.current = removed.items;
+          clearedRows = true;
+          activityPersistence.schedule(currentActivityScope);
+        }
+      }
+
+      if (clearedBadges || clearedRows) bumpLatestVersion();
     },
     [currentActivityScope, activityPersistence],
   );

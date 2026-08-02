@@ -12,6 +12,8 @@ use super::{load_managed_agents, load_personas_unseeded, AgentDefinition, Manage
 use super::{BackendKind, RespondTo};
 use crate::app_state::AppState;
 use crate::commands::{capture_relay_target, fetch_archived_pubkeys_at};
+use crate::relay::relay_ws_url_with_override;
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -409,9 +411,9 @@ fn canonical_skill_names(root: &Path) -> Vec<String> {
 /// the bundled `buzz-cli` would leave an agent-authored skill invisible to
 /// everyone, including its author.
 ///
-/// New links appear on the next `ensure_nest()`, i.e. the next app start.
-/// Harnesses read skills when a session begins, so a skill written mid-session
-/// was never going to load before then anyway.
+/// Called at boot and again whenever the canonical directory changes, so a
+/// skill written mid-session becomes runnable without an app restart — see
+/// [`start_skill_watcher`].
 ///
 /// Idempotent: skips any path where `symlink_metadata` succeeds — real
 /// directories, valid symlinks, and dangling symlinks are all left alone.
@@ -432,6 +434,68 @@ fn ensure_skill_symlinks(root: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Holds the live skills watcher. Dropping a [`RecommendedWatcher`] stops
+/// event delivery, so the handle has to outlive the boot sequence that made it.
+static SKILL_WATCHER: Mutex<Option<RecommendedWatcher>> = Mutex::new(None);
+
+/// Watches the canonical skills directory and re-links whenever it changes.
+///
+/// A running session does pick up a skill added mid-flight, but only one that
+/// is linked into its own runtime directory. Linking at boot alone would mean
+/// that a skill written by one agent stays unusable — to every other agent and
+/// to its own author — until everyone restarts the app, which is not something
+/// a group of people sharing a channel can be expected to coordinate.
+///
+/// Non-recursive: a new skill is a new directory at the top level, and edits
+/// inside an existing skill need no new link. This also keeps us to a single
+/// watch descriptor, well clear of the inotify limits that make large recursive
+/// watches unreliable on Linux.
+///
+/// Best-effort. If the platform backend refuses to start we log and move on:
+/// links then appear at the next launch, the behaviour before this existed.
+/// A watcher can also be silently inert on filesystems that emit no events
+/// (NFS and similar), with the same fallback.
+pub fn start_skill_watcher() {
+    let Some(root) = nest_dir() else {
+        return;
+    };
+    match build_skill_watcher(&root) {
+        Ok(watcher) => {
+            if let Ok(mut slot) = SKILL_WATCHER.lock() {
+                *slot = Some(watcher);
+            }
+        }
+        Err(error) => eprintln!("buzz-desktop: skill watcher unavailable: {error}"),
+    }
+}
+
+fn build_skill_watcher(root: &Path) -> Result<RecommendedWatcher, String> {
+    let link_root = root.to_path_buf();
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        // Any event is a cue to re-link rather than a thing to classify:
+        // ensure_skill_symlinks is idempotent and skips paths that already
+        // exist, so a burst of events costs one directory read each and no
+        // debouncing. Errors are dropped for the same reason — the next event,
+        // or the next launch, re-links whatever was missed.
+        if event.is_err() {
+            return;
+        }
+        // A skill directory is typically created before its SKILL.md is
+        // written. Linking the directory rather than its contents means the
+        // file becomes visible through the link when it lands, so acting on
+        // the bare mkdir is safe.
+        if let Err(error) = ensure_skill_symlinks(&link_root) {
+            eprintln!("buzz-desktop: skill relink failed: {error}");
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    let skills_root = root.join(CANONICAL_SKILLS_ROOT);
+    watcher
+        .watch(&skills_root, RecursiveMode::NonRecursive)
+        .map_err(|e| format!("watch {}: {e}", skills_root.display()))?;
+    Ok(watcher)
 }
 
 /// Returns the `~/.local/bin` link name for the bundled CLI.

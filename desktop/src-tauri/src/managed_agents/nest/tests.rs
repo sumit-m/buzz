@@ -345,6 +345,40 @@ fn agent_authored_skills_are_linked_into_every_runtime() {
     }
 }
 
+/// The link has to appear without a restart. An agent that writes a skill
+/// cannot ask everyone else in the channel to relaunch the app before they can
+/// run it, so boot-time linking alone is not enough.
+#[test]
+fn skill_watcher_links_a_skill_written_after_boot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(".buzz");
+    ensure_nest_at(&root).unwrap();
+
+    // Backends are unavailable on some filesystems and sandboxes. Production
+    // falls back to linking at the next launch, so skip rather than fail.
+    let Ok(_watcher) = build_skill_watcher(&root) else {
+        return;
+    };
+
+    let authored = root.join(".agents/skills/watched-skill");
+    fs::create_dir_all(&authored).unwrap();
+    fs::write(authored.join("SKILL.md"), "---\nname: watched-skill\n---\n").unwrap();
+
+    let link = root.join(".claude/skills/watched-skill");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while link.symlink_metadata().is_err() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "watcher should link a skill written after boot"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        link.join("SKILL.md").exists(),
+        "the link should resolve to the authored skill"
+    );
+}
+
 /// A loose file in the shared directory is not a skill and must not be linked.
 #[test]
 fn non_directories_in_the_shared_skills_root_are_ignored() {

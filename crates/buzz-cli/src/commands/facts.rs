@@ -82,16 +82,10 @@ fn enforce_caps(facts: &[Fact]) -> Result<(), CliError> {
         )));
     }
     for fact in facts {
-        // A record must occupy exactly one line. A newline lets it emit text
-        // that renders as one of the harness's own instruction bullets, or as
-        // the end of the fence that marks recorded content off from everything
-        // else in the section — see `facts_fetch::facts_block`.
+        // Backstop for records that did not arrive through `validate_text` —
+        // a document read back from the relay, or a future caller.
         if fact.text.chars().any(char::is_control) {
-            return Err(CliError::Usage(
-                "fact contains a line break or control character. A fact is a single \
-                 statement on one line — put the detail in the thread."
-                    .to_string(),
-            ));
+            return Err(CliError::Usage(ONE_LINE_REFUSAL.to_string()));
         }
         let len = fact.text.chars().count();
         if len > MAX_FACT_CHARS {
@@ -146,12 +140,35 @@ pub async fn cmd_get(client: &BuzzClient, channel_id: &str) -> Result<(), CliErr
     Ok(())
 }
 
+/// Reject a record that would not survive rendering as written.
+///
+/// Checked before the head read, next to the empty-text check, so a malformed
+/// record costs no round trip and needs no credentials to discover. The
+/// document-wide caps still run in [`publish`] — they need the head to know how
+/// many records there would be.
+fn validate_text(text: &str, what: &str) -> Result<(), CliError> {
+    if text.is_empty() {
+        return Err(CliError::Usage(format!("{what} is empty")));
+    }
+    if text.chars().any(char::is_control) {
+        return Err(CliError::Usage(ONE_LINE_REFUSAL.to_string()));
+    }
+    Ok(())
+}
+
+/// Why a record must occupy exactly one line: a newline lets it emit text that
+/// renders as one of the harness's own instruction bullets, or as the fence
+/// marking recorded content off from everything else in the section — see
+/// `buzz-acp`'s `facts_fetch::facts_block`.
+///
+/// One constant, two call sites. Written out twice, it drifted immediately.
+const ONE_LINE_REFUSAL: &str = "fact contains a line break or control character. \
+     A fact is a single statement on one line — put the detail in the thread.";
+
 pub async fn cmd_add(client: &BuzzClient, channel_id: &str, text: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     let text = text.trim();
-    if text.is_empty() {
-        return Err(CliError::Usage("fact text is empty".into()));
-    }
+    validate_text(text, "fact text")?;
     let head = read_head(client, channel_id).await?;
     let mut facts = head.facts;
     facts.push(Fact {
@@ -169,9 +186,7 @@ pub async fn cmd_supersede(
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     let text = text.trim();
-    if text.is_empty() {
-        return Err(CliError::Usage("replacement text is empty".into()));
-    }
+    validate_text(text, "replacement text")?;
     let head = read_head(client, channel_id).await?;
     let mut facts = head.facts;
     let Some(target) = facts.iter_mut().find(|f| f.id == id) else {

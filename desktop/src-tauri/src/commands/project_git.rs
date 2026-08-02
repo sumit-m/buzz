@@ -704,7 +704,9 @@ pub async fn list_project_local_repositories(
                 if !file_type.is_dir() && !file_type.is_symlink() {
                     continue;
                 }
-                let Ok(path) = entry.path().canonicalize() else {
+                // `dunce`, to match the form `canonical_repos_roots` returns —
+                // `starts_with` against a verbatim path never holds.
+                let Ok(path) = dunce::canonicalize(entry.path()) else {
                     continue;
                 };
                 if !path.starts_with(&repos_root) || !path.is_dir() || !path.join(".git").exists() {

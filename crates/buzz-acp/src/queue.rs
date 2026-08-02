@@ -5924,11 +5924,11 @@ mod tests {
             },
         )
         .join("\n\n");
-        // Previously this asserted the opposite: a threaded DM was answered at
-        // the DM root on the reasoning that a 1:1 is already linear. In practice
-        // that stranded the answer away from the message it replied to, exactly
-        // as it did in channels before `resolve_reply_anchor` — so a DM now
-        // answers at the level it was asked at too.
+        // Previously this asserted the opposite, from the original spec: every
+        // reply went to the top level. That spec was later refined to "answer at
+        // the level you were asked at" and the refinement reached channels only,
+        // so DMs kept the superseded rule and stranded nested replies at the DM
+        // root. This is the refinement catching up, not a change of mind.
         assert!(
             prompt.contains(&format!("--reply-to {event_id}")),
             "DM thread reply should anchor to the message it answers; prompt was:\n{prompt}"

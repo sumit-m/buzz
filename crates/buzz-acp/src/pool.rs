@@ -2747,8 +2747,12 @@ pub async fn run_prompt_task(
                 }
             }
             if needs_facts && !is_dm {
-                if let Some(section) =
-                    crate::facts_fetch::fetch_facts_section(cid, &ctx.rest_client).await
+                if let Some(section) = crate::facts_fetch::fetch_facts_section(
+                    cid,
+                    &ctx.rest_client,
+                    crate::facts_fetch::FactsRender::Birth,
+                )
+                .await
                 {
                     pending_facts = Some((scope.clone(), section));
                 }
@@ -2790,6 +2794,11 @@ pub async fn run_prompt_task(
     // session's life, so the replacement rides in this turn instead. Re-render
     // current head rather than replaying a diff — the list is small, and a diff
     // would ask the agent to reconstruct state from memory.
+    //
+    // The result is deliberately not cached back into `facts_sections`: that
+    // cache feeds session *birth*, which wants the full section, and this is
+    // the shorter replacement form. `mark_facts_changed` already dropped the
+    // stale entry, so the next birth re-fetches.
     let mut facts_refresh: Option<String> = None;
     if let PromptSource::Channel(scope) = &source {
         if agent
@@ -2797,12 +2806,12 @@ pub async fn run_prompt_task(
             .facts_refresh_pending
             .remove(&scope.channel_id())
         {
-            if let Some(section) =
-                crate::facts_fetch::fetch_facts_section(scope.channel_id(), &ctx.rest_client).await
-            {
-                facts_refresh = Some(crate::facts_fetch::as_refresh(&section));
-                agent.state.facts_sections.insert(scope.clone(), section);
-            }
+            facts_refresh = crate::facts_fetch::fetch_facts_section(
+                scope.channel_id(),
+                &ctx.rest_client,
+                crate::facts_fetch::FactsRender::Refresh,
+            )
+            .await;
         }
     }
 

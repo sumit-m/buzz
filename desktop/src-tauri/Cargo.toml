@@ -79,6 +79,10 @@ user-idle = { version = "0.6", default-features = false }
 atomic-write-file = "0.3"
 anyhow = "1"
 dirs = "6"
+# Canonicalization that stays out of Windows verbatim (`\\?\`) form. Git for
+# Windows rejects verbatim destination paths, so `git clone` into a canonical
+# repos root fails with "could not create work tree dir … Invalid argument".
+dunce = "1"
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-opener = "2"

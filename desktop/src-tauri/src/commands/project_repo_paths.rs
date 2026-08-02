@@ -2,6 +2,14 @@
 //!
 //! Shared by the project git commands (snapshots, sync status, push) and the
 //! project terminal launcher.
+//!
+//! Every path here is canonicalized through `dunce` rather than
+//! `Path::canonicalize`. On Windows the latter returns verbatim (`\\?\C:\…`)
+//! paths, and the repos root it produces is handed straight to `git clone` as
+//! the destination — which Git for Windows rejects outright ("could not create
+//! work tree dir … Invalid argument"). Containment checks compare these paths
+//! with `starts_with`, so the choice has to be uniform across the module: a
+//! simplified root and a verbatim candidate would never match.
 
 use crate::managed_agents::nest_dir;
 use url::Url;
@@ -61,11 +69,11 @@ fn checkout_git_config(
             repo_dir.join(git_dir)
         }
     };
-    let git_dir = git_dir.canonicalize().ok()?;
+    let git_dir = dunce::canonicalize(&git_dir).ok()?;
     if !git_dir.starts_with(repos_root) {
         return None;
     }
-    let config = git_dir.join("config").canonicalize().ok()?;
+    let config = dunce::canonicalize(git_dir.join("config")).ok()?;
     config.starts_with(repos_root).then_some(config)
 }
 
@@ -126,7 +134,7 @@ pub(crate) fn find_local_repo_dir(
     for repos_root in repos_roots {
         for candidate in local_repo_candidates(project_dtag, clone_url) {
             let candidate_path = repos_root.join(candidate);
-            let Ok(candidate_path) = candidate_path.canonicalize() else {
+            let Ok(candidate_path) = dunce::canonicalize(&candidate_path) else {
                 continue;
             };
             if !candidate_path.starts_with(&repos_root) || !candidate_path.is_dir() {
@@ -174,8 +182,7 @@ pub(crate) fn canonicalize_repos_root(
     if !repos_root.is_absolute() {
         return Err("reposDir must be an absolute path".to_string());
     }
-    let repos_root = repos_root
-        .canonicalize()
+    let repos_root = dunce::canonicalize(&repos_root)
         .map_err(|error| format!("reposDir is not accessible: {error}"))?;
     if !repos_root.is_dir() {
         return Err("reposDir is not a directory".to_string());
@@ -232,5 +239,29 @@ mod tests {
                 vec![nest.join("REPOS")]
             );
         }
+    }
+
+    use super::canonicalize_repos_root;
+    use crate::commands::project_git_exec::{build_test_git_auth_config, run_git};
+
+    /// The canonical repos root is handed to `git clone` as the destination
+    /// path, so it has to be a form git accepts. `Path::canonicalize` returns
+    /// Windows verbatim paths (`\\?\C:\…`), which git rejects with "could not
+    /// create work tree dir … Invalid argument" — a failure that only appears
+    /// on Windows and only at clone time, well after the path resolves fine
+    /// for every Rust-side `exists`/`starts_with` check.
+    #[test]
+    fn canonical_repos_root_is_usable_as_a_git_destination() {
+        let auth = build_test_git_auth_config().expect("build test git config");
+        let root = tempfile::tempdir().expect("create repos root");
+        let canonical =
+            canonicalize_repos_root(root.path().to_path_buf()).expect("canonicalize repos root");
+
+        let destination = canonical.join("owner--repo");
+        let destination = destination.to_str().expect("destination path is UTF-8");
+        run_git(&["init", "--end-of-options", destination], None, &auth)
+            .unwrap_or_else(|error| panic!("git rejected the canonical repos root: {error}"));
+
+        assert!(canonical.join("owner--repo").join(".git").is_dir());
     }
 }

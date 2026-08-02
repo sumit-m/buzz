@@ -35,7 +35,8 @@ use std::time::Duration;
 use acp::{AcpClient, EnvVar, McpServer};
 use anyhow::{ensure, Context, Result};
 use buzz_core::kind::{
-    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
+    KIND_CHANNEL_FACTS, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_STREAM_MESSAGE,
 };
 use buzz_core::observer::{
     decrypt_observer_payload, encrypt_observer_payload, OBSERVER_FRAME_TELEMETRY,
@@ -3481,6 +3482,30 @@ async fn run_harness(
                     match buzz_event {
                         Some(buzz_event) => {
                             let kind_u32 = buzz_event.event.kind.as_u16() as u32;
+
+                            // A facts change is a cache signal, not a turn. Left
+                            // to reach the queue it would wake every agent in the
+                            // channel on every curation.
+                            if kind_u32 == KIND_CHANNEL_FACTS {
+                                let ch = buzz_event.channel_id;
+                                // Our own write: the agent already knows what it
+                                // just recorded, and handing it back next turn
+                                // invites re-curating the same work.
+                                if buzz_event.event.pubkey == config.keys.public_key() {
+                                    tracing::debug!(
+                                        channel_id = %ch,
+                                        "skipping own channel-facts write"
+                                    );
+                                    continue;
+                                }
+                                let flagged = pool.mark_facts_changed(ch);
+                                tracing::info!(
+                                    channel_id = %ch,
+                                    flagged,
+                                    "channel facts changed — refresh queued for next turn"
+                                );
+                                continue;
+                            }
 
                             if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION
                                 || kind_u32 == KIND_MEMBER_REMOVED_NOTIFICATION

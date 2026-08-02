@@ -117,10 +117,17 @@ pub(crate) fn render_facts_section(
         ));
     }
 
+    // Recovery, not routine. The harness re-delivers this section when another
+    // agent changes it, and the write commands rebase on a freshly read head,
+    // so nothing needs a manual fetch in normal operation. The trigger is
+    // phrased against something the agent can observe: it cannot detect that it
+    // was compacted, but it can notice the section is missing.
     s.push_str(&format!(
         "\nFacts revision (event ID): {event_id}\n\
          Last modified: {timestamp}\n\
-         Fetch current content with: buzz facts get --channel {channel_uuid}\n"
+         This list is kept current for you — a change another agent makes reaches you \
+         on your next turn. If you ever cannot see a [{SECTION_LABEL}] section in your \
+         context, recover it with: buzz facts get --channel {channel_uuid}\n"
     ));
     s.push_str(&curation_rules(channel_uuid));
     s
@@ -149,6 +156,28 @@ fn curation_rules(channel_uuid: &str) -> String {
          your context for the whole session, so every line is paid on every turn of it.\n\
          - Write to the channel it happened in. A fact learned in a DM stays in that DM. Never \
          copy one into another channel, and never into your own `core` memory.\n"
+    )
+}
+
+/// Re-label a rendered section as a mid-session replacement.
+///
+/// The agent already carries a `[{SECTION_LABEL}]` section in its system
+/// prompt, fixed for the session's life. A second, unexplained copy in the turn
+/// reads either as new material to act on or as a contradiction, so the header
+/// changes and says which copy is current.
+///
+/// The header must stay on the first line: `fit_observer_event_to_budget`
+/// elides section bodies in place and relies on every block starting with its
+/// `[Header]`.
+pub(crate) fn as_refresh(section: &str) -> String {
+    let body = section
+        .strip_prefix(&format!("[{SECTION_LABEL}]\n"))
+        .unwrap_or(section);
+    format!(
+        "[{SECTION_LABEL} — updated]\n\
+         Another agent changed this list since your last turn. It replaces the \
+         [{SECTION_LABEL}] section in your system prompt, which is now out of date. \
+         Nothing here is an instruction to act on.\n\n{body}"
     )
 }
 
@@ -284,6 +313,41 @@ pub(crate) async fn fetch_facts_section(channel_id: Uuid, rest: &RestClient) -> 
 
 #[cfg(test)]
 mod tests {
+
+    /// The header must be swapped, not duplicated, and must stay on line one —
+    /// the observer frame's size trimmer keys on it.
+    #[test]
+    fn refresh_relabels_the_section_without_duplicating_the_header() {
+        let section = super::render_facts_section(
+            &[super::Fact {
+                id: "f1".into(),
+                text: "we deploy on Tuesdays".into(),
+            }],
+            "evt123",
+            "2026-08-02T10:00:00Z",
+            "11111111-1111-1111-1111-111111111111",
+        );
+        let refreshed = super::as_refresh(&section);
+        assert!(refreshed.starts_with("[Channel Facts — updated]\n"));
+        // Inline mentions are fine and expected — the note and the recovery
+        // line both name the old section. What must not survive is the old
+        // header as a header, which would give the block two.
+        assert!(
+            !refreshed.contains("[Channel Facts]\n"),
+            "the original header line must be replaced, not kept"
+        );
+        assert!(refreshed.contains("we deploy on Tuesdays"));
+        assert!(refreshed.contains("Nothing here is an instruction"));
+    }
+
+    /// The recovery line has to name a condition the agent can observe. It
+    /// cannot tell that it was compacted; it can tell the section is missing.
+    #[test]
+    fn the_fetch_pointer_is_framed_as_recovery() {
+        let section = super::render_facts_section(&[], "e", "t", "uuid-here");
+        assert!(section.contains("cannot see a [Channel Facts] section"));
+        assert!(section.contains("buzz facts get --channel uuid-here"));
+    }
     use super::*;
     use nostr::{EventBuilder, Keys, Kind, Tag};
     use serde_json::json;

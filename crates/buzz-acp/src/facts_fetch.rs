@@ -94,10 +94,12 @@ pub(crate) enum FactsRender {
     /// Session birth. The full section, curation rules included, bound for the
     /// system prompt where it stays for the session's life.
     Birth,
-    /// A mid-session replacement. Says why a second copy exists and carries the
-    /// records; the rules, the description and the recovery line are static and
-    /// already in the system prompt, so repeating them would re-bill ~1.3 KB of
-    /// text the agent already has every time a fact changes.
+    /// A mid-session replacement for the *records only*. The rules, the
+    /// description and the recovery line are static and already in the system
+    /// prompt, so repeating them would re-bill ~1.3 KB of text the agent
+    /// already has every time a fact changes — and the preamble says as much,
+    /// because a note claiming to supersede the whole section would discard
+    /// the agent's only copy of the curation rules.
     Refresh,
 }
 
@@ -179,10 +181,15 @@ pub(crate) fn render_facts_section(
              with: buzz facts get --channel {channel_uuid}\n\n",
             rules = curation_rules(channel_uuid)
         ),
+        // Scoped to the records on purpose. This form carries no rules, so
+        // telling the agent it supersedes the whole [Channel Facts] section
+        // would discard the curation rules along with the stale records — and
+        // the system-prompt copy is the only one it has.
         FactsRender::Refresh => format!(
             "[{SECTION_LABEL} — updated]\n\
-             Another agent changed this list since your last turn. It replaces the \
-             [{SECTION_LABEL}] section in your system prompt, which is now out of date.\n\n\
+             The records below replace those in the [{SECTION_LABEL}] section of your \
+             system prompt. The rest of that section — what a fact is and how to curate \
+             it — has not changed and still applies.\n\n\
              Revision {event_id} · last modified {timestamp}\n\n"
         ),
     };
@@ -375,6 +382,16 @@ mod tests {
             "the rules are static and already in the system prompt"
         );
         assert!(!refresh.contains("recover it with"));
+        // The replacement is scoped to the records. Claiming the whole section
+        // would tell the agent its only copy of the curation rules is stale.
+        assert!(
+            refresh.contains("records below replace"),
+            "the note must scope the replacement to the records"
+        );
+        assert!(
+            refresh.contains("has not changed and still applies"),
+            "the note must say the rules survive"
+        );
         assert!(birth.contains("How to curate it:"));
         assert!(
             refresh.len() * 2 < birth.len(),

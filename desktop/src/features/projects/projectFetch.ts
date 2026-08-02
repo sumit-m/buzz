@@ -1,4 +1,4 @@
-import { getCachedRelayOrigin } from "@/shared/lib/mediaUrl";
+import { resolveRelayOrigin } from "@/shared/lib/mediaUrl";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import {
   buildProjectHomeFromFetcher,
@@ -43,8 +43,13 @@ export async function fetchProjects(
     fetchExhaustively ??
     ((kinds, extraFilter) =>
       fetchProjectEventsExhaustively(kinds, extraFilter, undefined, signal));
+  // LOCAL DIVERGENCE: the origin is awaited, not read from cache. A project
+  // with no `clone` tag depends on the relay origin for its only clone URL,
+  // and an unresolved origin bakes an empty `cloneUrls` into this query's
+  // data — indistinguishable from "this project has no remote", disabling
+  // Clone and the repo panels until something else happens to refetch.
   const projects = await buildProjectsFromFetcher(fetcher, {
-    relayOrigin: getCachedRelayOrigin(),
+    relayOrigin: await resolveRelayOrigin(),
     hiddenAddresses: new Set(readHiddenProjectCards()),
     viewerPubkey,
   });
@@ -66,7 +71,7 @@ export async function fetchProjectHomeForChannel(
       fetchProjectEventsExhaustively(kinds, extraFilter, undefined, signal),
     channelId,
     {
-      relayOrigin: getCachedRelayOrigin(),
+      relayOrigin: await resolveRelayOrigin(),
       hiddenAddresses: new Set(readHiddenProjectCards()),
       viewerPubkey,
     },

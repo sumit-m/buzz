@@ -137,7 +137,7 @@ export type ProjectIssueListItem = {
 /**
  * Converts a kind:30617 repo announcement into a `Project`.
  *
- * `relayOrigin` is the resolved relay HTTP origin (from `getCachedRelayOrigin`)
+ * `relayOrigin` is the resolved relay HTTP origin (from `resolveRelayOrigin`)
  * used to synthesize a canonical clone URL when the announcement omits an
  * explicit `clone` tag. Callers outside the relay-connected app (e.g. unit
  * tests) may omit it, in which case no default is derived.

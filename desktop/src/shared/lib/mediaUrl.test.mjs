@@ -6,6 +6,7 @@ import {
   getCachedRelayOrigin,
   mediaProxyUrl,
   resetMediaCaches,
+  resolveRelayOrigin,
   subscribeRelayOrigin,
   withDeadline,
 } from "./mediaUrl.ts";
@@ -111,6 +112,70 @@ test("relay-origin store: a resolved origin publishes and notifies subscribers",
   assert.equal(notifications, 1);
 
   unsubscribe();
+  resetMediaCaches();
+});
+
+test("resolveRelayOrigin: returns an already-resolved origin without polling", async () => {
+  resetMediaCaches();
+  beginRelayOriginFetch()("https://relay.example");
+
+  assert.equal(await resolveRelayOrigin(), "https://relay.example");
+
+  resetMediaCaches();
+});
+
+test("resolveRelayOrigin: fails closed to null with no window to poll from", async () => {
+  resetMediaCaches();
+  const previousWindow = globalThis.window;
+  globalThis.window = undefined;
+  try {
+    assert.equal(await resolveRelayOrigin(), null);
+  } finally {
+    globalThis.window = previousWindow;
+  }
+  resetMediaCaches();
+});
+
+test("resolveRelayOrigin: polls the backend when the origin is not yet cached", async () => {
+  const previousWindow = globalThis.window;
+  globalThis.window = {
+    __TAURI_INTERNALS__: {
+      invoke(command) {
+        if (command === "get_media_proxy_port") return Promise.resolve(54321);
+        if (command === "get_relay_http_url") {
+          return Promise.resolve("https://relay.example");
+        }
+        return Promise.reject(new Error(`Unexpected command: ${command}`));
+      },
+    },
+  };
+
+  try {
+    const mediaUrl = await import(`./mediaUrl.ts?resolveOrigin=${Date.now()}`);
+    // Clearing first is what a workspace switch does, and it is the state in
+    // which the origin would otherwise stay null for the rest of the session.
+    mediaUrl.resetMediaCaches();
+    assert.equal(mediaUrl.getCachedRelayOrigin(), null);
+
+    assert.equal(await mediaUrl.resolveRelayOrigin(), "https://relay.example");
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
+
+test("resolveRelayOrigin: does not hand back an origin cleared by a workspace switch", async () => {
+  resetMediaCaches();
+  beginRelayOriginFetch()("https://relay-a.example");
+  assert.equal(await resolveRelayOrigin(), "https://relay-a.example");
+
+  // Switching communities clears the origin; the previous community's value
+  // must not survive as the next one's clone-URL base.
+  resetMediaCaches();
+  assert.equal(getCachedRelayOrigin(), null);
+
+  beginRelayOriginFetch()("https://relay-b.example");
+  assert.equal(await resolveRelayOrigin(), "https://relay-b.example");
+
   resetMediaCaches();
 });
 

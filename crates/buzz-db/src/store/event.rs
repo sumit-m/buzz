@@ -2750,8 +2750,7 @@ impl Db {
         event_id: &[u8],
         root_event_id: Option<&[u8]>,
     ) -> Result<Vec<Vec<u8>>> {
-        crate::event::purge_deleted_event(&self.pool, community_id, event_id, root_event_id)
-            .await
+        crate::event::purge_deleted_event(&self.pool, community_id, event_id, root_event_id).await
     }
 
     /// Physically delete a channel, its events, and all dependent rows.

@@ -2728,7 +2728,7 @@ async fn plan_group_deletion_target(
     ])
 }
 
-/// Post the kind 9005 `message_deleted` system message for a deleted target.
+/// Post the `message_deleted` system message for a deleted target.
 async fn emit_group_deletion_tombstone(
     tenant: &TenantContext,
     event: &Event,
@@ -2739,16 +2739,7 @@ async fn emit_group_deletion_tombstone(
         .target
         .channel_id
         .ok_or_else(|| anyhow::anyhow!("target event has no channel"))?;
-    let actor_hex = hex::encode(event.pubkey.to_bytes());
-    let mut tombstone = serde_json::json!({
-        "type": "message_deleted",
-        "actor": actor_hex,
-        "target_event_id": hex::encode(&planned.id),
-    });
-    copy_optional_string_field(event, &mut tombstone, "action_id");
-    copy_optional_string_field(event, &mut tombstone, "reason_code");
-    copy_optional_string_field(event, &mut tombstone, "public_reason");
-
+    let tombstone = delete_tombstone_content(event, &planned.id);
     emit_system_message(tenant, state, channel_id, tombstone, chrono::Utc::now()).await?;
     Ok(())
 }
@@ -3683,8 +3674,21 @@ pub(crate) async fn persist_deletion(
                 error!(target_event = %hex::encode(&planned.id), "NIP-29 DELETE_EVENT tombstone failed: {e}");
             }
             info!(target_event = %hex::encode(&planned.id), "NIP-29 DELETE_EVENT processed");
-        } else if u32::from(planned.target.event.kind.as_u16()) == KIND_REACTION {
-            remove_deleted_reaction(tenant, state, &planned.id, &planned.target).await;
+        } else {
+            let target_kind = u32::from(planned.target.event.kind.as_u16());
+            if target_kind == KIND_REACTION {
+                remove_deleted_reaction(tenant, state, &planned.id, &planned.target).await;
+            }
+            // LOCAL DIVERGENCE: upstream leaves no audit record for a kind:5
+            // delete, so a message removed from the UI vanished silently while
+            // the same message removed by an agent (kind:9005) left a
+            // tombstone. Both paths destroy the row; only one said so.
+            if delete_target_warrants_tombstone(target_kind) && planned.target.channel_id.is_some()
+            {
+                if let Err(e) = emit_group_deletion_tombstone(tenant, event, state, planned).await {
+                    error!(target_event = %hex::encode(&planned.id), "NIP-09 deletion tombstone failed: {e}");
+                }
+            }
         }
     }
     Ok((stored, inserted || repaired))
@@ -3964,28 +3968,33 @@ fn actor_is_channel_owner_or_admin(members: &[MemberRecord], actor: &[u8]) -> bo
         .any(|m| m.pubkey == actor && (m.role == "owner" || m.role == "admin"))
 }
 
-#[cfg(test)]
-fn delete_tombstone_content(
-    actor_hex: String,
-    target_event_id: String,
-    action_id: Option<String>,
-    reason_code: Option<String>,
-    public_reason: Option<String>,
-) -> serde_json::Value {
+/// Whether a destroyed kind:5 target should leave a tombstone.
+///
+/// Un-reacting is itself a kind:5 deletion — of the reaction event — so
+/// announcing every target would post "X deleted a message" each time someone
+/// removed an emoji. Excluding by reaction rather than allow-listing message
+/// kinds keeps an unenumerated kind noisy rather than silent: for an audit
+/// record, a missing tombstone is the worse failure.
+fn delete_target_warrants_tombstone(target_kind: u32) -> bool {
+    target_kind != KIND_REACTION
+}
+
+/// Build the kind:40099 tombstone body for a deletion event.
+///
+/// One definition for both delete routes — the desktop's kind:5 and the CLI's
+/// kind:9005 — because the audit record must not depend on which one destroyed
+/// the row. The moderation fields exist only on 9005; they are copied when
+/// present and omitted otherwise, so a kind:5 tombstone carries the three
+/// mandatory fields alone.
+fn delete_tombstone_content(deletion: &Event, target_id: &[u8]) -> serde_json::Value {
     let mut tombstone = serde_json::json!({
         "type": "message_deleted",
-        "actor": actor_hex,
-        "target_event_id": target_event_id,
+        "actor": hex::encode(deletion.pubkey.to_bytes()),
+        "target_event_id": hex::encode(target_id),
     });
-    if let Some(action_id) = action_id {
-        copy_optional_string_value(&mut tombstone, "action_id", action_id);
-    }
-    if let Some(reason_code) = reason_code {
-        copy_optional_string_value(&mut tombstone, "reason_code", reason_code);
-    }
-    if let Some(public_reason) = public_reason {
-        copy_optional_string_value(&mut tombstone, "public_reason", public_reason);
-    }
+    copy_optional_string_field(deletion, &mut tombstone, "action_id");
+    copy_optional_string_field(deletion, &mut tombstone, "reason_code");
+    copy_optional_string_field(deletion, &mut tombstone, "public_reason");
     tombstone
 }
 
@@ -5237,13 +5246,35 @@ mod tests {
     }
 
     #[test]
+    fn un_reacting_leaves_no_tombstone() {
+        // Removing an emoji is a kind:5 deletion of the reaction event. If it
+        // announced itself, every un-react would post "X deleted a message".
+        assert!(!delete_target_warrants_tombstone(KIND_REACTION));
+
+        // Everything else does announce — including kinds not enumerated here,
+        // which is the deliberate direction of the default.
+        assert!(delete_target_warrants_tombstone(9));
+        assert!(delete_target_warrants_tombstone(
+            buzz_core::kind::KIND_STREAM_MESSAGE_V2
+        ));
+    }
+
+    #[test]
     fn delete_tombstone_omits_absent_moderation_metadata() {
-        let content =
-            delete_tombstone_content("actor".to_string(), "target".to_string(), None, None, None);
+        // A desktop kind:5 delete: no moderation tags at all. This is the shape
+        // a human deletion produces now that both routes leave an audit record.
+        let keys = nostr::Keys::generate();
+        let target_id = [0xABu8; 32];
+        let deletion = EventBuilder::new(Kind::Custom(5), "")
+            .tags([Tag::parse(["e", &hex::encode(target_id)]).unwrap()])
+            .sign_with_keys(&keys)
+            .unwrap();
+
+        let content = delete_tombstone_content(&deletion, &target_id);
 
         assert_eq!(content["type"], "message_deleted");
-        assert_eq!(content["actor"], "actor");
-        assert_eq!(content["target_event_id"], "target");
+        assert_eq!(content["actor"], hex::encode(keys.public_key().to_bytes()));
+        assert_eq!(content["target_event_id"], hex::encode(target_id));
         assert!(content.get("action_id").is_none());
         assert!(content.get("reason_code").is_none());
         assert!(content.get("public_reason").is_none());
@@ -5251,17 +5282,24 @@ mod tests {
 
     #[test]
     fn delete_tombstone_carries_optional_moderation_metadata() {
-        let content = delete_tombstone_content(
-            "actor".to_string(),
-            "target".to_string(),
-            Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
-            Some("spam".to_string()),
-            Some("Removed for spam.".to_string()),
-        );
+        let keys = nostr::Keys::generate();
+        let target_id = [0xCDu8; 32];
+        let deletion = EventBuilder::new(Kind::Custom(9005), "")
+            .tags([
+                Tag::parse(["e", &hex::encode(target_id)]).unwrap(),
+                Tag::parse(["action_id", "550e8400-e29b-41d4-a716-446655440000"]).unwrap(),
+                Tag::parse(["reason_code", "spam"]).unwrap(),
+                Tag::parse(["public_reason", "Removed for spam."]).unwrap(),
+                Tag::parse(["reporter", "should-not-be-copied"]).unwrap(),
+            ])
+            .sign_with_keys(&keys)
+            .unwrap();
+
+        let content = delete_tombstone_content(&deletion, &target_id);
 
         assert_eq!(content["type"], "message_deleted");
-        assert_eq!(content["actor"], "actor");
-        assert_eq!(content["target_event_id"], "target");
+        assert_eq!(content["actor"], hex::encode(keys.public_key().to_bytes()));
+        assert_eq!(content["target_event_id"], hex::encode(target_id));
         assert_eq!(content["action_id"], "550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(content["reason_code"], "spam");
         assert_eq!(content["public_reason"], "Removed for spam.");

@@ -82,8 +82,8 @@ use initial_window::*;
 use managed_agents::{
     backfill_persona_snapshots, ensure_nest, list_managed_agent_runtimes,
     put_managed_agent_runtime_lifecycle, reconcile_managed_agent_runtimes,
-    restart_managed_agent_runtime, start_managed_agent_runtime, stop_managed_agent_runtime,
-    try_regenerate_nest,
+    restart_managed_agent_runtime, start_managed_agent_runtime, start_skill_watcher,
+    stop_managed_agent_runtime, try_regenerate_nest,
 };
 #[cfg(not(feature = "mesh-llm"))]
 use mesh_llm_stubs::*;
@@ -383,6 +383,12 @@ pub fn run() {
                 eprintln!("buzz-desktop: failed to create nest: {error}");
             }
             archive::spawn_warm_init(app_handle.clone());
+
+            // Keep the shared skills directory linked into every runtime while
+            // the app runs, so a skill one agent writes is usable by the others
+            // on their next turn instead of after a restart. Must follow
+            // ensure_nest(): the directory being watched is created there.
+            start_skill_watcher();
 
             // Resolve the REPOS symlink from the persisted repos_dir BEFORE
             // agents are restored below, and decide whether restore is safe.

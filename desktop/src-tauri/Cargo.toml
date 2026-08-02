@@ -88,6 +88,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 infer = "0.19"
+# Filesystem watcher for the shared skills directory (see managed_agents::nest).
+# Unrelated to notify-rust above, which is Linux desktop notifications.
+notify = "8"
 hex = "0.4"
 ed25519-dalek = "=3.0.0"
 tokio = { version = "1", features = ["fs", "sync", "rt", "macros", "time", "net", "io-util"] }

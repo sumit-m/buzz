@@ -32,6 +32,9 @@ let portPromise: Promise<number | null> | null = null;
  */
 let cachedRelayOrigin: string | null = null;
 
+/** In-flight `resolveRelayOrigin` poll, so concurrent callers share one. */
+let originPromise: Promise<void> | null = null;
+
 /**
  * Canonicalize a URL to its origin with a lowercased scheme/host.
  *
@@ -265,6 +268,10 @@ export function resetMediaCaches(): void {
   const hadCachedPort = cachedPort !== null;
   cachedPort = null;
   portPromise = null;
+  // A poll started for the previous community is generation-guarded and will
+  // publish nothing, so awaiting it would hand the next caller a null origin
+  // for the new one. Drop it and let the next `resolveRelayOrigin` start over.
+  originPromise = null;
   if (hadCachedPort) {
     notifyMediaProxyPortListeners();
   }
@@ -282,6 +289,40 @@ export function resetMediaCaches(): void {
  * whether to offer a Download action that could otherwise only error).
  */
 export function getCachedRelayOrigin(): string | null {
+  return cachedRelayOrigin;
+}
+
+/**
+ * The relay origin, waiting for it to resolve if it has not yet.
+ *
+ * For callers that must not silently degrade when the origin is missing —
+ * notably deriving a repository's relay-hosted clone URL, where `null` is
+ * indistinguishable from "this project has no remote" once it has been baked
+ * into cached query data.
+ *
+ * The module-load poll is a single 5s window: miss it (a slow backend start,
+ * Tauri IPC not up yet) and `cachedRelayOrigin` stays null for the rest of the
+ * session, because nothing re-enters the loop — `rewriteRelayUrl` restarts it
+ * only when `portPromise` is null, which a settled poll is not. A workspace
+ * switch has the same shape: `resetMediaCaches` clears the origin but only
+ * media rendering ever restarts resolution. This restarts it on demand, so a
+ * consumer that needs the origin gets one attempt of its own rather than
+ * inheriting whatever the media path happened to leave behind.
+ *
+ * Bounded by the same poll budget, and resolves to `null` when the origin is
+ * genuinely unavailable — callers still fail closed.
+ */
+export async function resolveRelayOrigin(): Promise<string | null> {
+  if (cachedRelayOrigin) return cachedRelayOrigin;
+  if (typeof window === "undefined") return null;
+  if (!originPromise) {
+    const attempt = fetchProxyPort().then(() => undefined);
+    originPromise = attempt;
+    attempt.finally(() => {
+      if (originPromise === attempt) originPromise = null;
+    });
+  }
+  await originPromise;
   return cachedRelayOrigin;
 }
 

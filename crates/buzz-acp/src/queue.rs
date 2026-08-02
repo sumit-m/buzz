@@ -2272,6 +2272,11 @@ pub struct FormatPromptArgs<'a> {
     /// Defaults to `false` so a caller that never sets it behaves as if this
     /// were the session's first message.
     pub standing_context_sent: bool,
+    /// A replacement `[Channel Facts]` section, when the list changed since
+    /// this session's last turn. Delivered here rather than in the system
+    /// prompt, which is fixed for the session's life. `None` on the common
+    /// turn, where nothing changed.
+    pub facts_refresh: Option<&'a str>,
 }
 
 /// The prompt sections that do not change for the life of a session: base
@@ -2420,6 +2425,12 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
             }
             .sections(),
         );
+    }
+
+    // 1b. A facts change that landed mid-session. Placed before `[Context]` so
+    // the turn's actual question stays last, where models attend most.
+    if let Some(section) = args.facts_refresh {
+        sections.push(section.to_string());
     }
 
     // 2. Context hints (with a same-level reply anchor).
@@ -3891,6 +3902,69 @@ mod tests {
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
         assert!(prompt.contains("Hint: Use `buzz messages get --channel <UUID>`"));
         assert!(!prompt.contains("<channel-context"));
+    }
+
+    /// A facts change mid-session rides in the turn, ahead of `[Context]`, so
+    /// the question the agent was actually asked stays last — where models
+    /// attend most.
+    #[test]
+    fn a_facts_refresh_precedes_the_context_section() {
+        let ch = Uuid::new_v4();
+        let batch = FlushBatch {
+            scope: SessionScope::Conversation { channel_id: ch },
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event: make_event("hello"),
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let out = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                has_system_prompt_support: true,
+                facts_refresh: Some("[Channel Facts — updated]\nreplacement"),
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+
+        let facts_at = out
+            .find("[Channel Facts — updated]")
+            .expect("refresh section");
+        let context_at = out.find("<context>").expect("context section");
+        assert!(
+            facts_at < context_at,
+            "refresh should come before <context>"
+        );
+    }
+
+    /// The common turn changes nothing, so it must cost nothing.
+    #[test]
+    fn an_unchanged_turn_carries_no_facts_section() {
+        let ch = Uuid::new_v4();
+        let batch = FlushBatch {
+            scope: SessionScope::Conversation { channel_id: ch },
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event: make_event("hello"),
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let out = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                has_system_prompt_support: true,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+        assert!(!out.contains("Channel Facts"));
     }
 
     #[test]

@@ -164,6 +164,15 @@ pub struct SessionState {
     /// fail open), cleared on session invalidation so the next session picks up
     /// any curation that happened since.
     pub facts_sections: HashMap<SessionScope, String>,
+    /// Channels whose facts changed since this session last saw them.
+    ///
+    /// Set when a kind:40101 event arrives for a channel with a live session;
+    /// drained on that channel's next turn, which carries the replacement.
+    ///
+    /// Keyed by channel, not scope: a facts change is a channel-level fact.
+    /// Under the default channel policy there is one scope per channel, so
+    /// the drain is exact.
+    pub facts_refresh_pending: HashSet<Uuid>,
 }
 
 impl SessionState {
@@ -194,6 +203,7 @@ impl SessionState {
         self.deliveries.remove(scope);
         self.scope_owner_generations.remove(scope);
         self.facts_sections.remove(scope);
+        self.facts_refresh_pending.remove(&scope.channel_id());
         self.sessions.remove(scope).is_some()
     }
 
@@ -236,6 +246,30 @@ impl SessionState {
         self.deliveries.clear();
         self.scope_owner_generations.clear();
         self.facts_sections.clear();
+        self.facts_refresh_pending.clear();
+    }
+
+    /// Record that a channel's facts changed under a live session.
+    ///
+    /// Only a session that has already been handed a facts section needs the
+    /// replacement: a channel with no session fetches current facts at birth
+    /// anyway, and flagging it would deliver the same list twice on the first
+    /// turn. Returns `true` if a refresh is now pending.
+    pub fn mark_facts_changed(&mut self, channel_id: &Uuid) -> bool {
+        let scopes: Vec<SessionScope> = self
+            .sessions
+            .keys()
+            .filter(|scope| scope.channel_id() == *channel_id)
+            .cloned()
+            .collect();
+        if scopes.is_empty() {
+            return false;
+        }
+        for scope in scopes {
+            self.facts_sections.remove(&scope);
+        }
+        self.facts_refresh_pending.insert(*channel_id);
+        true
     }
 
     pub(crate) fn mark_scope_delivery_success(
@@ -268,6 +302,7 @@ impl SessionState {
             || self.canvas_sections.keys().any(matches)
             || self.deliveries.keys().any(matches)
             || self.facts_sections.keys().any(matches)
+            || self.facts_refresh_pending.contains(channel_id)
     }
 }
 
@@ -1407,6 +1442,22 @@ impl AgentPool {
             return false;
         };
         scopes.any(|scope| scope != first)
+    }
+
+    /// Mark a channel's facts as changed on every agent holding a live session
+    /// for it, so each carries the replacement into its next turn.
+    ///
+    /// Returns the number of sessions flagged.
+    pub fn mark_facts_changed(&mut self, channel_id: Uuid) -> usize {
+        let mut count = 0;
+        for slot in &mut self.agents {
+            if let Some(agent) = slot.as_mut() {
+                if agent.state.mark_facts_changed(&channel_id) {
+                    count += 1;
+                }
+            }
+        }
+        count
     }
 
     /// Idle-path model switch: set `desired_model` on the idle agent for
@@ -2735,6 +2786,26 @@ pub async fn run_prompt_task(
         PromptSource::Heartbeat => None,
     };
 
+    // A facts change landed mid-session. The system prompt is fixed for the
+    // session's life, so the replacement rides in this turn instead. Re-render
+    // current head rather than replaying a diff — the list is small, and a diff
+    // would ask the agent to reconstruct state from memory.
+    let mut facts_refresh: Option<String> = None;
+    if let PromptSource::Channel(scope) = &source {
+        if agent
+            .state
+            .facts_refresh_pending
+            .remove(&scope.channel_id())
+        {
+            if let Some(section) =
+                crate::facts_fetch::fetch_facts_section(scope.channel_id(), &ctx.rest_client).await
+            {
+                facts_refresh = Some(crate::facts_fetch::as_refresh(&section));
+                agent.state.facts_sections.insert(scope.clone(), section);
+            }
+        }
+    }
+
     let (session_id, is_new_session) = match &source {
         PromptSource::Channel(scope) => {
             let cid = &scope.channel_id();
@@ -3195,6 +3266,7 @@ pub async fn run_prompt_task(
         crate::queue::format_prompt(
             b,
             &crate::queue::FormatPromptArgs {
+                facts_refresh: facts_refresh.as_deref(),
                 agent_core: standing.agent_core,
                 huddle_instructions: standing.huddle_instructions,
                 channel_info: channel_info.as_ref(),
@@ -5975,6 +6047,41 @@ async fn clear_reactions(rest: crate::relay::RestClient, event_ids: Vec<String>)
 
 #[cfg(test)]
 pub(crate) mod tests {
+
+    /// A refresh only means something for a session that already carries a
+    /// facts section. Flagging a channel with no session would deliver the
+    /// same list twice on its first turn — once in the system prompt at birth,
+    /// once again in the turn.
+    #[test]
+    fn facts_changes_flag_only_live_sessions() {
+        let mut state = SessionState::default();
+        let ch = Uuid::new_v4();
+
+        assert!(
+            !state.mark_facts_changed(&ch),
+            "no session yet — birth will fetch current facts anyway"
+        );
+        assert!(state.facts_refresh_pending.is_empty());
+
+        let scope = SessionScope::Conversation { channel_id: ch };
+        state.sessions.insert(scope.clone(), "sess-1".to_string());
+        state
+            .facts_sections
+            .insert(scope.clone(), "<channel-facts>\nstale".to_string());
+
+        assert!(state.mark_facts_changed(&ch));
+        assert!(state.facts_refresh_pending.contains(&ch));
+        assert!(
+            !state.facts_sections.contains_key(&scope),
+            "the stale render must not survive the change that invalidated it"
+        );
+
+        state.invalidate_channel(&ch);
+        assert!(
+            state.facts_refresh_pending.is_empty(),
+            "a pending refresh dies with the session it was queued for"
+        );
+    }
     use super::*;
     use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
     use serde_json::json;

@@ -125,8 +125,8 @@ const GATED_OBSERVER_QUEUE_CAP: usize = 256;
 use std::time::Instant;
 
 use buzz_core::kind::{
-    KIND_AGENT_OBSERVER_FRAME, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
-    KIND_TYPING_INDICATOR,
+    KIND_AGENT_OBSERVER_FRAME, KIND_CHANNEL_FACTS, KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_TYPING_INDICATOR,
 };
 use futures_util::{SinkExt, StreamExt};
 use nostr::{Event, EventBuilder, Keys, Kind, RelayUrl, Tag};
@@ -3456,6 +3456,19 @@ async fn wait_for_reconnect(
 ///   history. On reconnect (`since` is `Some`) subtracts [`SINCE_SKEW_SECS`].
 ///
 /// Returns `true` if the REQ was successfully written to the WebSocket.
+/// Whether the channel REQ needs a second filter to receive kind 40101.
+///
+/// The primary filter already carries facts events only when it names the kind
+/// (or is a wildcard) *and* does not require a mention — a facts event has no
+/// `#p` tag, so `require_mention` alone is enough to hide it.
+fn needs_facts_filter(filter: &ChannelFilter) -> bool {
+    let kind_covered = match &filter.kinds {
+        None => true,
+        Some(kinds) => kinds.contains(&KIND_CHANNEL_FACTS),
+    };
+    !kind_covered || filter.require_mention
+}
+
 async fn send_subscribe(
     ws: &mut WsStream,
     state: &mut BgState,
@@ -3492,7 +3505,20 @@ async fn send_subscribe(
     };
     req_filter.insert("since".into(), json!(since_ts));
 
-    let req = json!(["REQ", sub_id, Value::Object(req_filter)]);
+    // A facts event carries no `#p` tag, so `require_mention` hides it from the
+    // primary filter. NIP-01 REQs take any number of filters, OR'd, so a second
+    // one delivers kind 40101 on this same subscription — inheriting its id,
+    // reconnect path and `since` skew rather than re-deriving them.
+    let req = if needs_facts_filter(filter) {
+        let facts_filter = json!({
+            "kinds": [KIND_CHANNEL_FACTS],
+            "#h": [channel_id.to_string()],
+            "since": since_ts,
+        });
+        json!(["REQ", sub_id, Value::Object(req_filter), facts_filter])
+    } else {
+        json!(["REQ", sub_id, Value::Object(req_filter)])
+    };
 
     match serde_json::to_string(&req) {
         Ok(text) => {
@@ -4398,6 +4424,38 @@ mod resume_tests;
 
 #[cfg(test)]
 mod tests {
+
+    /// A facts event carries no `#p` tag, so a mention-filtered subscription
+    /// hides it. Without the second filter the refresh signal never arrives.
+    #[test]
+    fn mention_filtered_channels_need_a_second_facts_filter() {
+        assert!(super::needs_facts_filter(&ChannelFilter {
+            kinds: Some(vec![buzz_core::kind::KIND_STREAM_MESSAGE]),
+            require_mention: true,
+        }));
+    }
+
+    #[test]
+    fn kind_filtered_channels_need_a_second_facts_filter() {
+        assert!(super::needs_facts_filter(&ChannelFilter {
+            kinds: Some(vec![buzz_core::kind::KIND_STREAM_MESSAGE]),
+            require_mention: false,
+        }));
+    }
+
+    /// A wildcard subscription with no mention requirement already carries
+    /// them; a second filter would be redundant traffic.
+    #[test]
+    fn wildcard_channels_need_no_facts_filter() {
+        assert!(!super::needs_facts_filter(&ChannelFilter {
+            kinds: None,
+            require_mention: false,
+        }));
+        assert!(!super::needs_facts_filter(&ChannelFilter {
+            kinds: Some(vec![buzz_core::kind::KIND_CHANNEL_FACTS]),
+            require_mention: false,
+        }));
+    }
     use super::*;
 
     #[test]

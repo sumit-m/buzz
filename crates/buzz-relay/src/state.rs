@@ -1826,7 +1826,7 @@ impl AppState {
             &config.media.s3_endpoint,
             &config.media.s3_access_key,
             &config.media.s3_secret_key,
-            &config.media.s3_bucket,
+            &config.git_s3_bucket,
             &config.media.s3_region,
             config.media.s3_addressing_style,
         )

@@ -381,6 +381,15 @@ pub struct Config {
     pub git_max_repos_per_pubkey: u32,
     /// Maximum concurrent git subprocess operations. Default: 20.
     pub git_max_concurrent_ops: usize,
+    /// Bucket holding git objects. Defaults to the media bucket, which is what
+    /// every existing deployment has.
+    ///
+    /// Setting it to something else is the only way to make "reclamation can
+    /// never reach media" structural rather than a matter of the delete path
+    /// being careful about prefixes. Media is referenced by Blossom hashes in
+    /// events and by no git manifest, so anything that enumerated a shared
+    /// bucket and deleted the unreferenced would take out every upload.
+    pub git_s3_bucket: String,
     /// HMAC secret for git pre-receive hook callbacks.
     /// Used to authenticate internal policy endpoint requests.
     pub git_hook_hmac_secret: String,
@@ -1219,6 +1228,10 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(20);
+        let git_s3_bucket: String = std::env::var("BUZZ_GIT_S3_BUCKET")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| media.s3_bucket.clone());
         let git_hook_hmac_secret: String = std::env::var("BUZZ_GIT_HOOK_HMAC_SECRET")
             .unwrap_or_else(|_| {
                 // Generate a random secret if not configured (dev mode).
@@ -1590,6 +1603,7 @@ impl Config {
             git_pack_cache_max_concurrent_populations,
             git_max_repos_per_pubkey,
             git_max_concurrent_ops,
+            git_s3_bucket,
             git_hook_hmac_secret,
             push_enabled,
             push_executor_key_id,
@@ -1891,6 +1905,10 @@ mod tests {
         assert!(
             !config.serve_git_web_gui,
             "serve_git_web_gui should default to false"
+        );
+        assert_eq!(
+            config.git_s3_bucket, config.media.s3_bucket,
+            "git objects share the media bucket unless BUZZ_GIT_S3_BUCKET is set"
         );
         assert_eq!(
             config.media.s3_addressing_style,

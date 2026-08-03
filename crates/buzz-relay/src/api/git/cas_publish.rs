@@ -74,8 +74,8 @@ use tokio::process::Command;
 use tracing::{debug, warn};
 
 use crate::api::git::manifest::{
-    digest_of_manifest_key, is_pack_key, next_published_at, Manifest, ManifestError, RepoScope,
-    MANIFEST_VERSION, MAX_MANIFEST_PACKS, MAX_MANIFEST_REFS, PACK_COMPACTION_THRESHOLD,
+    digest_of_manifest_key, digest_of_pack_key, next_published_at, Manifest, ManifestError,
+    RepoScope, MANIFEST_VERSION, MAX_MANIFEST_PACKS, MAX_MANIFEST_REFS, PACK_COMPACTION_THRESHOLD,
 };
 use crate::api::git::reclaim;
 use crate::api::git::store::{CasOutcome, ETag, GitStore, Precond, StoreError};
@@ -466,19 +466,12 @@ fn resolve_published_head(
 /// `repos/<community>/<owner>/<repo>/packs/<digest>`. `is_pack_key` is what
 /// decides the key is well-formed; this only extracts.
 fn digest_from_pack_key(key: &str) -> Result<String, CasError> {
-    if !is_pack_key(key) {
-        return Err(CasError::Backend(StoreError::Backend(
-            s3::error::S3Error::HttpFailWithBody(
-                500,
-                format!("put_pack returned non-standard key: {key}"),
-            ),
-        )));
-    }
-    Ok(key
-        .rsplit_once('/')
-        .expect("is_pack_key requires a /")
-        .1
-        .to_string())
+    digest_of_pack_key(key).map(str::to_string).ok_or_else(|| {
+        CasError::Backend(StoreError::Backend(s3::error::S3Error::HttpFailWithBody(
+            500,
+            format!("put_pack returned non-standard key: {key}"),
+        )))
+    })
 }
 
 async fn write_idx_sidecar(
@@ -1407,7 +1400,7 @@ async fn cas_publish_inner(
                 "CAS lost race; resolving winner for reconcile"
             );
             let (winner_manifest, winner_manifest_key) =
-                read_winner_after_conflict(store, &pkey).await?;
+                read_winner_after_conflict(store, &scope, &pkey).await?;
             Err(CasError::Conflict {
                 winner_manifest,
                 winner_manifest_key,
@@ -1484,6 +1477,7 @@ async fn reclaim_after_compaction(
 /// reconciliation is possible.
 async fn read_winner_after_conflict(
     store: &GitStore,
+    scope: &RepoScope,
     pkey: &str,
 ) -> Result<(Box<Manifest>, String), CasError> {
     let Some((_etag, body)) = store.get_pointer(pkey).await? else {
@@ -1501,9 +1495,8 @@ async fn read_winner_after_conflict(
             digest.len()
         )));
     }
-    let manifest_key = format!("manifests/{digest}");
-    let bytes = store
-        .get_verified(&manifest_key, &digest)
+    let (manifest_key, bytes) = store
+        .get_manifest(scope, &digest, super::hydrate::MAX_MANIFEST_BYTES)
         .await
         .map_err(|e| match e {
             StoreError::DigestMismatch { .. } => {
@@ -2069,7 +2062,10 @@ mod tests {
         )
         .await
         .expect_err("stale parent must lose CAS");
-        assert!(matches!(conflict, CasError::Conflict { .. }));
+        assert!(
+            matches!(conflict, CasError::Conflict { .. }),
+            "got {conflict:?}"
+        );
 
         let hydrated = crate::api::git::hydrate::hydrate_for_read(
             &store,

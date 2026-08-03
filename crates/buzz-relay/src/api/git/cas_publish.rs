@@ -77,6 +77,7 @@ use crate::api::git::manifest::{
     digest_of_manifest_key, is_pack_key, next_published_at, Manifest, ManifestError, RepoScope,
     MANIFEST_VERSION, MAX_MANIFEST_PACKS, MAX_MANIFEST_REFS, PACK_COMPACTION_THRESHOLD,
 };
+use crate::api::git::reclaim;
 use crate::api::git::store::{CasOutcome, ETag, GitStore, Precond, StoreError};
 use buzz_core::TenantContext;
 
@@ -1126,6 +1127,10 @@ async fn cas_publish_inner(
     options: PublishOptions,
 ) -> Result<CasSuccess, CasError> {
     let limits = options.limits;
+    // Captured before this push writes anything, so it is a floor no object
+    // this push created can fall below. Reclamation uses it to tell "garbage
+    // from an earlier push" from "an upload that is still in flight".
+    let push_started_at = chrono::Utc::now();
     let scope = RepoScope::new(ctx.community(), owner, repo).ok_or_else(|| {
         CasError::PackCapture(format!(
             "invalid repo identity for object keys: {owner}/{repo}"
@@ -1353,6 +1358,21 @@ async fn cas_publish_inner(
                     Some(observation.packs_after),
                     Some(observation.compacted_bytes),
                 );
+                // Only after a compaction. A normal push appends to the pack
+                // set and orphans only its parent manifest — a few hundred
+                // bytes — so reconciling on every push would charge every
+                // quiet repo a listing to reclaim almost nothing. Compaction
+                // is where a repo's whole previous pack set becomes garbage,
+                // and it is rare enough to absorb the cost.
+                reclaim_after_compaction(
+                    store,
+                    &scope,
+                    &m_after,
+                    &manifest_key,
+                    push_started_at,
+                    &pkey,
+                )
+                .await;
             }
             Ok(CasSuccess {
                 manifest: m_after,
@@ -1392,6 +1412,65 @@ async fn cas_publish_inner(
                 winner_manifest,
                 winner_manifest_key,
             })
+        }
+    }
+}
+
+/// Free the objects the compaction just orphaned.
+///
+/// Never fails the push. The push is committed by the time this runs — the
+/// pointer already names `manifest` — so a cleanup that cannot finish is a
+/// missed optimisation, not a failed push, and the next compaction retries it.
+///
+/// The pointer re-read is redundant with the CAS: a push that started before
+/// ours holds a stale ETag and cannot win after us. It is here because the
+/// failure it guards against is deleting the packs of a repo that has moved on,
+/// and one GET is a cheap way to never have to reason about that again.
+async fn reclaim_after_compaction(
+    store: &GitStore,
+    scope: &RepoScope,
+    manifest: &Manifest,
+    manifest_key: &str,
+    push_started_at: chrono::DateTime<chrono::Utc>,
+    pointer_key: &str,
+) {
+    let expected_digest = match digest_of_manifest_key(manifest_key) {
+        Some(digest) => digest,
+        None => return,
+    };
+    match store.get_pointer(pointer_key).await {
+        Ok(Some((_, body))) if body.as_ref() == expected_digest.as_bytes() => {}
+        Ok(_) => {
+            debug!(
+                pointer = %pointer_key,
+                "pointer moved after compaction; skipping reclamation"
+            );
+            return;
+        }
+        Err(error) => {
+            warn!(error = %error, "could not confirm pointer before reclamation; skipping");
+            return;
+        }
+    }
+
+    match reclaim::reconcile_to_manifest(store, scope, manifest, manifest_key, push_started_at)
+        .await
+    {
+        Ok(reclaimed) => {
+            metrics::counter!("buzz_git_reclaimed_objects_total")
+                .increment(reclaimed.objects as u64);
+            metrics::counter!("buzz_git_reclaimed_bytes_total").increment(reclaimed.bytes);
+            if reclaimed.objects > 0 {
+                debug!(
+                    objects = reclaimed.objects,
+                    bytes = reclaimed.bytes,
+                    "reclaimed git objects orphaned by compaction"
+                );
+            }
+        }
+        Err(error) => {
+            metrics::counter!("buzz_git_reclaim_failures_total").increment(1);
+            warn!(error = %error, "git object reclamation failed; next compaction retries");
         }
     }
 }

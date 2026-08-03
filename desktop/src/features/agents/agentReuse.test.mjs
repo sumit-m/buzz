@@ -448,11 +448,8 @@ test("findPersonaAgentInChannel: prefers a running member over a stopped one", (
   });
 
   assert.equal(
-    findPersonaAgentInChannel(
-      [stopped, running],
-      "p1",
-      new Set([PUB_A, PUB_B]),
-    )?.pubkey,
+    findPersonaAgentInChannel([stopped, running], "p1", new Set([PUB_A, PUB_B]))
+      ?.pubkey,
     PUB_B,
   );
 });

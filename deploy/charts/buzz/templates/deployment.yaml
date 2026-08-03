@@ -168,6 +168,9 @@ spec:
             - { name: BUZZ_S3_ENDPOINT, value: {{ $s3Endpoint | quote }} }
             {{- end }}
             - { name: BUZZ_S3_BUCKET, value: {{ .Values.s3.bucket | quote }} }
+            {{- if .Values.s3.gitBucket }}
+            - { name: BUZZ_GIT_S3_BUCKET, value: {{ .Values.s3.gitBucket | quote }} }
+            {{- end }}
             - { name: BUZZ_S3_REGION, value: {{ .Values.s3.region | quote }} }
             - { name: BUZZ_S3_ADDRESSING_STYLE, value: {{ .Values.s3.addressingStyle | quote }} }
             - { name: BUZZ_STORAGE_METRICS, value: {{ .Values.storageAccounting.relayMode | quote }} }

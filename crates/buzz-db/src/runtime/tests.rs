@@ -3244,6 +3244,91 @@ async fn cluster_global_replica_floor_probe_waits_for_shared_writer_and_records_
     db.pool.close().await;
 }
 
+/// Deleting a repository must take its patches, issues, pull requests and
+/// statuses with it — they carry an `a` tag to the repo coordinate and
+/// would otherwise be reachable by REQ with nothing in the UI to reach
+/// them from. Scoped to the coordinate *and* the kind list, so a
+/// neighbouring repo's events and an unrelated kind carrying the same tag
+/// both survive.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn deleting_a_repo_coordinate_takes_its_satellite_events() {
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    let db = setup_db().await;
+    let community = CommunityId::from_uuid(make_community(&db.pool).await);
+    let keys = Keys::generate();
+    let owner = hex::encode(keys.public_key().to_bytes());
+    let doomed = format!("30617:{owner}:doomed");
+    let spared = format!("30617:{owner}:spared");
+
+    let event = |kind: u32, coordinate: &str, content: &str| {
+        EventBuilder::new(Kind::Custom(kind as u16), content)
+            .tags(vec![Tag::parse(["a", coordinate]).expect("a tag")])
+            .sign_with_keys(&keys)
+            .expect("sign satellite")
+    };
+
+    let satellites = [
+        (buzz_core::kind::KIND_GIT_ISSUE, doomed.as_str(), "issue"),
+        (buzz_core::kind::KIND_GIT_PATCH, doomed.as_str(), "patch"),
+        (
+            buzz_core::kind::KIND_GIT_STATUS_OPEN,
+            doomed.as_str(),
+            "status",
+        ),
+        // Same kind, different repo.
+        (buzz_core::kind::KIND_GIT_ISSUE, spared.as_str(), "other"),
+        // Same coordinate, a kind the delete does not claim.
+        (1, doomed.as_str(), "a plain note mentioning the repo"),
+    ];
+    for (kind, coordinate, content) in satellites {
+        assert!(
+            db.insert_event(community, &event(kind, coordinate, content), None)
+                .await
+                .expect("insert satellite")
+                .1
+        );
+    }
+
+    let kinds: Vec<i32> = [
+        buzz_core::kind::KIND_GIT_PATCH,
+        buzz_core::kind::KIND_GIT_ISSUE,
+        buzz_core::kind::KIND_GIT_STATUS_OPEN,
+    ]
+    .iter()
+    .map(|kind| *kind as i32)
+    .collect();
+
+    let deleted = db
+        .soft_delete_events_referencing_coordinate(community, &doomed, &kinds)
+        .await
+        .expect("cascade delete");
+    assert_eq!(deleted, 3, "issue, patch and status for the deleted repo");
+
+    let survivors: Vec<String> = sqlx::query_scalar(
+        "SELECT content FROM events \
+         WHERE community_id = $1 AND deleted_at IS NULL ORDER BY content",
+    )
+    .bind(community.as_uuid())
+    .fetch_all(&db.pool)
+    .await
+    .expect("read survivors");
+    assert_eq!(
+        survivors,
+        vec!["a plain note mentioning the repo", "other"],
+        "only the other repo's events and unclaimed kinds survive"
+    );
+
+    assert_eq!(
+        db.soft_delete_events_referencing_coordinate(community, &doomed, &kinds)
+            .await
+            .expect("re-run"),
+        0,
+        "re-issuing the deletion must be a no-op"
+    );
+}
+
 // ---- Statement-deadline cancellation vs. replica fallback ----------------
 //
 // A replica read cancelled by `statement_timeout` (SQLSTATE 57014) must be

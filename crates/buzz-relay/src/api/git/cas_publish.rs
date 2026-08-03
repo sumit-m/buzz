@@ -1102,10 +1102,53 @@ pub async fn cas_publish(
         workspace,
         PublishOptions {
             limits,
-            compaction_threshold: PACK_COMPACTION_THRESHOLD,
+            compaction_threshold: compaction_threshold(),
         },
     )
     .await
+}
+
+/// Pack count that triggers compaction, overridable for testing.
+///
+/// Defaults to [`PACK_COMPACTION_THRESHOLD`]. `BUZZ_GIT_PACK_COMPACTION_THRESHOLD`
+/// lowers it so a handful of pushes exercises compaction — and therefore inline
+/// reclamation — instead of the ~96 a real repository needs.
+///
+/// **Clamped to [`MAX_MANIFEST_PACKS`], deliberately.** That constant is a hard
+/// cap enforced by `Manifest::validate()` on both the read and write paths, not
+/// a tuning knob: setting the threshold above it does not reduce garbage, it
+/// bricks the repository. Every push appends a pack, the manifest that crosses
+/// the cap fails validation, and the only recovery is the compaction the
+/// setting disabled. Zero is clamped up for the same reason — compacting on
+/// every push would spend a full object-closure repack per commit.
+///
+/// Read once: a threshold that changed mid-process would make "did this push
+/// compact?" depend on when the environment was read.
+fn compaction_threshold() -> usize {
+    static THRESHOLD: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *THRESHOLD.get_or_init(|| {
+        let Some(configured) = std::env::var("BUZZ_GIT_PACK_COMPACTION_THRESHOLD")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+        else {
+            return PACK_COMPACTION_THRESHOLD;
+        };
+        let clamped = configured.clamp(1, MAX_MANIFEST_PACKS);
+        if clamped != configured {
+            warn!(
+                configured,
+                clamped, "BUZZ_GIT_PACK_COMPACTION_THRESHOLD out of range; clamped"
+            );
+        }
+        if clamped != PACK_COMPACTION_THRESHOLD {
+            warn!(
+                threshold = clamped,
+                default = PACK_COMPACTION_THRESHOLD,
+                "git pack compaction threshold overridden — for testing only"
+            );
+        }
+        clamped
+    })
 }
 
 #[allow(clippy::too_many_arguments)] // same parameters as `cas_publish`
@@ -1520,6 +1563,39 @@ mod tests {
     // (one source of truth — Max/Sami's centralization point).
     fn pack_key(ch: char) -> String {
         format!("packs/{}", ch.to_string().repeat(64))
+    }
+
+    /// The threshold override must never exceed `MAX_MANIFEST_PACKS`.
+    ///
+    /// Above the cap, `Manifest::validate` rejects the manifest that crosses
+    /// it on both the read and write paths, and the only thing that could have
+    /// shortened the pack list is the compaction the setting just disabled.
+    /// The clamp is what keeps a plausible-looking "turn compaction off" value
+    /// from being unrecoverable.
+    #[test]
+    fn compaction_threshold_override_stays_within_the_hard_cap() {
+        for configured in [
+            0usize,
+            1,
+            4,
+            MAX_MANIFEST_PACKS,
+            MAX_MANIFEST_PACKS + 1,
+            100_000,
+        ] {
+            let clamped = configured.clamp(1, MAX_MANIFEST_PACKS);
+            assert!(
+                (1..=MAX_MANIFEST_PACKS).contains(&clamped),
+                "{configured} clamped to {clamped}, outside 1..={MAX_MANIFEST_PACKS}"
+            );
+        }
+    }
+
+    #[test]
+    fn compaction_threshold_defaults_to_the_constant() {
+        if std::env::var("BUZZ_GIT_PACK_COMPACTION_THRESHOLD").is_ok() {
+            return;
+        }
+        assert_eq!(compaction_threshold(), PACK_COMPACTION_THRESHOLD);
     }
 
     #[test]

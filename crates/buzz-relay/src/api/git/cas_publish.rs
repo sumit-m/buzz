@@ -74,8 +74,8 @@ use tokio::process::Command;
 use tracing::{debug, warn};
 
 use crate::api::git::manifest::{
-    next_published_at, pointer_key, Manifest, ManifestError, MANIFEST_VERSION, MAX_MANIFEST_PACKS,
-    MAX_MANIFEST_REFS, PACK_COMPACTION_THRESHOLD,
+    digest_of_manifest_key, is_pack_key, next_published_at, Manifest, ManifestError, RepoScope,
+    MANIFEST_VERSION, MAX_MANIFEST_PACKS, MAX_MANIFEST_REFS, PACK_COMPACTION_THRESHOLD,
 };
 use crate::api::git::store::{CasOutcome, ETag, GitStore, Precond, StoreError};
 use buzz_core::TenantContext;
@@ -460,16 +460,24 @@ fn resolve_published_head(
     }
 }
 
+/// The pack digest is the key's last segment under either layout — the
+/// pre-namespacing `packs/<digest>` or the repo-scoped
+/// `repos/<community>/<owner>/<repo>/packs/<digest>`. `is_pack_key` is what
+/// decides the key is well-formed; this only extracts.
 fn digest_from_pack_key(key: &str) -> Result<String, CasError> {
-    key.strip_prefix("packs/")
-        .filter(|digest| digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit()))
-        .map(str::to_string)
-        .ok_or_else(|| {
-            CasError::Backend(StoreError::Backend(s3::error::S3Error::HttpFailWithBody(
+    if !is_pack_key(key) {
+        return Err(CasError::Backend(StoreError::Backend(
+            s3::error::S3Error::HttpFailWithBody(
                 500,
                 format!("put_pack returned non-standard key: {key}"),
-            )))
-        })
+            ),
+        )));
+    }
+    Ok(key
+        .rsplit_once('/')
+        .expect("is_pack_key requires a /")
+        .1
+        .to_string())
 }
 
 async fn write_idx_sidecar(
@@ -506,7 +514,7 @@ async fn write_idx_sidecar(
     let idx_bytes = tokio::fs::read(&idx_path)
         .await
         .map_err(|e| CasError::PackCapture(format!("read idx sidecar {pack_digest}: {e}")))?;
-    store.put_idx(&pack_digest, &idx_bytes).await?;
+    store.put_idx(pack_key, &idx_bytes).await?;
     Ok(())
 }
 
@@ -891,6 +899,7 @@ async fn capture_compacted_packs(
 
 async fn upload_compacted_packs(
     store: &GitStore,
+    scope: &RepoScope,
     compacted: &CompactedPacks,
 ) -> Result<Vec<String>, CasError> {
     let mut pack_keys = Vec::with_capacity(compacted.packs.len());
@@ -903,11 +912,10 @@ async fn upload_compacted_packs(
                 "compacted pack changed after size validation".into(),
             ));
         }
-        let pack_key = store.put_pack(&pack_bytes).await?;
-        let pack_digest = digest_from_pack_key(&pack_key)?;
+        let pack_key = store.put_pack(scope, &pack_bytes).await?;
         match tokio::fs::read(&pack.idx_path).await {
             Ok(idx_bytes) => {
-                if let Err(error) = store.put_idx(&pack_digest, &idx_bytes).await {
+                if let Err(error) = store.put_idx(&pack_key, &idx_bytes).await {
                     warn!(
                         pack_key = %pack_key,
                         error = %error,
@@ -932,6 +940,7 @@ async fn upload_compacted_packs(
 
 async fn prepare_compaction(
     store: &GitStore,
+    scope: &RepoScope,
     repo_path: &Path,
     refs_after: &BTreeMap<String, String>,
     limits: PublishLimits,
@@ -946,7 +955,7 @@ async fn prepare_compaction(
         )));
     }
     let compacted_bytes = compacted.total_pack_bytes;
-    let pack_keys = upload_compacted_packs(store, &compacted).await?;
+    let pack_keys = upload_compacted_packs(store, scope, &compacted).await?;
     Ok(PreparedCompaction {
         pack_keys,
         packs_after,
@@ -1030,7 +1039,7 @@ fn compose_compacted_after(
 /// Derive `manifests/<sha256>` from a returned manifest key, surfacing the
 /// hex digest the pointer body needs.
 fn digest_from_manifest_key(key: &str) -> Result<String, CasError> {
-    key.strip_prefix("manifests/")
+    digest_of_manifest_key(key)
         .map(str::to_string)
         .ok_or_else(|| {
             CasError::Backend(StoreError::Backend(s3::error::S3Error::HttpFailWithBody(
@@ -1117,7 +1126,12 @@ async fn cas_publish_inner(
     options: PublishOptions,
 ) -> Result<CasSuccess, CasError> {
     let limits = options.limits;
-    let pkey = pointer_key(ctx.community(), owner, repo);
+    let scope = RepoScope::new(ctx.community(), owner, repo).ok_or_else(|| {
+        CasError::PackCapture(format!(
+            "invalid repo identity for object keys: {owner}/{repo}"
+        ))
+    })?;
+    let pkey = scope.pointer_key();
     let scratch_dir = scratch_dir_of(repo_path)?;
 
     // `workspace` is the post-receive-pack state. `parent_state.parent.refs`
@@ -1144,6 +1158,7 @@ async fn cas_publish_inner(
             Ok(_permit) => {
                 let operation = prepare_compaction(
                     store,
+                    &scope,
                     repo_path,
                     &refs_after,
                     limits,
@@ -1234,7 +1249,7 @@ async fn cas_publish_inner(
                 )));
             }
             debug!(bytes = bytes.len(), "captured push pack");
-            let pack_key = store.put_pack(&bytes).await?;
+            let pack_key = store.put_pack(&scope, &bytes).await?;
             if let Err(e) = write_idx_sidecar(store, &pack_key, &bytes, scratch_dir).await {
                 warn!(
                     pack_key = %pack_key,
@@ -1288,7 +1303,7 @@ async fn cas_publish_inner(
 
     // Step 6: put_manifest.
     let manifest_bytes = m_after.canonical_bytes()?;
-    let manifest_key = match store.put_manifest(&manifest_bytes).await {
+    let manifest_key = match store.put_manifest(&scope, &manifest_bytes).await {
         Ok(key) => key,
         Err(error) => {
             if let Some(observation) = &compaction_observation {
@@ -1805,7 +1820,18 @@ mod tests {
         .expect("capture first")
         .expect("first pack");
         let first_pack_bytes = u64::try_from(first_pack.len()).expect("first pack length");
-        let first_pack_key = store.put_pack(&first_pack).await.expect("put first pack");
+        let ctx = tenant();
+        let owner = format!(
+            "{}{}",
+            hex::encode(uuid::Uuid::new_v4().as_bytes()),
+            hex::encode(uuid::Uuid::new_v4().as_bytes())
+        );
+        let repo = "history";
+        let scope = RepoScope::new(ctx.community(), &owner, repo).expect("scope");
+        let first_pack_key = store
+            .put_pack(&scope, &first_pack)
+            .await
+            .expect("put first pack");
         write_idx_sidecar(&store, &first_pack_key, &first_pack, scratch.path())
             .await
             .expect("first idx");
@@ -1847,7 +1873,10 @@ mod tests {
         .expect("capture second")
         .expect("second pack");
         let second_pack_bytes = u64::try_from(second_pack.len()).expect("second pack length");
-        let second_pack_key = store.put_pack(&second_pack).await.expect("put second pack");
+        let second_pack_key = store
+            .put_pack(&scope, &second_pack)
+            .await
+            .expect("put second pack");
         write_idx_sidecar(&store, &second_pack_key, &second_pack, scratch.path())
             .await
             .expect("second idx");
@@ -1863,14 +1892,11 @@ mod tests {
         };
         parent.validate().expect("parent manifest");
         let parent_key = store
-            .put_manifest(&parent.canonical_bytes().expect("parent bytes"))
+            .put_manifest(&scope, &parent.canonical_bytes().expect("parent bytes"))
             .await
             .expect("put parent");
         let parent_digest = digest_from_manifest_key(&parent_key).expect("parent digest");
-        let ctx = tenant();
-        let owner = format!("compact-{}", uuid::Uuid::new_v4());
-        let repo = "history";
-        let pkey = pointer_key(ctx.community(), &owner, repo);
+        let pkey = scope.pointer_key();
         match store
             .put_pointer(&pkey, parent_digest.as_bytes(), Precond::IfNoneMatchStar)
             .await

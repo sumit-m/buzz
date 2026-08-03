@@ -191,8 +191,49 @@ fn is_manifest_digest(s: &str) -> bool {
 }
 
 /// Content-addressed pack-key predicate.
+///
+/// Accepts both layouts. New writes land under a repo's own namespace
+/// (`repos/<community>/<owner>/<repo>/packs/<digest>`); manifests written
+/// before that change name global `packs/<digest>` keys and must keep
+/// resolving, since `Manifest.packs` stores full store keys and nothing
+/// rewrites them.
 pub fn is_pack_key(s: &str) -> bool {
-    s.strip_prefix("packs/").is_some_and(is_manifest_digest)
+    let Some((dir, digest)) = s.rsplit_once('/') else {
+        return false;
+    };
+    is_manifest_digest(digest) && (dir == "packs" || is_repo_scoped_dir(dir, "packs"))
+}
+
+/// The bare digest of a manifest key, under either layout.
+///
+/// Pointers and `Manifest::parent` store the bare digest, so every writer that
+/// has just produced a manifest key needs this to get back to it. Returns
+/// `None` for anything that is not a manifest key.
+pub fn digest_of_manifest_key(key: &str) -> Option<&str> {
+    let (dir, digest) = key.rsplit_once('/')?;
+    if !is_manifest_digest(digest) {
+        return None;
+    }
+    (dir == "manifests" || is_repo_scoped_dir(dir, "manifests")).then_some(digest)
+}
+
+/// True when `dir` is `repos/<community>/<owner>/<repo>/<leaf>` with no empty
+/// or dot segments.
+fn is_repo_scoped_dir(dir: &str, leaf: &str) -> bool {
+    let Some(rest) = dir.strip_prefix("repos/") else {
+        return false;
+    };
+    let Some(rest) = rest.strip_suffix(leaf) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_suffix('/') else {
+        return false;
+    };
+    let segments: Vec<&str> = rest.split('/').collect();
+    segments.len() == 3
+        && segments
+            .iter()
+            .all(|s| !s.is_empty() && *s != "." && *s != "..")
 }
 
 /// The canonical pointer key for a repo: `repos/<community>/<owner>/<repo>/pointer`.
@@ -205,6 +246,95 @@ pub fn is_pack_key(s: &str) -> bool {
 pub fn pointer_key(community: CommunityId, owner: &str, repo: &str) -> String {
     let repo = repo.strip_suffix(".git").unwrap_or(repo);
     format!("repos/{community}/{owner}/{repo}/pointer")
+}
+
+/// Every object one repository owns, under a single prefix.
+///
+/// Packs and manifests used to be keyed globally (`packs/<digest>`), which made
+/// them shared between repos and therefore impossible to free without proving
+/// no other repo referenced them. Scoping them per repo trades cross-repo
+/// dedup — worth little, since independent `pack-objects` runs rarely produce
+/// identical bytes — for two properties that are worth a great deal: deleting a
+/// repository is a prefix delete, and reclaiming a repository's garbage needs
+/// only the manifest that repository just published.
+///
+/// Keys stay content-addressed within the prefix, so `put_immutable`'s
+/// "412 means the key already holds exactly these bytes" argument is unchanged
+/// and idempotent retries still collapse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoScope {
+    prefix: String,
+}
+
+/// Owner must be a 64-char lowercase-hex pubkey.
+///
+/// Mirrors `transport::validate_repo_id`, which guards the push and clone
+/// paths. `RepoScope` re-checks rather than trusting its caller because the
+/// deletion path derives owner and repo from an event's `a` tag, which no HTTP
+/// route has validated, and turns them into a prefix it then deletes.
+fn is_owner_pubkey(owner: &str) -> bool {
+    owner.len() == 64
+        && owner
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+
+fn is_repo_component(repo: &str) -> bool {
+    !repo.is_empty()
+        && repo.len() <= 64
+        && !repo.starts_with('.')
+        && !repo.contains("..")
+        && repo
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+impl RepoScope {
+    /// Returns `None` when owner or repo would not survive
+    /// `transport::validate_repo_id` — i.e. when the caller cannot be trusted
+    /// to have produced a key that stays inside the intended namespace.
+    pub fn new(community: CommunityId, owner: &str, repo: &str) -> Option<Self> {
+        let repo = repo.strip_suffix(".git").unwrap_or(repo);
+        if !is_owner_pubkey(owner) || !is_repo_component(repo) {
+            return None;
+        }
+        Some(Self {
+            prefix: format!("repos/{community}/{owner}/{repo}"),
+        })
+    }
+
+    /// `repos/<community>/<owner>/<repo>` — no trailing slash.
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    /// The prefix every key this repo owns starts with, slash included.
+    ///
+    /// Use this and not [`prefix`](Self::prefix) for containment checks and
+    /// for listing: without the slash, `…/repo` also matches `…/repo-2`.
+    pub fn key_prefix(&self) -> String {
+        format!("{}/", self.prefix)
+    }
+
+    /// `<prefix>/pointer` — the one mutable key a repo has.
+    pub fn pointer_key(&self) -> String {
+        format!("{}/pointer", self.prefix)
+    }
+
+    /// Prefix for this repo's pack objects.
+    pub fn packs_prefix(&self) -> String {
+        format!("{}/packs", self.prefix)
+    }
+
+    /// Prefix for this repo's manifest objects.
+    pub fn manifests_prefix(&self) -> String {
+        format!("{}/manifests", self.prefix)
+    }
+
+    /// True when `key` is one this repo owns.
+    pub fn contains(&self, key: &str) -> bool {
+        key.starts_with(&self.key_prefix())
+    }
 }
 
 impl Manifest {
@@ -557,6 +687,106 @@ mod tests {
 
         assert_eq!(pointers[&pointer_key(a, "alice", "repo")], "manifest-a");
         assert_eq!(pointers[&pointer_key(b, "alice", "repo")], "manifest-b");
+    }
+
+    fn scope() -> RepoScope {
+        RepoScope::new(
+            CommunityId::from_uuid(uuid::Uuid::from_u128(1)),
+            &"a".repeat(64),
+            "myrepo",
+        )
+        .expect("valid scope")
+    }
+
+    #[test]
+    fn scope_agrees_with_pointer_key() {
+        let c = CommunityId::from_uuid(uuid::Uuid::from_u128(1));
+        let owner = "a".repeat(64);
+        assert_eq!(
+            RepoScope::new(c, &owner, "myrepo.git")
+                .expect("scope")
+                .pointer_key(),
+            pointer_key(c, &owner, "myrepo.git")
+        );
+    }
+
+    /// The delete path builds a prefix from an event's `a` tag, which no HTTP
+    /// route has validated. Anything that could escape the intended namespace
+    /// — or name a different repo — must not produce a scope at all.
+    #[test]
+    fn scope_rejects_identities_that_could_escape_the_namespace() {
+        let c = CommunityId::from_uuid(uuid::Uuid::from_u128(1));
+        let owner = "a".repeat(64);
+        assert!(
+            RepoScope::new(c, "alice", "repo").is_none(),
+            "owner not hex"
+        );
+        assert!(
+            RepoScope::new(c, &"A".repeat(64), "repo").is_none(),
+            "owner must be lowercase"
+        );
+        for bad in ["", "..", "../other", "a/b", ".hidden", &"x".repeat(65)] {
+            assert!(RepoScope::new(c, &owner, bad).is_none(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn scope_containment_does_not_match_a_sibling_with_a_longer_name() {
+        let c = CommunityId::from_uuid(uuid::Uuid::from_u128(1));
+        let owner = "a".repeat(64);
+        let repo = RepoScope::new(c, &owner, "repo").expect("scope");
+        let sibling = RepoScope::new(c, &owner, "repo-2").expect("scope");
+        assert!(repo.contains(&repo.pointer_key()));
+        assert!(!repo.contains(&sibling.pointer_key()));
+    }
+
+    #[test]
+    fn pack_keys_are_accepted_under_both_layouts() {
+        let digest = "a".repeat(64);
+        assert!(is_pack_key(&format!("packs/{digest}")));
+        assert!(is_pack_key(&format!("{}/{digest}", scope().packs_prefix())));
+    }
+
+    #[test]
+    fn pack_key_predicate_rejects_near_misses() {
+        let digest = "a".repeat(64);
+        for bad in [
+            format!("manifests/{digest}"),
+            format!("idx/{digest}"),
+            format!("repos/one/two/packs/{digest}"),
+            format!("repos//c/o/r/packs/{digest}"),
+            format!("evil/repos/c/o/r/packs/{digest}"),
+            format!("{}/{}", scope().packs_prefix(), "g".repeat(64)),
+        ] {
+            assert!(!is_pack_key(&bad), "{bad}");
+        }
+    }
+
+    /// A manifest written before namespacing names global pack keys and is
+    /// never rewritten, so `validate` must keep accepting it.
+    #[test]
+    fn validate_accepts_a_manifest_from_before_namespacing() {
+        let mut m = sample();
+        m.packs = vec![format!("packs/{}", "b".repeat(64))];
+        m.validate().expect("legacy pack keys still resolve");
+    }
+
+    #[test]
+    fn manifest_digest_round_trips_under_both_layouts() {
+        let digest = "c".repeat(64);
+        assert_eq!(
+            digest_of_manifest_key(&format!("manifests/{digest}")),
+            Some(digest.as_str())
+        );
+        assert_eq!(
+            digest_of_manifest_key(&format!("{}/{digest}", scope().manifests_prefix())),
+            Some(digest.as_str())
+        );
+        assert_eq!(
+            digest_of_manifest_key(&format!("{}/{digest}", scope().packs_prefix())),
+            None,
+            "a pack key is not a manifest key"
+        );
     }
 
     #[test]

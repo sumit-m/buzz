@@ -32,6 +32,8 @@ use s3::error::S3Error;
 use s3::{Bucket, Region};
 use sha2::{Digest, Sha256};
 
+use super::manifest::{is_pack_key, RepoScope};
+
 /// Opaque object-store ETag (used for `If-Match` on pointer CAS).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ETag(pub String);
@@ -247,20 +249,28 @@ impl GitStore {
         format!("{prefix}/{}", hex::encode(h.finalize()))
     }
 
-    /// Derive the idx sidecar key for a content-addressed pack digest.
+    /// Derive the idx sidecar key for a pack key.
     ///
-    /// The idx is a pure cache derived from `packs/<pack_digest>`, so it is
-    /// keyed by the pack digest rather than by the idx bytes. This keeps the
-    /// manifest schema unchanged: readers can derive `idx/<pack_digest>` from
-    /// each manifest pack key.
-    pub fn idx_key_for_pack_digest(pack_digest: &str) -> Result<String, StoreError> {
-        if pack_digest.len() != 64 || !pack_digest.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(StoreError::Backend(S3Error::HttpFailWithBody(
+    /// The idx is a pure cache derived from the pack, so it is keyed by the
+    /// pack digest rather than by the idx bytes. Deriving it from the *pack
+    /// key* rather than from the digest alone keeps the sidecar in whatever
+    /// namespace the pack itself lives in: `repos/…/packs/<d>` yields
+    /// `repos/…/idx/<d>`, and a pre-namespacing `packs/<d>` still yields
+    /// `idx/<d>`. Manifests are unchanged either way — readers derive this from
+    /// the pack key they already hold.
+    pub fn idx_key_for_pack_key(pack_key: &str) -> Result<String, StoreError> {
+        let invalid = || {
+            StoreError::Backend(S3Error::HttpFailWithBody(
                 400,
-                format!("invalid pack digest for idx sidecar: {pack_digest:?}"),
-            )));
+                format!("invalid pack key for idx sidecar: {pack_key:?}"),
+            ))
+        };
+        if !is_pack_key(pack_key) {
+            return Err(invalid());
         }
-        Ok(format!("idx/{pack_digest}"))
+        let (dir, digest) = pack_key.rsplit_once('/').ok_or_else(invalid)?;
+        let namespace = dir.strip_suffix("packs").ok_or_else(invalid)?;
+        Ok(format!("{namespace}idx/{digest}"))
     }
 
     /// Create-only write of a content-addressed object (pack or manifest).
@@ -301,21 +311,21 @@ impl GitStore {
         }
     }
 
-    /// Write a pack object. Returns the content-addressed key (`packs/<hex>`).
-    pub async fn put_pack(&self, bytes: &[u8]) -> Result<String, StoreError> {
-        self.put_immutable("packs", bytes, "application/x-git-pack")
+    /// Write a pack object into `scope`. Returns the content-addressed key.
+    pub async fn put_pack(&self, scope: &RepoScope, bytes: &[u8]) -> Result<String, StoreError> {
+        self.put_immutable(&scope.packs_prefix(), bytes, "application/x-git-pack")
             .await
     }
 
-    /// Best-effort create-only write of an idx sidecar for `packs/<pack_digest>`.
+    /// Best-effort create-only write of an idx sidecar for `pack_key`.
     ///
     /// Unlike packs/manifests, the key is not the SHA-256 of `idx_bytes`; it is
-    /// `idx/<pack_digest>` so hydrates can derive it without changing manifest
-    /// bytes. A 412 is idempotent success for the cache layer: the first writer
-    /// already produced the sidecar for this pack, and hydrate validates before
-    /// trusting it.
-    pub async fn put_idx(&self, pack_digest: &str, idx_bytes: &[u8]) -> Result<String, StoreError> {
-        let key = Self::idx_key_for_pack_digest(pack_digest)?;
+    /// derived from the pack key so hydrates can find it without changing
+    /// manifest bytes. A 412 is idempotent success for the cache layer: the
+    /// first writer already produced the sidecar for this pack, and hydrate
+    /// validates before trusting it.
+    pub async fn put_idx(&self, pack_key: &str, idx_bytes: &[u8]) -> Result<String, StoreError> {
+        let key = Self::idx_key_for_pack_key(pack_key)?;
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(axum::http::header::IF_NONE_MATCH, "*".parse().unwrap());
         match self
@@ -338,17 +348,17 @@ impl GitStore {
         }
     }
 
-    /// Read an idx sidecar for `packs/<pack_digest>`.
+    /// Read the idx sidecar belonging to `pack_key`.
     ///
     /// A missing idx is a cache miss, not a hydrate failure; callers should
     /// regenerate with `git index-pack`. Other backend failures are surfaced so
     /// callers can decide whether to fall back or fail.
     pub async fn get_idx(
         &self,
-        pack_digest: &str,
+        pack_key: &str,
         max_bytes: u64,
     ) -> Result<Option<Bytes>, StoreError> {
-        let key = Self::idx_key_for_pack_digest(pack_digest)?;
+        let key = Self::idx_key_for_pack_key(pack_key)?;
         match self.get_limited(&key, max_bytes).await {
             Ok(bytes) => Ok(Some(bytes)),
             Err(StoreError::NotFound(_)) => Ok(None),
@@ -356,9 +366,13 @@ impl GitStore {
         }
     }
 
-    /// Write a manifest object. Returns the content-addressed key (`manifests/<hex>`).
-    pub async fn put_manifest(&self, bytes: &[u8]) -> Result<String, StoreError> {
-        self.put_immutable("manifests", bytes, "application/json")
+    /// Write a manifest object into `scope`. Returns the content-addressed key.
+    pub async fn put_manifest(
+        &self,
+        scope: &RepoScope,
+        bytes: &[u8],
+    ) -> Result<String, StoreError> {
+        self.put_immutable(&scope.manifests_prefix(), bytes, "application/json")
             .await
     }
 
@@ -617,7 +631,9 @@ impl GitStore {
         // -- Phase 1: sequential --------------------------------------------------
         for round in 0..cfg.race_rounds {
             let body = format!("probe-sequential-{nonce}-{round}").into_bytes();
-            let key = self.put_pack(&body).await?;
+            let key = self
+                .put_immutable("probe", &body, "application/x-git-pack")
+                .await?;
             let got = self
                 .get_verified(&key, &Self::digest_hex(&body))
                 .await
@@ -983,18 +999,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn idx_key_uses_pack_digest_namespace() {
+    fn idx_key_sits_beside_its_pack() {
         let digest = "a".repeat(64);
         assert_eq!(
-            GitStore::idx_key_for_pack_digest(&digest).unwrap(),
+            GitStore::idx_key_for_pack_key(&format!("packs/{digest}")).unwrap(),
             format!("idx/{digest}")
+        );
+        let scoped = format!("repos/{}/{}/repo", uuid::Uuid::nil(), "b".repeat(64));
+        assert_eq!(
+            GitStore::idx_key_for_pack_key(&format!("{scoped}/packs/{digest}")).unwrap(),
+            format!("{scoped}/idx/{digest}")
         );
     }
 
     #[test]
-    fn idx_key_rejects_non_digest_input() {
-        for bad in ["packs/abc", "abc", "../escape", &"g".repeat(64)] {
-            assert!(GitStore::idx_key_for_pack_digest(bad).is_err());
+    fn idx_key_rejects_anything_that_is_not_a_pack_key() {
+        let digest = "a".repeat(64);
+        for bad in [
+            "packs/abc",
+            "abc",
+            "../escape",
+            &"g".repeat(64),
+            &format!("manifests/{digest}"),
+            &format!("repos/x/packs/{digest}"),
+        ] {
+            assert!(GitStore::idx_key_for_pack_key(bad).is_err(), "{bad}");
         }
     }
 
@@ -1484,8 +1513,17 @@ mod probe {
 
         // 1. put_pack returns the content-addressed key; get_verified happy path.
         let bytes = b"hello, git on object store".to_vec();
-        let key = st.put_pack(&bytes).await.expect("put_pack");
-        assert_eq!(key, format!("packs/{}", sha256_hex(&bytes)));
+        let scope = RepoScope::new(
+            buzz_core::CommunityId::from_uuid(uuid::Uuid::new_v4()),
+            &"c".repeat(64),
+            "probe",
+        )
+        .expect("scope");
+        let key = st.put_pack(&scope, &bytes).await.expect("put_pack");
+        assert_eq!(
+            key,
+            format!("{}/{}", scope.packs_prefix(), sha256_hex(&bytes))
+        );
         let got = st
             .get_verified(&key, &sha256_hex(&bytes))
             .await
@@ -1493,7 +1531,7 @@ mod probe {
         assert_eq!(&got[..], &bytes[..]);
 
         // 2. put_pack is idempotent — second call returns the same key.
-        let key2 = st.put_pack(&bytes).await.expect("idempotent");
+        let key2 = st.put_pack(&scope, &bytes).await.expect("idempotent");
         assert_eq!(key, key2);
 
         // 3. get_verified detects corruption — wrong expected digest fails.

@@ -283,7 +283,15 @@ impl GitPackCache {
         tokio::fs::write(&pack_path, &bytes)
             .await
             .map_err(|error| HydrateError::Hydrate(format!("write cached pack: {error}")))?;
-        install_or_generate_idx(store, staging.path(), digest, &pack_path, max_pack_bytes).await?;
+        install_or_generate_idx(
+            store,
+            staging.path(),
+            object_key,
+            digest,
+            &pack_path,
+            max_pack_bytes,
+        )
+        .await?;
         let idx_path = pack_path.with_extension("idx");
         let idx_bytes = tokio::fs::metadata(&idx_path)
             .await

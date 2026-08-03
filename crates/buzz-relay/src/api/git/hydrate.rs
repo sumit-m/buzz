@@ -34,7 +34,7 @@ use tempfile::TempDir;
 use tokio::process::Command;
 
 use super::cas_publish::ParentState;
-use super::manifest::{is_hex_oid, is_safe_refname, pointer_key, Manifest, ManifestError};
+use super::manifest::{is_hex_oid, is_safe_refname, Manifest, ManifestError, RepoScope};
 use super::pack_cache::GitPackCache;
 use super::store::{ETag, GitStore, StoreError};
 use buzz_core::TenantContext;
@@ -249,8 +249,8 @@ pub(super) async fn load_pointer(
     owner: &str,
     repo: &str,
 ) -> Result<Option<(ETag, String, Manifest)>, HydrateError> {
-    let pkey = pointer_key(ctx.community(), owner, repo);
-    let (etag, pointer_bytes) = match store.get_pointer(&pkey).await? {
+    let scope = RepoScope::new(ctx.community(), owner, repo).ok_or(HydrateError::InvalidPointer)?;
+    let (etag, pointer_bytes) = match store.get_pointer(&scope.pointer_key()).await? {
         Some(p) => p,
         None => return Ok(None),
     };
@@ -261,12 +261,49 @@ pub(super) async fn load_pointer(
     if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(HydrateError::InvalidPointer);
     }
-    let manifest_key = format!("manifests/{digest}");
-    let manifest_bytes =
-        get_verified_limited(store, &manifest_key, &digest, MAX_MANIFEST_BYTES).await?;
+    let manifest_bytes = load_manifest_bytes(store, &scope, &digest).await?;
     let manifest = Manifest::from_bytes(&manifest_bytes)?;
     manifest.validate()?;
     Ok(Some((etag, digest, manifest)))
+}
+
+/// Fetch the manifest named by the pointer.
+///
+/// The pointer body is a bare digest, so it does not say which key layout the
+/// manifest was written under. New manifests live in the repo's own namespace;
+/// manifests written before namespacing live at the global `manifests/<digest>`
+/// and are never rewritten. Try the repo's own namespace first — that is the
+/// only place a repo created after this change will ever have one — and fall
+/// back to the global key. The fallback costs one 404 per manifest read on
+/// pre-existing repos, and disappears from a repo the first time it is pushed
+/// to, because that push publishes a scoped manifest.
+///
+/// Both reads verify the digest, so neither layout can serve wrong bytes.
+async fn load_manifest_bytes(
+    store: &GitStore,
+    scope: &RepoScope,
+    digest: &str,
+) -> Result<bytes::Bytes, HydrateError> {
+    let scoped_key = format!("{}/{digest}", scope.manifests_prefix());
+    match store
+        .get_verified_limited(&scoped_key, digest, MAX_MANIFEST_BYTES)
+        .await
+    {
+        Ok(bytes) => Ok(bytes),
+        Err(StoreError::NotFound(_)) => {
+            get_verified_limited(
+                store,
+                &format!("manifests/{digest}"),
+                digest,
+                MAX_MANIFEST_BYTES,
+            )
+            .await
+        }
+        Err(StoreError::ObjectTooLarge { size, max, .. }) => Err(HydrateError::ResourceLimit(
+            format!("object {scoped_key} is {size} bytes (max {max})"),
+        )),
+        Err(err) => Err(err.into()),
+    }
 }
 
 pub(super) async fn get_verified_limited(
@@ -378,15 +415,19 @@ async fn materialize_manifest(
     })
 }
 
+/// `pack_key` is the manifest's key for this pack; the sidecar lives beside it,
+/// so it must be the key and not the bare digest. `pack_digest` is passed
+/// separately only because it is what the log lines and filenames use.
 pub(super) async fn install_or_generate_idx(
     store: &GitStore,
     repo_path: &Path,
+    pack_key: &str,
     pack_digest: &str,
     pack_path: &Path,
     max_idx_bytes: u64,
 ) -> Result<(), HydrateError> {
     let idx_path = pack_path.with_extension("idx");
-    match store.get_idx(pack_digest, max_idx_bytes).await {
+    match store.get_idx(pack_key, max_idx_bytes).await {
         Ok(Some(idx_bytes)) => {
             tokio::fs::write(&idx_path, &idx_bytes)
                 .await
@@ -533,6 +574,16 @@ mod tests {
 
     // `pointer_key` is tested in `super::manifest::tests` — single source.
 
+    /// A unique 64-hex owner. `RepoScope` rejects anything that is not a
+    /// pubkey, so live tests cannot use readable labels for the owner segment.
+    fn unique_owner() -> String {
+        format!(
+            "{}{}",
+            hex::encode(uuid::Uuid::new_v4().as_bytes()),
+            hex::encode(uuid::Uuid::new_v4().as_bytes())
+        )
+    }
+
     fn tenant() -> TenantContext {
         TenantContext::resolved(
             buzz_core::CommunityId::from_uuid(uuid::Uuid::from_u128(1)),
@@ -658,7 +709,11 @@ mod tests {
         let (pack_bytes, head_oid) = build_source_repo().await;
 
         // Upload pack and manifest to S3 under a unique pointer key.
-        let pack_key = st.put_pack(&pack_bytes).await.expect("put_pack");
+        let owner = unique_owner();
+        let repo = "hello";
+        let ctx = tenant();
+        let scope = RepoScope::new(ctx.community(), &owner, repo).expect("scope");
+        let pack_key = st.put_pack(&scope, &pack_bytes).await.expect("put_pack");
         let mut refs = BTreeMap::new();
         refs.insert("refs/heads/main".to_string(), head_oid.clone());
         let manifest = Manifest {
@@ -671,15 +726,13 @@ mod tests {
         };
         let manifest_bytes = manifest.canonical_bytes().expect("serialize");
         let manifest_key = st
-            .put_manifest(&manifest_bytes)
+            .put_manifest(&scope, &manifest_bytes)
             .await
             .expect("put_manifest");
-        let manifest_digest = manifest_key.strip_prefix("manifests/").unwrap();
+        let manifest_digest =
+            super::super::manifest::digest_of_manifest_key(&manifest_key).unwrap();
 
-        let owner = format!("probe-{}", uuid::Uuid::new_v4());
-        let repo = "hello";
-        let ctx = tenant();
-        let pkey = pointer_key(ctx.community(), &owner, repo);
+        let pkey = scope.pointer_key();
         match st
             .put_pointer(
                 &pkey,
@@ -778,7 +831,7 @@ mod tests {
             return;
         }
         let st = store();
-        let owner = format!("nope-{}", uuid::Uuid::new_v4());
+        let owner = unique_owner();
         let ctx = tenant();
         let scratch = TempDir::new().unwrap();
         let cache = GitPackCache::new(scratch.path(), u64::MAX, 2).expect("cache");
@@ -819,15 +872,17 @@ mod tests {
             published_at: None,
         };
         let manifest_bytes = manifest.canonical_bytes().expect("serialize");
+        let owner = unique_owner();
+        let ctx = tenant();
+        let scope = RepoScope::new(ctx.community(), &owner, "void").expect("scope");
         let manifest_key = st
-            .put_manifest(&manifest_bytes)
+            .put_manifest(&scope, &manifest_bytes)
             .await
             .expect("put_manifest");
-        let manifest_digest = manifest_key.strip_prefix("manifests/").unwrap();
+        let manifest_digest =
+            super::super::manifest::digest_of_manifest_key(&manifest_key).unwrap();
 
-        let owner = format!("empty-{}", uuid::Uuid::new_v4());
-        let ctx = tenant();
-        let pkey = pointer_key(ctx.community(), &owner, "void");
+        let pkey = scope.pointer_key();
         match st
             .put_pointer(
                 &pkey,

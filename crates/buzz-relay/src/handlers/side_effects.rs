@@ -4293,9 +4293,13 @@ async fn seed_manifest_pointer(
     owner_hex: &str,
     repo_id: &str,
 ) -> anyhow::Result<()> {
-    use crate::api::git::manifest::{pointer_key, Manifest, MANIFEST_VERSION};
+    use crate::api::git::manifest::{Manifest, RepoScope, MANIFEST_VERSION};
     use crate::api::git::store::{CasOutcome, Precond};
     use std::collections::BTreeMap;
+
+    let scope = RepoScope::new(tenant.community(), owner_hex, repo_id).ok_or_else(|| {
+        anyhow::anyhow!("invalid repo identity for object keys: {owner_hex}/{repo_id}")
+    })?;
 
     // The empty manifest. All empty manifests across all repos share canonical
     // bytes — by design — so `put_manifest` is idempotent at the store level
@@ -4316,14 +4320,13 @@ async fn seed_manifest_pointer(
         .map_err(|e| anyhow::anyhow!("empty manifest serialize: {e}"))?;
     let manifest_key = state
         .git_store
-        .put_manifest(&bytes)
+        .put_manifest(&scope, &bytes)
         .await
         .map_err(|e| anyhow::anyhow!("put_manifest: {e}"))?;
-    let digest = manifest_key
-        .strip_prefix("manifests/")
+    let digest = crate::api::git::manifest::digest_of_manifest_key(&manifest_key)
         .ok_or_else(|| anyhow::anyhow!("put_manifest returned non-standard key: {manifest_key}"))?;
 
-    let pkey = pointer_key(tenant.community(), owner_hex, repo_id);
+    let pkey = scope.pointer_key();
     let outcome = state
         .git_store
         .put_pointer(&pkey, digest.as_bytes(), Precond::IfNoneMatchStar)

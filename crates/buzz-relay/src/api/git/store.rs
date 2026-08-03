@@ -185,6 +185,18 @@ impl From<ProbeFailure> for StoreError {
     }
 }
 
+/// One object as the backend reports it in a listing.
+#[derive(Debug, Clone)]
+pub struct StoredObject {
+    /// Full store key.
+    pub key: String,
+    /// Size in bytes, as listed.
+    pub size: u64,
+    /// `None` when the backend's timestamp did not parse. Callers that use
+    /// this as a safety bound must treat `None` as "too recent to touch".
+    pub last_modified: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 /// Object-store client for git refs.
 #[derive(Clone)]
 pub struct GitStore {
@@ -506,6 +518,66 @@ impl GitStore {
                 Ok(Some((ETag(etag), Bytes::from(resp.to_vec()))))
             }
             Err(S3Error::HttpFailWithBody(404, _)) => Ok(None),
+            Err(e) => Err(StoreError::Backend(e)),
+        }
+    }
+
+    /// List every object under `prefix`, following continuation tokens.
+    ///
+    /// Callers must pass a prefix ending in `/`. Without it `repos/…/repo`
+    /// also matches `repos/…/repo-2`, and this listing feeds a delete.
+    ///
+    /// `max_keys` bounds the whole listing, not one page: reclamation runs
+    /// inline on a push, so it must not turn into an unbounded number of round
+    /// trips against a pathological prefix. Returns `Err` rather than a partial
+    /// list when the cap is hit, because a caller that deletes "everything
+    /// listed that is not live" would treat a truncated listing as complete
+    /// and is safe only if it sees the truncation.
+    pub async fn list_prefix(
+        &self,
+        prefix: &str,
+        max_keys: usize,
+    ) -> Result<Vec<StoredObject>, StoreError> {
+        if !prefix.ends_with('/') {
+            return Err(StoreError::Config(format!(
+                "list_prefix requires a trailing slash: {prefix:?}"
+            )));
+        }
+        let mut objects = Vec::new();
+        let mut token = None;
+        loop {
+            let (result, _status) = self
+                .bucket
+                .list_page(prefix.to_string(), None, token, None, Some(1000))
+                .await
+                .map_err(StoreError::Backend)?;
+            for object in result.contents {
+                if objects.len() >= max_keys {
+                    return Err(StoreError::Backend(S3Error::HttpFailWithBody(
+                        507,
+                        format!("prefix {prefix} holds more than {max_keys} objects"),
+                    )));
+                }
+                objects.push(StoredObject {
+                    last_modified: chrono::DateTime::parse_from_rfc3339(&object.last_modified)
+                        .ok()
+                        .map(|t| t.with_timezone(&chrono::Utc)),
+                    key: object.key,
+                    size: object.size,
+                });
+            }
+            match result.next_continuation_token {
+                Some(next) if result.is_truncated => token = Some(next),
+                _ => return Ok(objects),
+            }
+        }
+    }
+
+    /// Delete one object. Deleting a key that does not exist is success.
+    pub async fn delete_object(&self, key: &str) -> Result<(), StoreError> {
+        match self.bucket.delete_object(key).await {
+            Ok(_) => Ok(()),
+            Err(S3Error::HttpFailWithBody(404, _)) => Ok(()),
             Err(e) => Err(StoreError::Backend(e)),
         }
     }

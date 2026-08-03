@@ -42,7 +42,10 @@ test("ids are cleared across every channel", () => {
     ["chan-1", new Map([["b", observed("b", 200)]])],
   ]);
 
-  assert.equal(removeObservedUnreadEvents(byChannel, new Set(["a", "b"])), true);
+  assert.equal(
+    removeObservedUnreadEvents(byChannel, new Set(["a", "b"])),
+    true,
+  );
   assert.equal(byChannel.get("dm-1").size, 0);
   assert.equal(byChannel.get("chan-1").size, 0);
 });

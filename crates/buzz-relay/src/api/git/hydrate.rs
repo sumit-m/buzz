@@ -34,7 +34,9 @@ use tempfile::TempDir;
 use tokio::process::Command;
 
 use super::cas_publish::ParentState;
-use super::manifest::{is_hex_oid, is_safe_refname, Manifest, ManifestError, RepoScope};
+use super::manifest::{
+    digest_of_pack_key, is_hex_oid, is_safe_refname, Manifest, ManifestError, RepoScope,
+};
 use super::pack_cache::GitPackCache;
 use super::store::{ETag, GitStore, StoreError};
 use buzz_core::TenantContext;
@@ -42,7 +44,7 @@ use buzz_core::TenantContext;
 /// Manifests should stay small after ref/pack cardinality validation. Bound
 /// the object read itself so malformed historical state cannot allocate an
 /// arbitrary JSON body before validation runs.
-const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+pub(super) const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 
 /// A bare repo hydrated to a temporary directory.
 ///
@@ -269,40 +271,19 @@ pub(super) async fn load_pointer(
 
 /// Fetch the manifest named by the pointer.
 ///
-/// The pointer body is a bare digest, so it does not say which key layout the
-/// manifest was written under. New manifests live in the repo's own namespace;
-/// manifests written before namespacing live at the global `manifests/<digest>`
-/// and are never rewritten. Try the repo's own namespace first — that is the
-/// only place a repo created after this change will ever have one — and fall
-/// back to the global key. The fallback costs one 404 per manifest read on
-/// pre-existing repos, and disappears from a repo the first time it is pushed
-/// to, because that push publishes a scoped manifest.
-///
-/// Both reads verify the digest, so neither layout can serve wrong bytes.
+/// Layout resolution lives in `GitStore::get_manifest`; this only maps the
+/// store's errors into hydrate's.
 async fn load_manifest_bytes(
     store: &GitStore,
     scope: &RepoScope,
     digest: &str,
 ) -> Result<bytes::Bytes, HydrateError> {
-    let scoped_key = format!("{}/{digest}", scope.manifests_prefix());
-    match store
-        .get_verified_limited(&scoped_key, digest, MAX_MANIFEST_BYTES)
-        .await
-    {
-        Ok(bytes) => Ok(bytes),
-        Err(StoreError::NotFound(_)) => {
-            get_verified_limited(
-                store,
-                &format!("manifests/{digest}"),
-                digest,
-                MAX_MANIFEST_BYTES,
-            )
-            .await
-        }
-        Err(StoreError::ObjectTooLarge { size, max, .. }) => Err(HydrateError::ResourceLimit(
-            format!("object {scoped_key} is {size} bytes (max {max})"),
+    match store.get_manifest(scope, digest, MAX_MANIFEST_BYTES).await {
+        Ok((_key, bytes)) => Ok(bytes),
+        Err(StoreError::ObjectTooLarge { key, size, max }) => Err(HydrateError::ResourceLimit(
+            format!("object {key} is {size} bytes (max {max})"),
         )),
-        Err(err) => Err(err.into()),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -345,8 +326,7 @@ async fn materialize_manifest(
     let pack_dir = path.join("objects").join("pack");
     let mut hydrated_bytes = 0u64;
     for key in &manifest.packs {
-        let digest = key
-            .strip_prefix("packs/")
+        let digest = digest_of_pack_key(key)
             .ok_or_else(|| HydrateError::Hydrate(format!("malformed pack key {key:?}")))?;
         let pack_bytes = options
             .pack_cache

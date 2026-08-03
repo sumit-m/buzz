@@ -522,6 +522,45 @@ impl GitStore {
         }
     }
 
+    /// Fetch the manifest a pointer names, returning `(key, bytes)`.
+    ///
+    /// Pointers and `Manifest::parent` store a bare digest, which does not say
+    /// which key layout the manifest was written under. New manifests live in
+    /// the repo's own namespace; manifests written before namespacing live at
+    /// the global `manifests/<digest>` and are never rewritten. Try the repo's
+    /// namespace first — the only place a repo created since the change will
+    /// ever have one — then fall back.
+    ///
+    /// The fallback costs one 404 per manifest read on a pre-existing repo, and
+    /// disappears the first time that repo is pushed to. Both reads verify the
+    /// digest, so neither layout can serve wrong bytes.
+    ///
+    /// Every caller resolving a digest to a manifest must come through here.
+    /// A hand-built `format!("manifests/{digest}")` compiles, passes the unit
+    /// tests, and then cannot find any manifest written after namespacing.
+    pub async fn get_manifest(
+        &self,
+        scope: &RepoScope,
+        digest: &str,
+        max_bytes: u64,
+    ) -> Result<(String, Bytes), StoreError> {
+        let scoped_key = format!("{}/{digest}", scope.manifests_prefix());
+        match self
+            .get_verified_limited(&scoped_key, digest, max_bytes)
+            .await
+        {
+            Ok(bytes) => Ok((scoped_key, bytes)),
+            Err(StoreError::NotFound(_)) => {
+                let legacy_key = format!("manifests/{digest}");
+                let bytes = self
+                    .get_verified_limited(&legacy_key, digest, max_bytes)
+                    .await?;
+                Ok((legacy_key, bytes))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// List every object under `prefix`, following continuation tokens.
     ///
     /// Callers must pass a prefix ending in `/`. Without it `repos/…/repo`

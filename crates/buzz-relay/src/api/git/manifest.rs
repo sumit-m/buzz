@@ -204,6 +204,16 @@ pub fn is_pack_key(s: &str) -> bool {
     is_manifest_digest(digest) && (dir == "packs" || is_repo_scoped_dir(dir, "packs"))
 }
 
+/// The bare digest of a pack key, under either layout.
+///
+/// The digest is the last segment; `is_pack_key` is what decides the key is
+/// well-formed. Every caller that needs the digest must come through here —
+/// a private `strip_prefix("packs/")` silently stops matching the moment the
+/// key is namespaced, and the symptom is a repo that will not hydrate.
+pub fn digest_of_pack_key(key: &str) -> Option<&str> {
+    is_pack_key(key).then(|| key.rsplit_once('/').expect("is_pack_key requires a /").1)
+}
+
 /// The bare digest of a manifest key, under either layout.
 ///
 /// Pointers and `Manifest::parent` store the bare digest, so every writer that

@@ -84,6 +84,53 @@ pub struct GitAuth {
     pub tenant: TenantContext,
 }
 
+/// The base64 NIP-98 event out of an `Authorization` header, under either
+/// envelope.
+///
+/// `Nostr <base64>` is the native form. `Basic <base64(user:token)>` carries
+/// the *same* token and exists for one reason: git only attaches credentials to
+/// its large-push probe RPC when the scheme is one curl handles natively.
+/// Without it, a push whose body exceeds `http.postBuffer` sends the probe —
+/// and then the pack — with no `Authorization` at all, and git gives up on the
+/// 401 rather than re-filling the credential.
+///
+/// The username is discarded deliberately. Accepting a client-supplied identity
+/// here would be a second, weaker authentication path beside the signed event.
+fn bearer_token(auth_header: &str) -> Option<std::borrow::Cow<'_, str>> {
+    if let Some(token) = auth_header.strip_prefix("Nostr ") {
+        return Some(std::borrow::Cow::Borrowed(token));
+    }
+    let encoded = auth_header.strip_prefix("Basic ")?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .ok()?;
+    let pair = String::from_utf8(decoded).ok()?;
+    // Split once: the token is base64 and never contains a colon, but a
+    // username might, and everything after the first colon is the password.
+    let (_username, token) = pair.split_once(':')?;
+    if token.is_empty() {
+        return None;
+    }
+    Some(std::borrow::Cow::Owned(token.to_string()))
+}
+
+/// A 401 offering both envelopes.
+///
+/// `Nostr` stays first so an existing credential helper keeps selecting it and
+/// behaves exactly as before. `Basic` is what lets a helper opt into the scheme
+/// that survives git's probe RPC.
+fn git_auth_challenge(method: &str, message: &'static str) -> Response {
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header(
+            "WWW-Authenticate",
+            format!("Nostr realm=\"buzz\", method=\"{method}\""),
+        )
+        .header("WWW-Authenticate", "Basic realm=\"buzz\"")
+        .body(Body::from(message))
+        .unwrap()
+}
+
 impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
     type Rejection = Response;
 
@@ -549,31 +596,18 @@ fn parse_git_auth_header_full(
     let auth_header = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| {
-            Response::builder()
-                .status(StatusCode::UNAUTHORIZED)
-                .header(
-                    "WWW-Authenticate",
-                    format!("Nostr realm=\"buzz\", method=\"{method}\""),
-                )
-                .body(Body::from("missing Authorization header"))
-                .unwrap()
-        })?;
+        .ok_or_else(|| git_auth_challenge(method, "missing Authorization header"))?;
 
-    let token = auth_header.strip_prefix("Nostr ").ok_or_else(|| {
-        Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            .header(
-                "WWW-Authenticate",
-                format!("Nostr realm=\"buzz\", method=\"{method}\""),
-            )
-            .body(Body::from("expected Authorization: Nostr <base64>"))
-            .unwrap()
+    let token = bearer_token(auth_header).ok_or_else(|| {
+        git_auth_challenge(
+            method,
+            "expected Authorization: Nostr <base64> or Basic <base64 user:token>",
+        )
     })?;
 
     let event_bytes = base64::engine::general_purpose::STANDARD
-        .decode(token)
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(token))
+        .decode(token.as_ref())
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(token.as_ref()))
         .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid base64").into_response())?;
     let event_json = String::from_utf8(event_bytes)
         .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid utf-8").into_response())?;
@@ -2360,6 +2394,101 @@ mod track_c_tests {
     use std::io::Write;
     use std::process::Output;
     use tempfile::TempDir;
+
+    fn basic(user: &str, token: &str) -> String {
+        format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(format!("{user}:{token}"))
+        )
+    }
+
+    #[test]
+    fn accepts_the_token_under_either_envelope() {
+        assert_eq!(bearer_token("Nostr abc123").as_deref(), Some("abc123"));
+        assert_eq!(
+            bearer_token(&basic("nostr", "abc123")).as_deref(),
+            Some("abc123")
+        );
+    }
+
+    /// The username is not an identity claim. Whatever it says, the token is
+    /// what gets verified — so any username must yield the same token, and
+    /// none of them may influence the outcome.
+    #[test]
+    fn the_basic_username_is_ignored() {
+        for user in ["nostr", "", "someone-else", "0".repeat(64).as_str()] {
+            assert_eq!(
+                bearer_token(&basic(user, "abc123")).as_deref(),
+                Some("abc123"),
+                "username {user:?} changed the extracted token"
+            );
+        }
+    }
+
+    /// The password is everything after the *first* colon, per RFC 7617.
+    /// Splitting on the last would truncate any token containing one.
+    ///
+    /// (A username containing a colon is not representable in Basic at all —
+    /// the extra colon simply becomes part of the password.)
+    #[test]
+    fn splits_on_the_first_colon_only() {
+        assert_eq!(
+            bearer_token(&basic("nostr", "tok:en")).as_deref(),
+            Some("tok:en")
+        );
+        assert_eq!(
+            bearer_token(&basic("a:b", "tok")).as_deref(),
+            Some("b:tok"),
+            "a colon in the username is indistinguishable from the separator"
+        );
+    }
+
+    /// Every one of these must be rejected outright. Returning `Some("")` or
+    /// falling through to "unauthenticated" would hand the verifier something
+    /// it was never meant to see.
+    #[test]
+    fn rejects_malformed_envelopes() {
+        for header in [
+            "",
+            "Nostr",
+            "Basic",
+            "Bearer abc123",
+            "basic YWJj",        // scheme is case-sensitive here
+            &basic("nostr", ""), // empty password
+            "Basic not-valid-base64!!",
+            &format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode("no-colon")
+            ),
+        ] {
+            assert!(
+                bearer_token(header).is_none(),
+                "accepted malformed header {header:?}"
+            );
+        }
+    }
+
+    /// Both schemes must be advertised, or an updated helper never learns it
+    /// may use Basic and large pushes keep failing.
+    #[test]
+    fn the_challenge_offers_both_schemes() {
+        let response = git_auth_challenge("POST", "nope");
+        let offered: Vec<_> = response
+            .headers()
+            .get_all("WWW-Authenticate")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            offered.iter().any(|value| value.starts_with("Nostr ")),
+            "{offered:?}"
+        );
+        assert!(
+            offered.iter().any(|value| value.starts_with("Basic ")),
+            "{offered:?}"
+        );
+    }
 
     fn oid_sha1() -> String {
         "cb09a769da1c01f458fa6959d4e8eded38fac8d3".to_string()

@@ -95,6 +95,11 @@ fn load_auth_tag() -> Result<Option<Tag>, String> {
     .transpose()
 }
 
+/// Username paired with the token under the Basic envelope. The relay ignores
+/// it for identity — the pubkey comes from the signed event — but Basic
+/// requires something before the colon.
+const BASIC_USERNAME: &str = "nostr";
+
 #[derive(Default)]
 struct CredRequest {
     has_authtype_capability: bool,
@@ -102,6 +107,9 @@ struct CredRequest {
     host: Option<String>,
     path: Option<String>,
     wwwauth: Option<String>,
+    /// The server also offered `Basic`. Preferred when present — see
+    /// [`emit_basic`] for why.
+    basic_offered: bool,
 }
 
 fn parse_stdin() -> CredRequest {
@@ -126,6 +134,8 @@ fn parse_stdin() -> CredRequest {
         } else if let Some(v) = line.strip_prefix("wwwauth[]=") {
             if v.starts_with("Nostr ") && req.wwwauth.is_none() {
                 req.wwwauth = Some(v.to_string());
+            } else if v.trim_start().to_ascii_lowercase().starts_with("basic") {
+                req.basic_offered = true;
             }
         }
     }
@@ -157,7 +167,7 @@ pub fn run() -> i32 {
 
     let req = parse_stdin();
 
-    if !req.has_authtype_capability {
+    if !req.has_authtype_capability && !req.basic_offered {
         println!();
         let _ = io::stdout().flush();
         return 0;
@@ -254,6 +264,31 @@ pub fn run() -> i32 {
     };
 
     let credential = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
+
+    if req.basic_offered {
+        // Prefer Basic when the server offers it.
+        //
+        // Not for compatibility — for correctness on large pushes. Git attaches
+        // an `authtype` credential to the request it was filled for and no
+        // other. A push whose body exceeds `http.postBuffer` is preceded by a
+        // *probe RPC*, which goes out unauthenticated; git then erases the
+        // credential on the 401 instead of re-filling it, and the pack that
+        // follows carries no `Authorization` at all. curl handles Basic
+        // natively and attaches it to both the probe and the pack, so the
+        // failure disappears.
+        //
+        // The token is identical either way — same signed NIP-98 event, same
+        // URL binding, same ±60s window. Only the envelope changes.
+        println!("username={BASIC_USERNAME}");
+        println!("password={credential}");
+        // Still ephemeral: a 60-second token has no business in a credential
+        // store, and git honours this for username/password too.
+        println!("ephemeral=true");
+        println!("quit=true");
+        println!();
+        let _ = io::stdout().flush();
+        return 0;
+    }
 
     println!("capability[]=authtype");
     println!("authtype=Nostr");

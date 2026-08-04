@@ -354,3 +354,107 @@ fn bad_keyfile_permissions() {
         "expected 'insecure permissions' in stderr, got:\n{stderr}"
     );
 }
+
+/// Input where the server offers both envelopes, as the relay does.
+fn both_challenges_input() -> String {
+    "capability[]=authtype\n\
+     capability[]=state\n\
+     protocol=https\n\
+     host=relay.example.com\n\
+     path=git/owner/repo.git/git-receive-pack\n\
+     wwwauth[]=Nostr realm=\"buzz\", method=\"POST\"\n\
+     wwwauth[]=Basic realm=\"buzz\"\n\
+     \n"
+    .to_string()
+}
+
+/// When Basic is offered it wins — and that is a correctness requirement, not
+/// a preference.
+///
+/// Git attaches an `authtype` credential only to the request it was filled
+/// for. A push larger than `http.postBuffer` is preceded by an unauthenticated
+/// probe RPC; git erases the credential on that 401 instead of re-filling, so
+/// the pack that follows carries no `Authorization` and the push dies with a
+/// misleading 401. curl attaches Basic to both the probe and the pack.
+#[test]
+fn prefers_basic_when_the_server_offers_it() {
+    let nsec = fresh_nsec();
+    let out = run_helper(&both_challenges_input(), &[("NOSTR_PRIVATE_KEY", &nsec)]);
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        stdout.contains("username=nostr"),
+        "expected the Basic envelope, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("authtype="),
+        "must not also emit authtype — git would pick it and reinstate the bug:\n{stdout}"
+    );
+
+    // The password is the same signed NIP-98 event, just carried differently.
+    let password = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("password="))
+        .expect("password line");
+    let json = base64::engine::general_purpose::STANDARD
+        .decode(password)
+        .expect("password is base64");
+    let event: serde_json::Value =
+        serde_json::from_slice(&json).expect("password decodes to a JSON event");
+    assert_eq!(event["kind"], 27235);
+
+    assert!(
+        stdout.contains("ephemeral=true"),
+        "a 60-second token must not be persisted to a credential store:\n{stdout}"
+    );
+}
+
+/// Without a Basic offer, behaviour is exactly as before — so a new helper
+/// against an older relay keeps working.
+#[test]
+fn falls_back_to_authtype_when_only_nostr_is_offered() {
+    let nsec = fresh_nsec();
+    let out = run_helper(&valid_input(), &[("NOSTR_PRIVATE_KEY", &nsec)]);
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("authtype=Nostr"), "{stdout}");
+    assert!(!stdout.contains("username="), "{stdout}");
+}
+
+/// A Basic offer alone is enough — the reply needs no `authtype` capability,
+/// so a git too old to advertise one still authenticates.
+#[test]
+fn basic_reply_does_not_require_the_authtype_capability() {
+    let nsec = fresh_nsec();
+    let input = "protocol=https\n\
+                 host=relay.example.com\n\
+                 path=git/owner/repo.git/git-receive-pack\n\
+                 wwwauth[]=Nostr realm=\"buzz\", method=\"POST\"\n\
+                 wwwauth[]=Basic realm=\"buzz\"\n\
+                 \n";
+    let out = run_helper(input, &[("NOSTR_PRIVATE_KEY", &nsec)]);
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("username=nostr"), "{stdout}");
+}
+
+/// A non-Buzz remote offering only Basic must still be declined, or this
+/// helper would answer for every HTTP remote on the machine.
+#[test]
+fn basic_alone_without_a_nostr_challenge_is_declined() {
+    let nsec = fresh_nsec();
+    let input = "capability[]=authtype\n\
+                 protocol=https\n\
+                 host=github.com\n\
+                 path=owner/repo.git\n\
+                 wwwauth[]=Basic realm=\"GitHub\"\n\
+                 \n";
+    let out = run_helper(input, &[("NOSTR_PRIVATE_KEY", &nsec)]);
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("username=") && !stdout.contains("password="),
+        "must not answer for a non-Buzz remote:\n{stdout}"
+    );
+}

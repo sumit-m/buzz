@@ -1765,7 +1765,7 @@ test("buildTranscript five-section system prompt card is standalone with all sec
   //   (a) Render it as a standalone single block (acpSource "session/new"),
   //       NOT inside any turn's prompt bundle.
   //   (b) The standalone item must carry all five sections in order:
-  //       Base → System → Team Instructions → Core Memory → Channel Canvas.
+  //       Base → System → Team Instructions → Core Memory → Channel.
   //   (c) The prompt segment's context (CheckCheck dialog) must contain only
   //       the session/prompt:context sections (Buzz event + Thread context),
   //       never the system-prompt sections.
@@ -1875,8 +1875,8 @@ test("buildTranscript five-section system prompt card is standalone with all sec
   const titles = (spItem.sections ?? []).map((s) => s.title);
   assert.deepEqual(
     titles,
-    ["Base", "System", "Team Instructions", "Core Memory", "Channel Canvas"],
-    "system-prompt standalone card must carry Base → System → Team Instructions → Core Memory → Channel Canvas in order",
+    ["Base", "System", "Team Instructions", "Core Memory", "Channel"],
+    "system-prompt standalone card must carry Base → System → Team Instructions → Core Memory → Channel in order",
   );
 
   // (c) The system-prompt item must NOT be inside any turn group.
@@ -1910,7 +1910,7 @@ test("buildTranscript five-section system prompt card is standalone with all sec
   const contextSectionTitles = (promptContextItem.sections ?? []).map(
     (s) => s.title,
   );
-  // Must have Buzz event and Thread context sections, NOT Base/System/Team Instructions/Core Memory/Channel Canvas.
+  // Must have Buzz event and Thread context sections, NOT Base/System/Team Instructions/Core Memory/Channel.
   assert.ok(
     contextSectionTitles.some((t) => t.toLowerCase().includes("buzz")),
     "prompt context must contain a Buzz event section",
@@ -1922,9 +1922,9 @@ test("buildTranscript five-section system prompt card is standalone with all sec
         t === "System" ||
         t === "Team Instructions" ||
         t === "Core Memory" ||
-        t === "Channel Canvas",
+        t === "Channel",
     ),
-    "prompt context must NOT contain system-prompt sections (Base/System/Team Instructions/Core Memory/Channel Canvas)",
+    "prompt context must NOT contain system-prompt sections (Base/System/Team Instructions/Core Memory/Channel)",
   );
 });
 
@@ -2050,7 +2050,7 @@ test("buildTranscript session/new via _meta.systemPrompt.append produces identic
     "System",
     "Team Instructions",
     "Core Memory",
-    "Channel Canvas",
+    "Channel",
   ];
   const metaTitles = (metaSPBlocks[0].item?.sections ?? []).map((s) => s.title);
   const fieldTitles = (fieldSPBlocks[0].item?.sections ?? []).map(

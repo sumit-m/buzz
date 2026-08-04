@@ -100,33 +100,40 @@ export function parsePromptText(text: string): {
  * the framing experiment.
  *
  * Archived harness versions composed the value in order:
- *   `[Base]\n{base}\n\n[Agent Instructions]\n{persona}\n\n[Team Instructions]\n{team}\n\n[Agent Memory — core]\n{core}\n\n[Channel Canvas]\n{canvas}`
+ *   `[Base]\n{base}\n\n[Agent Instructions]\n{persona}\n\n[Team Instructions]\n{team}\n\n[Agent Memory — core]\n{core}\n\n[Channel Canvas]\n{canvas}\n\n[Channel Facts]\n{facts}`
  * with any section omitted when absent. Extraction runs in reverse producer
  * order so that each `lastIndexOf` search operates on the full input and each
  * extraction boundary is unambiguous.
  *
- * Five extraction passes:
+ * Canvas and facts render as one `Channel` section rather than two: they are
+ * the same subject to a reader, and splitting them sat a one-line canvas
+ * pointer beside a block many times its size.
  *
- * 1. **Canvas** (`[Channel Canvas]`): appended last by `with_canvas()`.
- *    - Start-of-string: canvas-only input.
- *    - Appended frame (`\n\n[Channel Canvas]\n`): blank-line separator used by
- *      `with_canvas()`; LAST occurrence guards against an embedded header in a
+ * Six extraction passes:
+ *
+ * 1. **Facts** (`[Channel Facts]`): appended last by `with_facts()`.
+ *    - Start-of-string: facts-only input.
+ *    - Appended frame (`\n\n[Channel Facts]\n`): blank-line separator used by
+ *      `with_facts()`; LAST occurrence guards against an embedded header in a
  *      persona body (single preceding newline only).
  *
- * 2. **Core** (`[Agent Memory — core]`): appended before canvas by `with_core()`.
+ * 2. **Canvas** (`[Channel Canvas]`): appended before facts by `with_canvas()`.
  *    Same two cases, same last-occurrence guard.
  *
- * 3. **Team Instructions** (`[Team Instructions]`): appended before core by
+ * 3. **Core** (`[Agent Memory — core]`): appended before canvas by `with_core()`.
+ *    Same two cases, same last-occurrence guard.
+ *
+ * 4. **Team Instructions** (`[Team Instructions]`): appended before core by
  *    `with_team()` in `buzz-acp/src/pool.rs`. Same two cases (start-of-string
  *    or `\n\n[Team Instructions]\n` inline), same last-occurrence guard. Output
  *    position: after Agent Instructions, before Core Memory.
  *
- * 4. **Base/Agent Instructions**: remainder after the three top-level section
+ * 5. **Base/Agent Instructions**: remainder after the four top-level section
  *    extractions. Split on the first `\n[Agent Instructions]\n` boundary.
  *    Archived frames using the former `[System]` header remain supported and
  *    retain their historical observer label.
  *
- * 5. **Legacy Team Instructions** (backward compat): if the agent-instructions body
+ * 6. **Legacy Team Instructions** (backward compat): if the agent-instructions body
  *    contains the exact canonical delimiter `\n\n---\n# Team Instructions\n`
  *    (produced by the now-removed `compose_prompt()` in buzz-persona), the body
  *    is split at the **last** occurrence of that boundary. The text before
@@ -143,11 +150,32 @@ export function parseSystemPromptSections(
 
   const sections: PromptSection[] = [];
 
-  // ── 1. Extract [Channel Canvas] ───────────────────────────────────────────
+  // ── 1. Extract [Channel Facts] ───────────────────────────────────────────
+  // Appended last by with_facts(), so it must be pulled off first. Without this
+  // pass the facts block stayed glued to whatever preceded it — in practice the
+  // core body, which rendered a channel's facts under "Core Memory".
+  const FACTS_HEADER = "[Channel Facts]";
+  const FACTS_MARKER_INLINE = `\n\n${FACTS_HEADER}\n`;
+  let factsBody: string | null = null;
+  let remainder = systemPrompt;
+
+  if (remainder.startsWith(`${FACTS_HEADER}\n`)) {
+    factsBody = remainder.slice(`${FACTS_HEADER}\n`.length).trim();
+    remainder = "";
+  } else {
+    const lastFacts = remainder.lastIndexOf(FACTS_MARKER_INLINE);
+    if (lastFacts !== -1) {
+      factsBody = remainder
+        .slice(lastFacts + FACTS_MARKER_INLINE.length)
+        .trim();
+      remainder = remainder.slice(0, lastFacts);
+    }
+  }
+
+  // ── 2. Extract [Channel Canvas] ───────────────────────────────────────────
   const CANVAS_HEADER = "[Channel Canvas]";
   const CANVAS_MARKER_INLINE = `\n\n${CANVAS_HEADER}\n`;
   let canvasBody: string | null = null;
-  let remainder = systemPrompt;
 
   if (remainder.startsWith(`${CANVAS_HEADER}\n`)) {
     canvasBody = remainder.slice(`${CANVAS_HEADER}\n`.length).trim();
@@ -162,7 +190,7 @@ export function parseSystemPromptSections(
     }
   }
 
-  // ── 2. Extract [Agent Memory — core] ──────────────────────────────────────
+  // ── 3. Extract [Agent Memory — core] ──────────────────────────────────────
   const CORE_HEADER = "[Agent Memory — core]";
   const CORE_MARKER_INLINE = `\n\n${CORE_HEADER}\n`;
   let coreBody: string | null = null;
@@ -178,7 +206,7 @@ export function parseSystemPromptSections(
     }
   }
 
-  // ── 3. Extract [Team Instructions] (modern runtime framing) ─────────────
+  // ── 4. Extract [Team Instructions] (modern runtime framing) ─────────────
   // with_team() in buzz-acp/src/pool.rs appends "\n\n[Team Instructions]\n{instructions}"
   // after [Agent Instructions] and before core/canvas. Same two cases as canvas/core:
   // start-of-string (team-only input) or the inline double-newline marker
@@ -200,7 +228,7 @@ export function parseSystemPromptSections(
     }
   }
 
-  // ── 4. Parse Base/Workspace/Agent Instructions from the remaining prefix ─
+  // ── 5. Parse Base/Workspace/Agent Instructions from the remaining prefix ─
   // The canonical team-instructions delimiter produced by compose_prompt() in
   // buzz-persona/src/resolve.rs:
   //   format!("{persona_prompt}\n\n---\n# Team Instructions\n{instructions}")
@@ -310,11 +338,20 @@ export function parseSystemPromptSections(
     }
   }
 
-  // ── 5. Append team (modern), core, and canvas sections in producer order ──
+  // ── 6. Append team (modern), core, and channel sections in producer order ──
   if (modernTeamBody)
     sections.push({ title: "Team Instructions", body: modernTeamBody });
   if (coreBody) sections.push({ title: "Core Memory", body: coreBody });
-  if (canvasBody) sections.push({ title: "Channel Canvas", body: canvasBody });
+
+  // Canvas and facts share one section. Their headers are re-added inside it:
+  // the section title alone cannot say which block a reader is looking at, and
+  // either one may be absent.
+  const channelBlocks: string[] = [];
+  if (canvasBody) channelBlocks.push(`${CANVAS_HEADER}\n${canvasBody}`);
+  if (factsBody) channelBlocks.push(`${FACTS_HEADER}\n${factsBody}`);
+  if (channelBlocks.length > 0) {
+    sections.push({ title: "Channel", body: channelBlocks.join("\n\n") });
+  }
 
   return sections;
 }

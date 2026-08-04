@@ -654,8 +654,8 @@ test("parseSystemPromptSections pins the full Base+System+Core+Canvas harness sh
     { title: "System", body: "Persona instructions." },
     { title: "Core Memory", body: "I am Duncan." },
     {
-      title: "Channel Canvas",
-      body: "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+      title: "Channel",
+      body: "[Channel Canvas]\nCanvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
     },
   ]);
 });
@@ -664,7 +664,7 @@ test("parseSystemPromptSections extracts canvas when no Base/System/Core present
   const framed = ["[Channel Canvas]", "Canvas only."].join("\n");
   const sections = parseSystemPromptSections(framed);
   assert.deepEqual(sections, [
-    { title: "Channel Canvas", body: "Canvas only." },
+    { title: "Channel", body: "[Channel Canvas]\nCanvas only." },
   ]);
 });
 
@@ -679,7 +679,7 @@ test("parseSystemPromptSections extracts Core+Canvas with no Base/System", () =>
   const sections = parseSystemPromptSections(framed);
   assert.deepEqual(sections, [
     { title: "Core Memory", body: "Core content." },
-    { title: "Channel Canvas", body: "Canvas content." },
+    { title: "Channel", body: "[Channel Canvas]\nCanvas content." },
   ]);
 });
 
@@ -694,7 +694,7 @@ test("parseSystemPromptSections extracts Base+Canvas when no System or Core", ()
   const sections = parseSystemPromptSections(framed);
   assert.deepEqual(sections, [
     { title: "Base", body: "Base content." },
-    { title: "Channel Canvas", body: "Canvas content." },
+    { title: "Channel", body: "[Channel Canvas]\nCanvas content." },
   ]);
 });
 
@@ -757,7 +757,7 @@ test("parseSystemPromptSections keeps an embedded canvas-like line literal when 
       title: "System",
       body: "persona preamble\n[Channel Canvas]\nthis is inside the persona body — NOT the real canvas",
     },
-    { title: "Channel Canvas", body: "this IS the appended canvas" },
+    { title: "Channel", body: "[Channel Canvas]\nthis IS the appended canvas" },
   ]);
 });
 
@@ -843,8 +843,8 @@ test("parseSystemPromptSections extracts Team Instructions with Core Memory and 
       body: "I am Observer Agent.\n## Lessons Learned\nAlways tag on handoff.",
     },
     {
-      title: "Channel Canvas",
-      body: "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+      title: "Channel",
+      body: "[Channel Canvas]\nCanvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
     },
   ]);
 });
@@ -1040,8 +1040,8 @@ test("parseSystemPromptSections (modern) pins full 5-section shape: Base+System+
       body: "I am Observer Agent.\n## Lessons Learned\nAlways tag on handoff.",
     },
     {
-      title: "Channel Canvas",
-      body: "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+      title: "Channel",
+      body: "[Channel Canvas]\nCanvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
     },
   ]);
 });
@@ -1060,6 +1060,85 @@ test("parseSystemPromptSections (modern) does NOT split on bracket [Team Instruc
     {
       title: "System",
       body: "Persona preamble.\n[Team Instructions]\nThis is persona text, not a real team block.",
+    },
+  ]);
+});
+
+test("parseSystemPromptSections renders canvas and facts as one Channel section", () => {
+  // The regression this fixes: with_facts() appends after with_canvas(), so a
+  // parser that stopped at canvas left the whole facts block glued to the core
+  // body — a channel's facts rendered under "Core Memory".
+  const framed = [
+    "[Base]",
+    "base text",
+    "",
+    "[System]",
+    "persona text",
+    "",
+    "[Agent Memory — core]",
+    "No core memory found.",
+    "",
+    "[Channel Canvas]",
+    "Canvas revision (event ID): abc",
+    "",
+    "[Channel Facts]",
+    "A short shared list of durable statements.",
+  ].join("\n");
+  assert.deepEqual(parseSystemPromptSections(framed), [
+    { title: "Base", body: "base text" },
+    { title: "System", body: "persona text" },
+    { title: "Core Memory", body: "No core memory found." },
+    {
+      title: "Channel",
+      body:
+        "[Channel Canvas]\nCanvas revision (event ID): abc\n\n" +
+        "[Channel Facts]\nA short shared list of durable statements.",
+    },
+  ]);
+});
+
+test("parseSystemPromptSections keeps facts out of Core Memory when no canvas is set", () => {
+  // A blank canvas emits no section at all, which is exactly the shape that
+  // hid the bug: nothing sat between core and facts.
+  const framed = [
+    "[Agent Memory — core]",
+    "No core memory found.",
+    "",
+    "[Channel Facts]",
+    "the facts",
+  ].join("\n");
+  assert.deepEqual(parseSystemPromptSections(framed), [
+    { title: "Core Memory", body: "No core memory found." },
+    { title: "Channel", body: "[Channel Facts]\nthe facts" },
+  ]);
+});
+
+test("parseSystemPromptSections extracts facts-only input", () => {
+  assert.deepEqual(parseSystemPromptSections("[Channel Facts]\nthe facts"), [
+    { title: "Channel", body: "[Channel Facts]\nthe facts" },
+  ]);
+});
+
+test("parseSystemPromptSections keeps an embedded facts-like line literal when a real appended facts block follows", () => {
+  const framed = [
+    "[System]",
+    "persona preamble",
+    "[Channel Facts]",
+    "this is NOT the facts section — it is inside the persona body",
+    "",
+    "[Channel Facts]",
+    "this IS the appended facts block",
+  ].join("\n");
+  assert.deepEqual(parseSystemPromptSections(framed), [
+    {
+      title: "System",
+      body:
+        "persona preamble\n[Channel Facts]\n" +
+        "this is NOT the facts section — it is inside the persona body",
+    },
+    {
+      title: "Channel",
+      body: "[Channel Facts]\nthis IS the appended facts block",
     },
   ]);
 });

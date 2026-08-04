@@ -4146,7 +4146,15 @@ pub(crate) fn canvas_section_from_query_response(
     channel_uuid: &str,
     mode: CanvasRender,
 ) -> Option<String> {
-    let raw = events.first()?;
+    // No canvas event at all is a confirmed empty canvas, not a failure — the
+    // query succeeded and the channel simply has none. A refresh has nothing to
+    // announce (the agent was never given a revision to supersede).
+    let Some(raw) = events.first() else {
+        return match mode {
+            CanvasRender::Birth => Some(render_canvas_empty_section(channel_uuid)),
+            CanvasRender::Refresh => None,
+        };
+    };
 
     // Deserialise as a complete Nostr Event. Partial objects (missing pubkey,
     // sig, kind, or tags) are rejected here rather than trusted implicitly.
@@ -4215,7 +4223,7 @@ pub(crate) fn canvas_section_from_query_response(
             "latest canvas event has blank content"
         );
         return match mode {
-            CanvasRender::Birth => None,
+            CanvasRender::Birth => Some(render_canvas_empty_section(channel_uuid)),
             CanvasRender::Refresh => Some(render_canvas_cleared_section()),
         };
     }
@@ -4305,6 +4313,33 @@ pub(crate) fn render_canvas_section(
             ),
         ),
     }
+}
+
+/// Rendered when a channel has no canvas, or its canvas is blank.
+///
+/// Without this a channel with an empty canvas produced no section at all, so
+/// an agent never learned the facility existed — precisely when it most needed
+/// telling, since there was nothing else to reveal it. Mirrors
+/// [`crate::facts_fetch`]'s onboarding nudge, which exists for the same reason
+/// on an empty facts list.
+///
+/// Shown only on a **confirmed** empty canvas. A failed or timed-out fetch
+/// emits nothing, so a relay outage never reads as "this channel has no
+/// canvas" and invites an agent to write over one it simply could not read.
+pub(crate) fn render_canvas_empty_section(channel_uuid: &str) -> String {
+    format!(
+        "[Channel Canvas]\n\
+         No canvas set for this channel yet.\n\
+         \n\
+         The canvas is a single shared document the channel keeps — what this \
+         channel is for, how it works, whatever standing context outlives a \
+         conversation. Every agent in the channel reads the same one.\n\
+         \n\
+         - Read it with `buzz canvas get --channel {channel_uuid}` when a turn \
+         depends on it. It is fetched on demand, never carried in this prompt.\n\
+         - It is empty right now, so there is nothing to read until someone \
+         writes one."
+    )
 }
 
 /// Render the notice for a canvas that was cleared mid-session.
@@ -11395,17 +11430,19 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         );
     }
 
-    /// A cleared canvas is silence at birth and news mid-session — an agent
+    /// A cleared canvas is onboarding at birth and news mid-session — an agent
     /// that already fetched the old content has no other way to learn it went.
     #[test]
-    fn a_cleared_canvas_is_silent_at_birth_and_announced_on_refresh() {
+    fn a_cleared_canvas_nudges_at_birth_and_is_announced_on_refresh() {
         let ev = make_canvas_event_value("   ");
-        assert!(canvas_section_from_query_response(
-            std::slice::from_ref(&ev),
-            CHANNEL_UUID,
-            CanvasRender::Birth
-        )
-        .is_none());
+        assert_eq!(
+            canvas_section_from_query_response(
+                std::slice::from_ref(&ev),
+                CHANNEL_UUID,
+                CanvasRender::Birth
+            ),
+            Some(render_canvas_empty_section(CHANNEL_UUID))
+        );
 
         let refreshed =
             canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Refresh)
@@ -11532,27 +11569,38 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         assert!(section.contains('Z'), "timestamp must use Z suffix");
     }
 
+    /// A channel with no canvas still gets told the facility exists — that is
+    /// the one moment an agent has no other way to discover it.
     #[test]
-    fn test_canvas_section_from_query_response_empty_array_returns_none() {
-        let result = canvas_section_from_query_response(&[], CHANNEL_UUID, CanvasRender::Birth);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_canvas_section_from_query_response_blank_content_returns_none() {
-        let ev = make_canvas_event_value("   ");
-        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth);
+    fn test_canvas_section_from_query_response_empty_array_nudges_at_birth() {
+        assert_eq!(
+            canvas_section_from_query_response(&[], CHANNEL_UUID, CanvasRender::Birth),
+            Some(render_canvas_empty_section(CHANNEL_UUID))
+        );
+        // A refresh has nothing to supersede: the session was never handed a
+        // revision, so announcing "it changed" would be false.
         assert!(
-            result.is_none(),
-            "blank content must return None (cleared canvas)"
+            canvas_section_from_query_response(&[], CHANNEL_UUID, CanvasRender::Refresh).is_none()
         );
     }
 
     #[test]
-    fn test_canvas_section_from_query_response_empty_content_returns_none() {
+    fn test_canvas_section_from_query_response_blank_content_nudges_at_birth() {
+        let ev = make_canvas_event_value("   ");
+        assert_eq!(
+            canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth),
+            Some(render_canvas_empty_section(CHANNEL_UUID)),
+            "a cleared canvas reads the same as one never written"
+        );
+    }
+
+    #[test]
+    fn test_canvas_section_from_query_response_empty_content_nudges_at_birth() {
         let ev = make_canvas_event_value("");
-        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth);
-        assert!(result.is_none());
+        assert_eq!(
+            canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth),
+            Some(render_canvas_empty_section(CHANNEL_UUID))
+        );
     }
 
     /// A bare JSON object with a plausible-looking id but missing pubkey/sig/kind/tags

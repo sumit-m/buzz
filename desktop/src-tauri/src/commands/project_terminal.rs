@@ -91,8 +91,42 @@ fn launch_terminal_at(path: &std::path::Path) -> Result<(), String> {
     Err("no terminal emulator found".to_string())
 }
 
+/// Git for Windows' windowed launcher, if this machine has one.
+///
+/// Deliberately not `bash.exe`: that is a console program with no console of
+/// its own when spawned from a GUI process, so it would flash and exit.
+/// `git-bash.exe` opens the mintty window. It sits at the install root while
+/// bash sits under `bin` or `usr/bin`, so the resolved shell is walked back up
+/// — a bash from somewhere that is not a Git for Windows layout (MSYS2, WSL)
+/// simply finds nothing and falls through to the console below.
+#[cfg(target_os = "windows")]
+fn git_bash_beside(bash: &std::path::Path) -> Option<std::path::PathBuf> {
+    bash.ancestors()
+        .skip(1)
+        .take(4)
+        .map(|directory| directory.join("git-bash.exe"))
+        .find(|launcher| launcher.is_file())
+}
+
+#[cfg(target_os = "windows")]
+fn git_bash_launcher() -> Option<std::path::PathBuf> {
+    git_bash_beside(&crate::managed_agents::git_bash::resolve_bash_path()?)
+}
+
 #[cfg(target_os = "windows")]
 fn launch_terminal_at(path: &std::path::Path) -> Result<(), String> {
+    // `--cd` is what the shell's own "Git Bash Here" entry passes; without it
+    // the launcher can land in the home directory instead of the checkout.
+    if let Some(launcher) = git_bash_launcher() {
+        let spawned = Command::new(&launcher)
+            .arg(format!("--cd={}", path.display()))
+            .current_dir(path)
+            .spawn();
+        if spawned.is_ok() {
+            return Ok(());
+        }
+    }
+
     Command::new("cmd")
         .args(["/C", "start", "", "cmd"])
         .current_dir(path)
@@ -263,6 +297,48 @@ pub async fn open_project_merge_recovery_terminal(
     })
     .await
     .map_err(|error| format!("open merge recovery terminal task failed: {error}"))?
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::git_bash_beside;
+
+    fn git_install(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("bin")).expect("create bin");
+        std::fs::create_dir_all(root.join("usr").join("bin")).expect("create usr/bin");
+        std::fs::write(root.join("git-bash.exe"), b"").expect("write launcher");
+    }
+
+    /// Both layouts Git for Windows puts `bash.exe` in must reach the launcher
+    /// at the install root, or the terminal silently falls back to cmd.
+    #[test]
+    fn both_bash_locations_find_the_launcher_at_the_install_root() {
+        let root = tempfile::tempdir().expect("create install root");
+        git_install(root.path());
+
+        for bash in [
+            root.path().join("bin").join("bash.exe"),
+            root.path().join("usr").join("bin").join("bash.exe"),
+        ] {
+            assert_eq!(
+                git_bash_beside(&bash),
+                Some(root.path().join("git-bash.exe")),
+                "{}",
+                bash.display()
+            );
+        }
+    }
+
+    #[test]
+    fn a_bash_outside_a_git_install_finds_nothing() {
+        let root = tempfile::tempdir().expect("create root");
+        std::fs::create_dir_all(root.path().join("usr").join("bin")).expect("create usr/bin");
+
+        assert_eq!(
+            git_bash_beside(&root.path().join("usr").join("bin").join("bash.exe")),
+            None
+        );
+    }
 }
 
 #[cfg(test)]

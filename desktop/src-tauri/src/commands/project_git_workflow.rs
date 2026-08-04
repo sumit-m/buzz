@@ -320,6 +320,32 @@ fn same_repository(left: &str, right: &str) -> bool {
         .eq_ignore_ascii_case(right.trim().trim_end_matches('/').trim_end_matches(".git"))
 }
 
+/// The directory a fresh clone should land in, given the candidate names in
+/// preference order.
+///
+/// The caller has already established that none of these directories holds
+/// *this* project, so an occupied candidate belongs to a different repository —
+/// two owners announcing the same repo name into one flat repos root. Stepping
+/// past it lands the clone on the owner-qualified fallback instead of failing.
+fn clone_destination(
+    repos_root: &std::path::Path,
+    candidates: &[String],
+) -> Result<std::path::PathBuf, String> {
+    let [preferred, ..] = candidates else {
+        return Err("Could not derive a directory name for the repository.".to_string());
+    };
+    candidates
+        .iter()
+        .map(|name| repos_root.join(name))
+        .find(|path| !path.exists())
+        .ok_or_else(|| {
+            format!(
+                "{} already exists but is not a git checkout.",
+                repos_root.join(preferred).display()
+            )
+        })
+}
+
 fn clone_destination_root(repos_dir: Option<&str>) -> Result<std::path::PathBuf, String> {
     match canonical_repos_roots(repos_dir) {
         Ok(roots) => roots
@@ -378,17 +404,8 @@ pub(crate) fn clone_project_repository_blocking(
     }
 
     let repos_root = clone_destination_root(repos_dir)?;
-    let repo_name = local_repo_candidates(project_dtag, Some(clone_url))
-        .into_iter()
-        .next()
-        .ok_or_else(|| "Could not derive a directory name for the repository.".to_string())?;
-    let repo_dir = repos_root.join(repo_name);
-    if repo_dir.exists() {
-        return Err(format!(
-            "{} already exists but is not a git checkout.",
-            repo_dir.display()
-        ));
-    }
+    let candidates = local_repo_candidates(project_dtag, Some(clone_url));
+    let repo_dir = clone_destination(&repos_root, &candidates)?;
     let repo_path = repo_dir
         .to_str()
         .ok_or_else(|| "repository path is not UTF-8".to_string())?;
@@ -672,8 +689,9 @@ pub async fn merge_project_pull_request(
 mod tests {
     use super::{
         align_unborn_head_branch, build_merged_status_event, build_pull_request_status_event,
-        normalize_commit, same_repository, validate_merge_status_metadata,
-        validate_project_owner_announcement, ProjectOwnerAnnouncementInput,
+        clone_destination, normalize_commit, same_repository,
+        validate_merge_status_metadata, validate_project_owner_announcement,
+        ProjectOwnerAnnouncementInput,
     };
     use crate::commands::project_git_exec::{build_test_git_auth_config, run_git};
     use nostr::{Event, JsonUtil, Keys, Timestamp};
@@ -692,6 +710,54 @@ mod tests {
                 .trim(),
             "ref: refs/heads/main"
         );
+    }
+
+    #[test]
+    fn a_clone_lands_on_the_bare_repo_name() {
+        let root = tempfile::tempdir().expect("create repos root");
+        let candidates = vec![
+            "g-helper".to_string(),
+            format!("{}--g-helper", "9".repeat(64)),
+        ];
+
+        assert_eq!(
+            clone_destination(root.path(), &candidates).expect("pick a destination"),
+            root.path().join("g-helper")
+        );
+    }
+
+    #[test]
+    fn a_name_another_owner_already_holds_falls_back_to_the_qualified_form() {
+        let root = tempfile::tempdir().expect("create repos root");
+        std::fs::create_dir(root.path().join("g-helper")).expect("occupy the bare name");
+        let qualified = format!("{}--g-helper", "9".repeat(64));
+        let candidates = vec!["g-helper".to_string(), qualified.clone()];
+
+        assert_eq!(
+            clone_destination(root.path(), &candidates).expect("pick a destination"),
+            root.path().join(qualified)
+        );
+    }
+
+    #[test]
+    fn every_candidate_being_taken_is_an_error() {
+        let root = tempfile::tempdir().expect("create repos root");
+        let qualified = format!("{}--g-helper", "9".repeat(64));
+        for name in ["g-helper", qualified.as_str()] {
+            std::fs::create_dir(root.path().join(name)).expect("occupy the name");
+        }
+
+        let error = clone_destination(root.path(), &["g-helper".to_string(), qualified])
+            .expect_err("every candidate is taken");
+        assert!(error.contains("g-helper"), "{error}");
+        assert!(error.contains("not a git checkout"), "{error}");
+    }
+
+    #[test]
+    fn no_candidate_name_is_an_error() {
+        let root = tempfile::tempdir().expect("create repos root");
+
+        clone_destination(root.path(), &[]).expect_err("no candidates to clone into");
     }
 
     #[test]

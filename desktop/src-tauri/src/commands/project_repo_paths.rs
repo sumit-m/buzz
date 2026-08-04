@@ -106,21 +106,27 @@ fn checkout_origin_matches(
     false
 }
 
+/// Directory names that could hold this project's checkout, best first.
+///
+/// The bare repo name leads because it is what a person reads in a file
+/// manager; `<owner>--<repo>` trails as the disambiguator for the one case the
+/// bare name cannot express — two owners announcing the same repo name into a
+/// single flat repos root. Clones walk this list until they find a free name,
+/// so the owner-qualified form is only ever created under collision, and the
+/// checkouts already sitting under it keep resolving because lookups still try
+/// every candidate.
 pub(crate) fn local_repo_candidates(project_dtag: &str, clone_url: Option<&str>) -> Vec<String> {
     let mut candidates = Vec::new();
-    if let Some(candidate) = clone_url.and_then(clone_url_owner_repo_name) {
-        candidates.push(candidate);
-    }
-    if let Some(candidate) = local_repo_name_candidate(project_dtag) {
-        if !candidates.iter().any(|existing| existing == &candidate) {
-            candidates.push(candidate);
+    let mut push = |candidate: Option<String>| {
+        if let Some(candidate) = candidate {
+            if !candidates.iter().any(|existing| existing == &candidate) {
+                candidates.push(candidate);
+            }
         }
-    }
-    if let Some(candidate) = clone_url.and_then(clone_url_repo_name) {
-        if !candidates.iter().any(|existing| existing == &candidate) {
-            candidates.push(candidate);
-        }
-    }
+    };
+    push(clone_url.and_then(clone_url_repo_name));
+    push(local_repo_name_candidate(project_dtag));
+    push(clone_url.and_then(clone_url_owner_repo_name));
     candidates
 }
 
@@ -241,8 +247,49 @@ mod tests {
         }
     }
 
-    use super::canonicalize_repos_root;
+    use super::{canonicalize_repos_root, local_repo_candidates};
     use crate::commands::project_git_exec::{build_test_git_auth_config, run_git};
+
+    const OWNER: &str = "9857acd558b3115a773b1bb51e4de8d38c26751ff4ad679114158a8b28a56b35";
+
+    /// The order is the contract: it decides where a clone lands, and
+    /// `desktop/src/features/projects/lib/projectLocalRepos.ts` mirrors it so
+    /// the UI can tell a cloned project from an uncloned one.
+    #[test]
+    fn the_bare_repo_name_leads_and_the_owner_qualified_name_trails() {
+        assert_eq!(
+            local_repo_candidates(
+                "g-helper",
+                Some(&format!("http://127.0.0.1:3000/git/{OWNER}/g-helper"))
+            ),
+            vec!["g-helper".to_string(), format!("{OWNER}--g-helper")]
+        );
+    }
+
+    /// Checkouts made before the bare name was preferred still resolve, because
+    /// lookups try every candidate rather than only the leading one.
+    #[test]
+    fn a_dtag_that_differs_from_the_repo_keeps_all_three_candidates() {
+        assert_eq!(
+            local_repo_candidates(
+                "g-helper-local",
+                Some(&format!("http://127.0.0.1:3000/git/{OWNER}/g-helper"))
+            ),
+            vec![
+                "g-helper".to_string(),
+                "g-helper-local".to_string(),
+                format!("{OWNER}--g-helper"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_project_without_a_clone_url_falls_back_to_its_dtag() {
+        assert_eq!(
+            local_repo_candidates("g-helper", None),
+            vec!["g-helper".to_string()]
+        );
+    }
 
     /// The canonical repos root is handed to `git clone` as the destination
     /// path, so it has to be a form git accepts. `Path::canonicalize` returns

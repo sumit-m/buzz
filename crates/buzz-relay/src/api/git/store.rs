@@ -720,6 +720,28 @@ impl GitStore {
     ///    `put_pointer(IfMatch(...))` and assert `Won`. Tests that the token
     ///    is opaque and stable between read and CAS.
     pub async fn run_conformance_probe(&self, cfg: ProbeConfig) -> Result<ProbeReport, StoreError> {
+        let mut written = Vec::new();
+        let result = self.run_conformance_probe_inner(cfg, &mut written).await;
+        // Clean up on every path, including failure. The probe used to leave
+        // its immutable writes behind on the theory that "the bucket's
+        // retention policy handles them" — but the bucket has no lifecycle
+        // rules, so every relay start stranded a few objects permanently.
+        // Nothing is lost by deleting them on failure either: a `ProbeFailure`
+        // already carries the key and the reason, and the bodies are
+        // deterministic (`probe-sequential-{nonce}-{round}`).
+        for key in &written {
+            if let Err(error) = self.delete_object(key).await {
+                tracing::warn!(key = %key, error = %error, "failed to clean up probe object");
+            }
+        }
+        result
+    }
+
+    async fn run_conformance_probe_inner(
+        &self,
+        cfg: ProbeConfig,
+        written: &mut Vec<String>,
+    ) -> Result<ProbeReport, StoreError> {
         use std::sync::Arc;
         if cfg.race_width < 2 || cfg.race_rounds == 0 {
             return Err(ProbeFailure {
@@ -735,6 +757,7 @@ impl GitStore {
         }
         let nonce = uuid::Uuid::new_v4();
         let pointer_key = format!("probe/pointer-{nonce}");
+        written.push(pointer_key.clone());
         // Accumulator for *transport-unknown* per-racer outcomes across both
         // race phases. See `ProbeReport::transport_drops` for the rationale.
         let mut transport_drops = 0usize;
@@ -745,6 +768,7 @@ impl GitStore {
             let key = self
                 .put_immutable("probe", &body, "application/x-git-pack")
                 .await?;
+            written.push(key.clone());
             let got = self
                 .get_verified(&key, &Self::digest_hex(&body))
                 .await
@@ -923,6 +947,7 @@ impl GitStore {
         for round in 0..cfg.race_rounds {
             let body = format!("probe-inm-race-{nonce}-{round}").into_bytes();
             let key = Self::content_key("probe/inm-race", &body);
+            written.push(key.clone());
             // Clean slate.
             let _ = self.bucket.delete_object(&key).await;
             let arc_self: Arc<&Self> = Arc::new(self);
@@ -1063,10 +1088,6 @@ impl GitStore {
                 }
             }
         }
-
-        // Cleanup pointer (immutable probe writes accumulate by design; the
-        // bucket's retention policy handles them, not the probe).
-        let _ = self.bucket.delete_object(&pointer_key).await;
 
         Ok(ProbeReport {
             race_width: cfg.race_width,
@@ -1721,6 +1742,21 @@ mod probe {
         eprintln!("✓ probe report: {report:?}");
         assert_eq!(report.race_width, 8);
         assert_eq!(report.race_rounds, 2);
+
+        // The probe is a startup gate, so anything it leaves behind is stranded
+        // once per relay start, forever — the bucket has no lifecycle rules to
+        // collect it. Assert the prefix it owns is empty rather than trusting
+        // the cleanup to stay wired up.
+        let leftovers = st
+            .list_prefix("probe/", 10_000)
+            .await
+            .expect("list probe prefix");
+        assert!(
+            leftovers.is_empty(),
+            "probe stranded {} objects: {:?}",
+            leftovers.len(),
+            leftovers.iter().map(|o| &o.key).take(5).collect::<Vec<_>>()
+        );
     }
 
     /// Quick probe: confirm rust-s3's `get_object` exposes ETag on the response.

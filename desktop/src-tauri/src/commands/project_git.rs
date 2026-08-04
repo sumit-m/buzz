@@ -407,6 +407,55 @@ pub(crate) fn normalize_branch_option(branch: Option<&str>) -> Option<String> {
     clean_branch(branch.map(str::to_string))
 }
 
+/// The object id `ls-remote --heads` reports for `branch`, if the remote has it.
+///
+/// Output is one `<oid>\t<refname>` pair per line. Matching on the full
+/// `refs/heads/<branch>` rather than a suffix keeps `main` from matching a
+/// remote's `feature/main`.
+fn ls_remote_head(listing: &str, branch: &str) -> Option<String> {
+    let wanted = format!("refs/heads/{branch}");
+    listing.lines().find_map(|line| {
+        let (oid, refname) = line.split_once('\t')?;
+        (refname.trim() == wanted).then(|| oid.trim().to_string())
+    })
+}
+
+/// Status for a poll that could not establish what the remote holds.
+///
+/// Everything local is still reported — the panel keeps showing the branch and
+/// head — but both actions are disabled with a reason that names the real
+/// problem. The alternative is presenting stale tracking-ref state as the
+/// remote's, which is what made a deleted-and-recreated repository look fully
+/// pushed.
+fn unreachable_remote_status(
+    repo_dir: &std::path::Path,
+    local_branch: Option<String>,
+    local_branches: Vec<String>,
+    local_head: Option<String>,
+    branch: String,
+    reason: &str,
+) -> ProjectRepoSyncStatusInfo {
+    ProjectRepoSyncStatusInfo {
+        local_path: Some(repo_dir.display().to_string()),
+        local_branch,
+        local_branches,
+        local_short_head: local_head.as_deref().map(short_hash),
+        local_head,
+        remote_branch: Some(branch),
+        remote_head: None,
+        remote_short_head: None,
+        merge_base: None,
+        ahead_count: 0,
+        behind_count: 0,
+        has_uncommitted_changes: false,
+        has_untracked_files: false,
+        can_push: false,
+        push_block_reason: Some(reason.to_string()),
+        can_pull: false,
+        pull_block_reason: Some(reason.to_string()),
+    }
+}
+
 pub(crate) fn compare_local_remote_status(
     repo_dir: &std::path::Path,
     clone_url: &str,
@@ -457,40 +506,94 @@ pub(crate) fn compare_local_remote_status(
     }
     let base_branch =
         normalize_branch_option(base_branch).filter(|base_branch| *base_branch != branch);
-    let mut fetch_args = vec![
-        "fetch",
-        "--quiet",
-        "--depth=100",
-        "--end-of-options",
-        "origin",
-        branch.as_str(),
-    ];
-    if let Some(base_branch) = base_branch.as_deref() {
-        fetch_args.push(base_branch);
-    }
-    let _ = run_git(&fetch_args, Some(repo_dir), auth);
 
     let local_head = run_git(&["rev-parse", "HEAD"], Some(repo_dir), auth)
         .ok()
         .and_then(|output| first_output_line(&output));
     let remote_ref = format!("refs/remotes/origin/{branch}");
-    let remote_head = run_git(
-        &["rev-parse", "--verify", "--quiet", remote_ref.as_str()],
-        Some(repo_dir),
-        auth,
-    )
-    .ok()
-    .and_then(|output| first_output_line(&output));
-    // A legacy empty clone may have an unborn local `master` while the project
-    // declares `main`. Permit that mismatch only when the remote has no branch
-    // refs at all; any lookup failure is treated as non-empty (fail closed).
-    let remote_has_branches = run_git(
+
+    // Ask the remote what it has *before* touching the checkout. `ls-remote`
+    // writes no refs and downloads no objects, so an unreachable remote cannot
+    // leave the repository in a state it was not in before the poll ran.
+    //
+    // This is also the authoritative answer. The previous implementation read
+    // the remote head from the local `refs/remotes/origin/<branch>` tracking
+    // ref, which reports whatever the last successful fetch saw — including
+    // for a repository that has since been deleted and re-created empty. The
+    // result was a repo the UI called "already pushed" while the remote held
+    // nothing, unrecoverable without deleting the ref by hand.
+    let Ok(remote_listing) = run_git(
         &["ls-remote", "--heads", "--end-of-options", "origin"],
         Some(repo_dir),
         auth,
-    )
-    .map(|output| !output.trim().is_empty())
-    .unwrap_or(true);
+    ) else {
+        // Fail closed *and* say so. Reporting stale local state as fact is how
+        // the caller ends up acting on a remote it never reached.
+        return unreachable_remote_status(
+            repo_dir,
+            local_branch,
+            local_branches,
+            local_head,
+            branch,
+            "Could not reach the remote.",
+        );
+    };
+    let remote_has_branches = !remote_listing.trim().is_empty();
+    let remote_head = ls_remote_head(&remote_listing, &branch);
+
+    // Fetch only refs the remote actually advertised. Naming one it does not
+    // have fails the whole fetch, which is how `base_branch` used to take the
+    // primary branch down with it.
+    let mut fetch_refs: Vec<&str> = Vec::new();
+    if remote_head.is_some() {
+        fetch_refs.push(branch.as_str());
+    }
+    if let Some(base_branch) = base_branch
+        .as_deref()
+        .filter(|base| ls_remote_head(&remote_listing, base).is_some())
+    {
+        fetch_refs.push(base_branch);
+    }
+
+    if !fetch_refs.is_empty() {
+        // No `--depth`: that flag does not bound the work, it rewrites the
+        // repository into a shallow clone and writes `.git/shallow`. A status
+        // poll running every 60s was silently truncating the user's history and
+        // making full-history pushes impossible ("shallow update not allowed").
+        // The fetch is incremental against a remote this checkout already
+        // tracks, so it is bounded by what is new.
+        let mut fetch_args = vec!["fetch", "--quiet", "--end-of-options", "origin"];
+        fetch_args.extend(&fetch_refs);
+        if run_git(&fetch_args, Some(repo_dir), auth).is_err() && remote_head.is_some() {
+            // The ahead/behind counts below are computed against
+            // `origin/<branch>`, which is only meaningful if this fetch
+            // succeeded. Without it we know the remote has the branch but not
+            // where it points relative to us.
+            return unreachable_remote_status(
+                repo_dir,
+                local_branch,
+                local_branches,
+                local_head,
+                branch,
+                "Could not update from the remote.",
+            );
+        }
+    }
+
+    if remote_head.is_none() {
+        // The remote does not have this branch, so any tracking ref for it is
+        // a leftover from before it went away. Delete it rather than let it
+        // stand in for a remote head that no longer exists.
+        let _ = run_git(
+            &["update-ref", "-d", remote_ref.as_str()],
+            Some(repo_dir),
+            auth,
+        );
+    }
+
+    // A legacy empty clone may have an unborn local `master` while the project
+    // declares `main`. Permit that mismatch only when the remote has no branch
+    // refs at all.
     let is_first_publish = remote_head.is_none() && !remote_has_branches;
     let merge_base = base_branch.as_deref().and_then(|base_branch| {
         run_git(
@@ -872,4 +975,65 @@ pub async fn pull_project_local_repository(
     })
     .await
     .map_err(|error| format!("repo pull task failed: {error}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ls_remote_head;
+
+    const OID: &str = "a426592fc8369e2c870ae650d09a7d7a79b24325";
+
+    fn listing() -> String {
+        format!(
+            "{OID}\trefs/heads/main\n\
+             1111111111111111111111111111111111111111\trefs/heads/feature/main\n\
+             2222222222222222222222222222222222222222\trefs/heads/release\n"
+        )
+    }
+
+    #[test]
+    fn reads_the_oid_for_the_requested_branch() {
+        assert_eq!(ls_remote_head(&listing(), "main").as_deref(), Some(OID));
+        assert_eq!(
+            ls_remote_head(&listing(), "release").as_deref(),
+            Some("2222222222222222222222222222222222222222")
+        );
+    }
+
+    /// Matching on a suffix would let a remote's `feature/main` answer for
+    /// `main`, which silently compares the checkout against the wrong branch.
+    #[test]
+    fn does_not_match_a_branch_that_merely_ends_with_the_name() {
+        assert_eq!(
+            ls_remote_head(
+                "3333333333333333333333333333333333333333\trefs/heads/feature/main\n",
+                "main"
+            ),
+            None
+        );
+    }
+
+    /// The empty listing is the load-bearing case: it means the remote has no
+    /// branches at all, which is how a freshly created — or deleted and
+    /// re-created — repository looks. Reporting a head here is what made an
+    /// empty repo appear "already pushed".
+    #[test]
+    fn absent_branch_and_empty_listing_both_yield_none() {
+        assert_eq!(ls_remote_head(&listing(), "missing"), None);
+        assert_eq!(ls_remote_head("", "main"), None);
+        assert_eq!(ls_remote_head("   \n", "main"), None);
+    }
+
+    #[test]
+    fn tolerates_trailing_whitespace_and_crlf() {
+        assert_eq!(
+            ls_remote_head(&format!("{OID}\trefs/heads/main  \r\n"), "main").as_deref(),
+            Some(OID)
+        );
+    }
+
+    #[test]
+    fn ignores_lines_without_a_tab_separator() {
+        assert_eq!(ls_remote_head("not-a-ref-line\n", "main"), None);
+    }
 }

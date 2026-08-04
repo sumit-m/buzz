@@ -7,6 +7,7 @@ import {
   XCircle,
 } from "lucide-react";
 
+import { filterEventsAfterClear } from "@/features/agents/lib/activityLogClear";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ManagedAgent } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
@@ -46,6 +47,12 @@ type ManagedAgentSessionPanelProps = {
   autoTail?: boolean;
   channelId?: string | null;
   className?: string;
+  /**
+   * Hide frames at or before this epoch-ms watermark. Set by the activity log's
+   * Clear action; `null` (the default) renders the whole window, which is what
+   * every other caller wants.
+   */
+  clearedAt?: number | null;
   emptyDescription?: string;
   emptyState?: AgentSessionTranscriptEmptyState;
   panelPadding?: boolean;
@@ -64,6 +71,7 @@ export function ManagedAgentSessionPanel({
   autoTail = false,
   channelId = null,
   className,
+  clearedAt = null,
   emptyDescription = "Mention this agent in a channel to watch the next turn.",
   emptyState = "idle",
   panelPadding = true,
@@ -105,8 +113,12 @@ export function ManagedAgentSessionPanel({
   // sorted ascending. Used as the single source for both the transcript and the
   // raw event rail / header count.
   const combinedEvents = React.useMemo(
-    () => mergeObserverEventWindows(scopedLiveEvents, archivedChannelEvents),
-    [scopedLiveEvents, archivedChannelEvents],
+    () =>
+      filterEventsAfterClear(
+        mergeObserverEventWindows(scopedLiveEvents, archivedChannelEvents),
+        clearedAt,
+      ),
+    [scopedLiveEvents, archivedChannelEvents, clearedAt],
   );
 
   // Derive transcript once from the combined raw window. When transcriptOverride

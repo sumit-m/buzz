@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   Clock3,
+  Eraser,
   Octagon,
   Settings,
   Sparkles,
@@ -10,12 +11,17 @@ import { toast } from "sonner";
 
 import { useAgentWorking } from "@/features/agents/agentWorkingSignal";
 import {
+  activityLogClearKey,
+  filterEventsAfterClear,
+  readActivityLogClearedAt,
+  writeActivityLogClearedAt,
+} from "@/features/agents/lib/activityLogClear";
+import {
   mergeObserverEventWindows,
   observerEventScrollId,
   scopeByChannel,
 } from "@/features/agents/ui/agentSessionPanelLayout";
 import { deriveTranscriptBlockIds } from "@/features/agents/ui/agentSessionTranscriptGrouping";
-import type { ObserverEvent } from "@/features/agents/ui/agentSessionTypes";
 import { ManagedAgentSessionPanel } from "@/features/agents/ui/ManagedAgentSessionPanel";
 import {
   useArchivedChannelEvents,
@@ -32,7 +38,6 @@ import {
 import type { Channel } from "@/shared/api/types";
 import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
-import { useNow } from "@/shared/lib/useNow";
 import { AuxiliaryPanel } from "@/shared/layout/AuxiliaryPanel";
 import { AuxiliaryPanelBody } from "@/shared/layout/AuxiliaryPanel";
 import {
@@ -116,15 +121,14 @@ export function AgentSessionThreadPanel({
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const contentRef = React.useRef<HTMLDivElement>(null);
   const topSentinelRef = React.useRef<HTMLDivElement>(null);
-  const now = useNow(1000);
   const { connectionState, events } = useObserverEvents(isLive, agent.pubkey);
   const scopedEvents = React.useMemo(
     () => scopeByChannel(events, sessionChannelId),
     [events, sessionChannelId],
   );
-  // Archived channel events merged with live scoped events so the header's
-  // "Last updated" timestamp reflects the full loaded history, not just the
-  // capped live window. Mirrors ManagedAgentSessionPanel's combinedEvents.
+  // Archived channel events merged with live scoped events so the panel's
+  // scroll anchors cover the full loaded history, not just the capped live
+  // window. Mirrors ManagedAgentSessionPanel's combinedEvents.
   const archivedChannelEvents = useArchivedChannelEvents(
     agent.pubkey,
     sessionChannelId,
@@ -133,15 +137,28 @@ export function AgentSessionThreadPanel({
     () => mergeObserverEventWindows(scopedEvents, archivedChannelEvents),
     [scopedEvents, archivedChannelEvents],
   );
-  const latestActivityAt = React.useMemo(
-    () => getLatestActivityTimestamp(combinedHeaderEvents),
-    [combinedHeaderEvents],
+  // Clear watermark for this (agent, channel). Read once per scope rather than
+  // on every render so the value stays stable between clicks; the scope key is
+  // the reset trigger, mirroring how `rawFeedState` is scoped below.
+  const clearScopeKey = activityLogClearKey(agent.pubkey, sessionChannelId);
+  const [clearState, setClearState] = React.useState(() => ({
+    scopeKey: clearScopeKey,
+    clearedAt: readActivityLogClearedAt(clearScopeKey),
+  }));
+  const clearedAt =
+    clearState.scopeKey === clearScopeKey
+      ? clearState.clearedAt
+      : readActivityLogClearedAt(clearScopeKey);
+  const handleClearActivityLog = React.useCallback(() => {
+    const clearedAtNow = Date.now();
+    writeActivityLogClearedAt(clearScopeKey, clearedAtNow);
+    setClearState({ scopeKey: clearScopeKey, clearedAt: clearedAtNow });
+  }, [clearScopeKey]);
+
+  const visibleHeaderEvents = React.useMemo(
+    () => filterEventsAfterClear(combinedHeaderEvents, clearedAt),
+    [combinedHeaderEvents, clearedAt],
   );
-  const lastUpdatedLabel = formatLastUpdatedLabel(latestActivityAt, now);
-  const lastUpdatedTitle =
-    latestActivityAt === null
-      ? undefined
-      : `Last updated ${new Date(latestActivityAt).toLocaleString()}`;
 
   const { fetchOlderArchived, hasOlderArchived } =
     useLoadArchivedObserverEvents(
@@ -184,8 +201,8 @@ export function AgentSessionThreadPanel({
   // never keys (agentSessionTranscriptGrouping.ts:557-574), so we avoid
   // subscribing to the observer store from the outer panel.
   const transcriptBlockIds = React.useMemo(
-    () => (showRawFeed ? [] : deriveTranscriptBlockIds(combinedHeaderEvents)),
-    [combinedHeaderEvents, showRawFeed],
+    () => (showRawFeed ? [] : deriveTranscriptBlockIds(visibleHeaderEvents)),
+    [visibleHeaderEvents, showRawFeed],
   );
 
   // Stabilize the id array by VALUE so the hook's restoration effect (keyed on
@@ -205,10 +222,10 @@ export function AgentSessionThreadPanel({
   // observerEventScrollId disambiguates.
   const rawScrollMessages = React.useMemo(
     () =>
-      combinedHeaderEvents.map((event) => ({
+      visibleHeaderEvents.map((event) => ({
         id: observerEventScrollId(event),
       })),
-    [combinedHeaderEvents],
+    [visibleHeaderEvents],
   );
 
   const { onScroll } = useAnchoredScroll({
@@ -298,6 +315,18 @@ export function AgentSessionThreadPanel({
 
   const agentHeaderActions = (
     <AuxiliaryPanelHeaderActions>
+      <Button
+        aria-label="Clear activity log"
+        className="text-muted-foreground hover:text-foreground"
+        data-testid="agent-session-clear-log"
+        onClick={handleClearActivityLog}
+        size="icon"
+        title="Clear activity log"
+        type="button"
+        variant="ghost"
+      >
+        <Eraser />
+      </Button>
       {isLive ? (
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
@@ -481,16 +510,6 @@ export function AgentSessionThreadPanel({
             >
               {headerScopeLabel}
             </p>
-            <span aria-hidden="true" className="shrink-0">
-              ·
-            </span>
-            <span
-              className="shrink-0"
-              data-testid="agent-session-recency-label"
-              title={lastUpdatedTitle}
-            >
-              {lastUpdatedLabel}
-            </span>
           </div>
         </div>
       </AuxiliaryPanelHeaderGroup>
@@ -528,6 +547,7 @@ export function AgentSessionThreadPanel({
             agent={agent}
             channelId={sessionChannelId}
             className="border-0 bg-transparent px-0 py-2 shadow-none"
+            clearedAt={clearedAt}
             emptyDescription={
               sessionChannelId
                 ? `Mention ${agent.name} in the channel to see its work here.`
@@ -542,62 +562,4 @@ export function AgentSessionThreadPanel({
       </AuxiliaryPanelBody>
     </AuxiliaryPanel>
   );
-}
-
-function getLatestActivityTimestamp(
-  events: readonly ObserverEvent[],
-): number | null {
-  let latest: number | null = null;
-
-  const record = (timestamp: string) => {
-    const parsed = Date.parse(timestamp);
-    if (!Number.isFinite(parsed)) {
-      return;
-    }
-
-    if (latest === null || parsed > latest) {
-      latest = parsed;
-    }
-  };
-
-  for (const event of events) {
-    record(event.timestamp);
-  }
-
-  return latest;
-}
-
-function formatLastUpdatedLabel(timestamp: number | null, now: number): string {
-  if (timestamp === null) {
-    return "No updates yet";
-  }
-
-  return `Last updated ${formatRelativeActivityTime(timestamp, now)}`;
-}
-
-function formatRelativeActivityTime(timestamp: number, now: number): string {
-  const elapsedMs = Math.max(0, now - timestamp);
-  const totalSeconds = Math.floor(elapsedMs / 1_000);
-
-  if (totalSeconds < 60) {
-    return "just now";
-  }
-
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes < 60) {
-    return `${totalMinutes}m ago`;
-  }
-
-  const totalHours = Math.floor(totalMinutes / 60);
-  if (totalHours < 24) {
-    return `${totalHours}h ago`;
-  }
-
-  const totalDays = Math.floor(totalHours / 24);
-  if (totalDays < 7) {
-    return `${totalDays}d ago`;
-  }
-
-  const totalWeeks = Math.floor(totalDays / 7);
-  return `${totalWeeks}w ago`;
 }

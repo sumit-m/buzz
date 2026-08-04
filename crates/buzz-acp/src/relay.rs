@@ -125,7 +125,7 @@ const GATED_OBSERVER_QUEUE_CAP: usize = 256;
 use std::time::Instant;
 
 use buzz_core::kind::{
-    KIND_AGENT_OBSERVER_FRAME, KIND_CHANNEL_FACTS, KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_AGENT_OBSERVER_FRAME, KIND_CANVAS, KIND_CHANNEL_FACTS, KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION, KIND_TYPING_INDICATOR,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -3456,17 +3456,32 @@ async fn wait_for_reconnect(
 ///   history. On reconnect (`since` is `Some`) subtracts [`SINCE_SKEW_SECS`].
 ///
 /// Returns `true` if the REQ was successfully written to the WebSocket.
-/// Whether the channel REQ needs a second filter to receive kind 40101.
+/// The channel-metadata kinds an agent watches for cache signals rather than
+/// for turns: the facts document and the canvas.
 ///
-/// The primary filter already carries facts events only when it names the kind
-/// (or is a wildcard) *and* does not require a mention — a facts event has no
-/// `#p` tag, so `require_mention` alone is enough to hide it.
-fn needs_facts_filter(filter: &ChannelFilter) -> bool {
+/// Neither is delivered to the model as an event — `lib.rs` intercepts both and
+/// turns them into a prompt section on the next turn.
+const METADATA_KINDS: [u32; 2] = [KIND_CHANNEL_FACTS, KIND_CANVAS];
+
+/// Whether the channel REQ needs a second filter to receive a metadata kind.
+///
+/// The primary filter already carries one only when it names the kind (or is a
+/// wildcard) *and* does not require a mention — neither a facts nor a canvas
+/// event has a `#p` tag, so `require_mention` alone is enough to hide it.
+fn needs_metadata_filter(filter: &ChannelFilter, kind: u32) -> bool {
     let kind_covered = match &filter.kinds {
         None => true,
-        Some(kinds) => kinds.contains(&KIND_CHANNEL_FACTS),
+        Some(kinds) => kinds.contains(&kind),
     };
     !kind_covered || filter.require_mention
+}
+
+/// The metadata kinds this filter cannot already deliver.
+fn uncovered_metadata_kinds(filter: &ChannelFilter) -> Vec<u32> {
+    METADATA_KINDS
+        .into_iter()
+        .filter(|kind| needs_metadata_filter(filter, *kind))
+        .collect()
 }
 
 async fn send_subscribe(
@@ -3505,19 +3520,21 @@ async fn send_subscribe(
     };
     req_filter.insert("since".into(), json!(since_ts));
 
-    // A facts event carries no `#p` tag, so `require_mention` hides it from the
-    // primary filter. NIP-01 REQs take any number of filters, OR'd, so a second
-    // one delivers kind 40101 on this same subscription — inheriting its id,
-    // reconnect path and `since` skew rather than re-deriving them.
-    let req = if needs_facts_filter(filter) {
-        let facts_filter = json!({
-            "kinds": [KIND_CHANNEL_FACTS],
+    // Facts and canvas events carry no `#p` tag, so `require_mention` hides
+    // them from the primary filter. NIP-01 REQs take any number of filters,
+    // OR'd, so a second one delivers both kinds on this same subscription —
+    // inheriting its id, reconnect path and `since` skew rather than
+    // re-deriving them.
+    let uncovered = uncovered_metadata_kinds(filter);
+    let req = if uncovered.is_empty() {
+        json!(["REQ", sub_id, Value::Object(req_filter)])
+    } else {
+        let metadata_filter = json!({
+            "kinds": uncovered,
             "#h": [channel_id.to_string()],
             "since": since_ts,
         });
-        json!(["REQ", sub_id, Value::Object(req_filter), facts_filter])
-    } else {
-        json!(["REQ", sub_id, Value::Object(req_filter)])
+        json!(["REQ", sub_id, Value::Object(req_filter), metadata_filter])
     };
 
     match serde_json::to_string(&req) {
@@ -4425,36 +4442,63 @@ mod resume_tests;
 #[cfg(test)]
 mod tests {
 
-    /// A facts event carries no `#p` tag, so a mention-filtered subscription
-    /// hides it. Without the second filter the refresh signal never arrives.
+    /// Neither a facts nor a canvas event carries a `#p` tag, so a
+    /// mention-filtered subscription hides both. Without the second filter the
+    /// change signal never arrives.
     #[test]
-    fn mention_filtered_channels_need_a_second_facts_filter() {
-        assert!(super::needs_facts_filter(&ChannelFilter {
+    fn mention_filtered_channels_need_a_second_metadata_filter() {
+        let filter = ChannelFilter {
             kinds: Some(vec![buzz_core::kind::KIND_STREAM_MESSAGE]),
             require_mention: true,
-        }));
+        };
+        assert_eq!(
+            super::uncovered_metadata_kinds(&filter),
+            vec![
+                buzz_core::kind::KIND_CHANNEL_FACTS,
+                buzz_core::kind::KIND_CANVAS
+            ]
+        );
     }
 
+    /// The default `SubscribeMode::Mentions` filter names message kinds only,
+    /// so both metadata kinds have to be added back.
     #[test]
-    fn kind_filtered_channels_need_a_second_facts_filter() {
-        assert!(super::needs_facts_filter(&ChannelFilter {
+    fn kind_filtered_channels_need_a_second_metadata_filter() {
+        let filter = ChannelFilter {
             kinds: Some(vec![buzz_core::kind::KIND_STREAM_MESSAGE]),
             require_mention: false,
-        }));
+        };
+        assert_eq!(
+            super::uncovered_metadata_kinds(&filter),
+            vec![
+                buzz_core::kind::KIND_CHANNEL_FACTS,
+                buzz_core::kind::KIND_CANVAS
+            ]
+        );
     }
 
     /// A wildcard subscription with no mention requirement already carries
     /// them; a second filter would be redundant traffic.
     #[test]
-    fn wildcard_channels_need_no_facts_filter() {
-        assert!(!super::needs_facts_filter(&ChannelFilter {
+    fn wildcard_channels_need_no_metadata_filter() {
+        assert!(super::uncovered_metadata_kinds(&ChannelFilter {
             kinds: None,
             require_mention: false,
-        }));
-        assert!(!super::needs_facts_filter(&ChannelFilter {
-            kinds: Some(vec![buzz_core::kind::KIND_CHANNEL_FACTS]),
-            require_mention: false,
-        }));
+        })
+        .is_empty());
+    }
+
+    /// A filter naming one metadata kind must still gain the other, rather
+    /// than being treated as covering the whole set.
+    #[test]
+    fn naming_one_metadata_kind_still_adds_the_other() {
+        assert_eq!(
+            super::uncovered_metadata_kinds(&ChannelFilter {
+                kinds: Some(vec![buzz_core::kind::KIND_CHANNEL_FACTS]),
+                require_mention: false,
+            }),
+            vec![buzz_core::kind::KIND_CANVAS]
+        );
     }
     use super::*;
 

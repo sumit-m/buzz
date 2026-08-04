@@ -2277,6 +2277,11 @@ pub struct FormatPromptArgs<'a> {
     /// prompt, which is fixed for the session's life. `None` on the common
     /// turn, where nothing changed.
     pub facts_refresh: Option<&'a str>,
+    /// A `[Channel Canvas — updated]` notice, when the canvas moved since this
+    /// session's last turn. Carries the new revision, never the document —
+    /// the agent re-reads it with `buzz canvas get` if the change matters.
+    /// `None` on the common turn, where nothing changed.
+    pub canvas_refresh: Option<&'a str>,
 }
 
 /// The prompt sections that do not change for the life of a session: base
@@ -2433,7 +2438,13 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
         sections.push(section.to_string());
     }
 
-    // 2. Context hints (with a same-level reply anchor).
+    // 1c. A canvas change, after the facts replacement. This one asks the agent
+    // to go and read something, so it sits closest to `[Context]` of the two.
+    if let Some(section) = args.canvas_refresh {
+        sections.push(section.to_string());
+    }
+
+    // 2. Context hints (with a human-aware reply anchor).
     //
     // In a thread every turn anchors to the triggering event's parent, so the
     // reply sits beside its question (see `resolve_reply_anchor`). Top-level,
@@ -3939,6 +3950,86 @@ mod tests {
             facts_at < context_at,
             "refresh should come before <context>"
         );
+    }
+
+    /// Both mid-session notices sit ahead of `[Context]`, and the canvas one
+    /// sits after facts: it is the only one that asks the agent to go and read
+    /// something, so it is the one that benefits from being nearest the turn.
+    #[test]
+    fn a_canvas_refresh_follows_facts_and_precedes_the_context_section() {
+        let ch = Uuid::new_v4();
+        let batch = FlushBatch {
+            scope: SessionScope::Conversation { channel_id: ch },
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event: make_event("hello"),
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let out = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                has_system_prompt_support: true,
+                facts_refresh: Some(
+                    "[Channel Facts — updated]
+replacement",
+                ),
+                canvas_refresh: Some(
+                    "[Channel Canvas — updated]
+revision b",
+                ),
+                ..Default::default()
+            },
+        )
+        .join(
+            "
+
+",
+        );
+
+        let facts_at = out
+            .find("[Channel Facts — updated]")
+            .expect("facts refresh section");
+        let canvas_at = out
+            .find("[Channel Canvas — updated]")
+            .expect("canvas refresh section");
+        let context_at = out.find("<context>").expect("context section");
+        assert!(facts_at < canvas_at, "facts should come before canvas");
+        assert!(canvas_at < context_at, "canvas should precede <context>");
+    }
+
+    /// The common turn carries neither notice.
+    #[test]
+    fn a_turn_with_no_change_carries_no_canvas_notice() {
+        let ch = Uuid::new_v4();
+        let batch = FlushBatch {
+            scope: SessionScope::Conversation { channel_id: ch },
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event: make_event("hello"),
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let out = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                has_system_prompt_support: true,
+                ..Default::default()
+            },
+        )
+        .join(
+            "
+
+",
+        );
+
+        assert!(!out.contains("[Channel Canvas"));
     }
 
     /// The common turn changes nothing, so it must cost nothing.

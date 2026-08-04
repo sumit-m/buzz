@@ -978,7 +978,7 @@ pub async fn pull_project_local_repository(
 }
 
 #[cfg(test)]
-mod tests {
+mod ls_remote_head_tests {
     use super::ls_remote_head;
 
     const OID: &str = "a426592fc8369e2c870ae650d09a7d7a79b24325";

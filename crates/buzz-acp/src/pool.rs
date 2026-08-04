@@ -173,6 +173,12 @@ pub struct SessionState {
     /// Under the default channel policy there is one scope per channel, so
     /// the drain is exact.
     pub facts_refresh_pending: HashSet<Uuid>,
+    /// Channels whose canvas changed since this session last saw them.
+    ///
+    /// Same shape as `facts_refresh_pending`, but the turn carries a notice
+    /// rather than the content: a canvas is an unbounded document, so the agent
+    /// re-reads it with `buzz canvas get` if it decides the change matters.
+    pub canvas_refresh_pending: HashSet<Uuid>,
 }
 
 impl SessionState {
@@ -204,6 +210,7 @@ impl SessionState {
         self.scope_owner_generations.remove(scope);
         self.facts_sections.remove(scope);
         self.facts_refresh_pending.remove(&scope.channel_id());
+        self.canvas_refresh_pending.remove(&scope.channel_id());
         self.sessions.remove(scope).is_some()
     }
 
@@ -247,6 +254,7 @@ impl SessionState {
         self.scope_owner_generations.clear();
         self.facts_sections.clear();
         self.facts_refresh_pending.clear();
+        self.canvas_refresh_pending.clear();
     }
 
     /// Record that a channel's facts changed under a live session.
@@ -293,6 +301,29 @@ impl SessionState {
         }
     }
 
+    /// Record that a channel's canvas changed under a live session.
+    ///
+    /// Mirrors [`Self::mark_facts_changed`]: a channel with no session fetches
+    /// the current revision at birth anyway, so flagging it would hand the
+    /// agent the same news twice. Drops the cached section so the next birth
+    /// re-fetches rather than seeding a revision that has already moved.
+    pub fn mark_canvas_changed(&mut self, channel_id: &Uuid) -> bool {
+        let scopes: Vec<SessionScope> = self
+            .sessions
+            .keys()
+            .filter(|scope| scope.channel_id() == *channel_id)
+            .cloned()
+            .collect();
+        if scopes.is_empty() {
+            return false;
+        }
+        for scope in scopes {
+            self.canvas_sections.remove(&scope);
+        }
+        self.canvas_refresh_pending.insert(*channel_id);
+        true
+    }
+
     #[cfg(test)]
     fn has_channel_state(&self, channel_id: &Uuid) -> bool {
         let matches = |s: &SessionScope| s.channel_id() == *channel_id;
@@ -303,6 +334,7 @@ impl SessionState {
             || self.deliveries.keys().any(matches)
             || self.facts_sections.keys().any(matches)
             || self.facts_refresh_pending.contains(channel_id)
+            || self.canvas_refresh_pending.contains(channel_id)
     }
 }
 
@@ -1453,6 +1485,22 @@ impl AgentPool {
         for slot in &mut self.agents {
             if let Some(agent) = slot.as_mut() {
                 if agent.state.mark_facts_changed(&channel_id) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// Mark a channel's canvas as changed on every agent holding a live session
+    /// for it, so each carries the notice into its next turn.
+    ///
+    /// Returns the number of sessions flagged.
+    pub fn mark_canvas_changed(&mut self, channel_id: Uuid) -> usize {
+        let mut count = 0;
+        for slot in &mut self.agents {
+            if let Some(agent) = slot.as_mut() {
+                if agent.state.mark_canvas_changed(&channel_id) {
                     count += 1;
                 }
             }
@@ -2742,7 +2790,9 @@ pub async fn run_prompt_task(
             // A confirmed DM never receives a canvas section; an undeterminable
             // channel type fails closed as a DM for the same reason.
             if needs_canvas && !is_dm {
-                if let Some(section) = fetch_canvas_section(cid, &ctx.rest_client).await {
+                if let Some(section) =
+                    fetch_canvas_section(cid, &ctx.rest_client, CanvasRender::Birth).await
+                {
                     pending_canvas = Some((scope.clone(), section));
                 }
             }
@@ -2812,6 +2862,33 @@ pub async fn run_prompt_task(
                 crate::facts_fetch::FactsRender::Refresh,
             )
             .await;
+        }
+    }
+
+    // A canvas change landed mid-session. Only a notice rides here — the
+    // document is unbounded, so the agent re-reads it itself if the change
+    // matters to what it is doing.
+    //
+    // The DM gate repeats the birth path's rule, including its fail-closed
+    // posture on an undeterminable channel type: a session that never received
+    // a `[Channel Canvas]` section must not be told one moved.
+    let mut canvas_refresh: Option<String> = None;
+    if let PromptSource::Channel(scope) = &source {
+        if agent
+            .state
+            .canvas_refresh_pending
+            .remove(&scope.channel_id())
+        {
+            let (is_dm, _, _) =
+                resolve_new_session_channel_context(resolved_channel_info.as_ref()).await;
+            if !is_dm {
+                canvas_refresh = fetch_canvas_section(
+                    scope.channel_id(),
+                    &ctx.rest_client,
+                    CanvasRender::Refresh,
+                )
+                .await;
+            }
         }
     }
 
@@ -3276,6 +3353,7 @@ pub async fn run_prompt_task(
             b,
             &crate::queue::FormatPromptArgs {
                 facts_refresh: facts_refresh.as_deref(),
+                canvas_refresh: canvas_refresh.as_deref(),
                 agent_core: standing.agent_core,
                 huddle_instructions: standing.huddle_instructions,
                 channel_info: channel_info.as_ref(),
@@ -4000,7 +4078,11 @@ fn huddle_instructions_from_query_response(
 ///
 /// Called at most once per new channel session; the result is cached in
 /// `SessionState::canvas_sections` and cleared on session invalidation.
-async fn fetch_canvas_section(channel_id: Uuid, rest: &RestClient) -> Option<String> {
+async fn fetch_canvas_section(
+    channel_id: Uuid,
+    rest: &RestClient,
+    mode: CanvasRender,
+) -> Option<String> {
     use nostr::{Alphabet, SingleLetterTag};
 
     let h_tag = SingleLetterTag::lowercase(Alphabet::H);
@@ -4048,7 +4130,7 @@ async fn fetch_canvas_section(channel_id: Uuid, rest: &RestClient) -> Option<Str
         }
     };
 
-    canvas_section_from_query_response(events, &channel_id.to_string())
+    canvas_section_from_query_response(events, &channel_id.to_string(), mode)
 }
 
 /// Parse a canvas query response array and render a `<channel-canvas>` section.
@@ -4062,6 +4144,7 @@ async fn fetch_canvas_section(channel_id: Uuid, rest: &RestClient) -> Option<Str
 pub(crate) fn canvas_section_from_query_response(
     events: &[serde_json::Value],
     channel_uuid: &str,
+    mode: CanvasRender,
 ) -> Option<String> {
     let raw = events.first()?;
 
@@ -4119,14 +4202,22 @@ pub(crate) fn canvas_section_from_query_response(
         return None;
     }
 
-    // Blank content means the canvas was cleared; do not fall back to older events.
+    // Blank content means the canvas was cleared; do not fall back to older
+    // events. At birth that is silence — a channel with no canvas and a channel
+    // whose canvas was emptied look the same, and neither has anything to read.
+    // Mid-session it is news: the agent may be holding content that was
+    // deliberately removed.
     if event.content.trim().is_empty() {
         tracing::debug!(
             target: "canvas::fetch",
             channel = %channel_uuid,
-            "latest canvas event has blank content — emitting no section"
+            ?mode,
+            "latest canvas event has blank content"
         );
-        return None;
+        return match mode {
+            CanvasRender::Birth => None,
+            CanvasRender::Refresh => Some(render_canvas_cleared_section()),
+        };
     }
 
     let id = event.id.to_hex();
@@ -4165,21 +4256,67 @@ pub(crate) fn canvas_section_from_query_response(
         event_id = %id,
         "injected channel canvas metadata section into system prompt"
     );
-    Some(render_canvas_section(&id, &timestamp, channel_uuid))
+    Some(render_canvas_section(&id, &timestamp, channel_uuid, mode))
+}
+
+/// Which delivery a rendered canvas section is bound for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CanvasRender {
+    /// Session birth. Rides in the system prompt for the session's life.
+    Birth,
+    /// A mid-session notice that the canvas moved. The canvas content is never
+    /// inlined — it is an unbounded document — so this is the only way an agent
+    /// learns to re-read one it may already have fetched.
+    Refresh,
 }
 
 /// Render the `<channel-canvas>` metadata section string.
 ///
 /// Pure function — kept separate so unit tests can exercise rendering
 /// without async machinery or relay connectivity.
-pub(crate) fn render_canvas_section(event_id: &str, timestamp: &str, channel_uuid: &str) -> String {
-    crate::prompt_framing::semantic_section(
-        "channel-canvas",
-        &format!(
-            "Canvas revision (event ID): {event_id}\n\
-             Last modified: {timestamp}\n\
-             Fetch current content with: buzz canvas get --channel {channel_uuid}"
+///
+/// The refresh form deliberately does not ask the agent to compare revisions:
+/// the harness emits it only because the canvas changed, so a comparison is
+/// redundant, and asking a model to diff two 64-char hex strings and branch on
+/// the result buys nothing. The revision rides along as a *label*, so an agent
+/// that already fetched this one can skip a second call.
+pub(crate) fn render_canvas_section(
+    event_id: &str,
+    timestamp: &str,
+    channel_uuid: &str,
+    mode: CanvasRender,
+) -> String {
+    match mode {
+        CanvasRender::Birth => crate::prompt_framing::semantic_section(
+            "channel-canvas",
+            &format!(
+                "Canvas revision (event ID): {event_id}\n\
+                 Last modified: {timestamp}\n\
+                 Fetch current content with: buzz canvas get --channel {channel_uuid}"
+            ),
         ),
+        CanvasRender::Refresh => crate::prompt_framing::semantic_section_with_attributes(
+            "channel-canvas",
+            &[("state", "updated")],
+            &format!(
+                "The canvas changed since your session started. Revision {event_id} · \
+                 modified {timestamp}\n\
+                 Re-read it before relying on it: buzz canvas get --channel {channel_uuid}"
+            ),
+        ),
+    }
+}
+
+/// Render the notice for a canvas that was cleared mid-session.
+///
+/// A cleared canvas emits no section at birth, so without this a deliberate
+/// clear is indistinguishable from silence — and an agent that already fetched
+/// the old content would keep answering from text its channel removed.
+pub(crate) fn render_canvas_cleared_section() -> String {
+    crate::prompt_framing::semantic_section_with_attributes(
+        "channel-canvas",
+        &[("state", "cleared")],
+        "The canvas was cleared and now has no content.",
     )
 }
 
@@ -6089,6 +6226,43 @@ pub(crate) mod tests {
         assert!(
             state.facts_refresh_pending.is_empty(),
             "a pending refresh dies with the session it was queued for"
+        );
+    }
+
+    /// Same contract as facts, with one difference that matters: the cached
+    /// section is dropped, so a session created after the change re-fetches the
+    /// current revision instead of seeding one that has already moved.
+    #[test]
+    fn canvas_changes_flag_only_live_sessions() {
+        let mut state = SessionState::default();
+        let ch = Uuid::new_v4();
+
+        assert!(
+            !state.mark_canvas_changed(&ch),
+            "no session yet — birth will fetch the current revision anyway"
+        );
+        assert!(state.canvas_refresh_pending.is_empty());
+
+        let scope = SessionScope::Conversation { channel_id: ch };
+        state.sessions.insert(scope.clone(), "sess-1".to_string());
+        state.canvas_sections.insert(
+            scope.clone(),
+            "[Channel Canvas]
+revision A"
+                .to_string(),
+        );
+
+        assert!(state.mark_canvas_changed(&ch));
+        assert!(state.canvas_refresh_pending.contains(&ch));
+        assert!(
+            !state.canvas_sections.contains_key(&scope),
+            "revision A must not survive the change that superseded it"
+        );
+
+        state.invalidate_channel(&ch);
+        assert!(
+            state.canvas_refresh_pending.is_empty(),
+            "a pending notice dies with the session it was queued for"
         );
     }
     use super::*;
@@ -11189,7 +11363,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         let id = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
         let ts = "2024-01-15T10:30:00+00:00";
         let uuid = "00f1ccaf-1506-4dd7-9a0e-fa67e9e486ae";
-        let section = render_canvas_section(id, ts, uuid);
+        let section = render_canvas_section(id, ts, uuid, CanvasRender::Birth);
         assert_eq!(
             section,
             "<channel-canvas>\n\
@@ -11198,6 +11372,45 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
              Fetch current content with: buzz canvas get --channel 00f1ccaf-1506-4dd7-9a0e-fa67e9e486ae\n\
              </channel-canvas>"
         );
+    }
+
+    #[test]
+    fn a_canvas_refresh_names_the_new_revision_and_asks_for_a_re_read() {
+        let id = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+        let uuid = "00f1ccaf-1506-4dd7-9a0e-fa67e9e486ae";
+        let section =
+            render_canvas_section(id, "2024-01-15T10:30:00Z", uuid, CanvasRender::Refresh);
+
+        assert!(section.starts_with("<channel-canvas state=\"updated\">"));
+        assert!(section.contains(id), "the new revision is the label");
+        assert!(
+            section.contains(&format!("buzz canvas get --channel {uuid}")),
+            "the notice repeats the command rather than relying on recall"
+        );
+        // The harness emits this only because the canvas moved, so asking the
+        // model to diff revisions would be redundant work it can get wrong.
+        assert!(
+            !section.contains("system prompt") && !section.contains("differs"),
+            "the notice must not ask for a revision comparison: {section}"
+        );
+    }
+
+    /// A cleared canvas is silence at birth and news mid-session — an agent
+    /// that already fetched the old content has no other way to learn it went.
+    #[test]
+    fn a_cleared_canvas_is_silent_at_birth_and_announced_on_refresh() {
+        let ev = make_canvas_event_value("   ");
+        assert!(canvas_section_from_query_response(
+            std::slice::from_ref(&ev),
+            CHANNEL_UUID,
+            CanvasRender::Birth
+        )
+        .is_none());
+
+        let refreshed =
+            canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Refresh)
+                .expect("a mid-session clear is news");
+        assert_eq!(refreshed, render_canvas_cleared_section());
     }
 
     // ── with_canvas ──────────────────────────────────────────────────────────
@@ -11309,7 +11522,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
     fn test_canvas_section_from_query_response_happy_path() {
         let ev = make_canvas_event_value("# Team instructions\nBe helpful.");
         let id = ev["id"].as_str().unwrap().to_string();
-        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID);
+        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth);
         let section = result.expect("expected Some");
         assert!(section.contains(&id), "section must contain the event id");
         assert!(section.contains("buzz canvas get --channel"));
@@ -11321,14 +11534,14 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
 
     #[test]
     fn test_canvas_section_from_query_response_empty_array_returns_none() {
-        let result = canvas_section_from_query_response(&[], CHANNEL_UUID);
+        let result = canvas_section_from_query_response(&[], CHANNEL_UUID, CanvasRender::Birth);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_canvas_section_from_query_response_blank_content_returns_none() {
         let ev = make_canvas_event_value("   ");
-        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID);
+        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth);
         assert!(
             result.is_none(),
             "blank content must return None (cleared canvas)"
@@ -11338,7 +11551,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
     #[test]
     fn test_canvas_section_from_query_response_empty_content_returns_none() {
         let ev = make_canvas_event_value("");
-        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID);
+        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth);
         assert!(result.is_none());
     }
 
@@ -11351,7 +11564,8 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             "created_at": 1705312200_i64,
             "content": "some instructions"
         });
-        let result = canvas_section_from_query_response(&[partial], CHANNEL_UUID);
+        let result =
+            canvas_section_from_query_response(&[partial], CHANNEL_UUID, CanvasRender::Birth);
         assert!(
             result.is_none(),
             "partial event object (missing pubkey/sig/kind/tags) must return None"
@@ -11373,7 +11587,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         .expect("serialise");
         // Corrupt created_at to a string value.
         ev["created_at"] = serde_json::Value::String("2026-03-15T16:30:00+00:00".into());
-        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID);
+        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth);
         assert!(
             result.is_none(),
             "string created_at must be rejected by nostr::Event deserialiser"
@@ -11394,7 +11608,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         )
         .expect("serialise");
         ev.as_object_mut().unwrap().remove("created_at");
-        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID);
+        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth);
         assert!(
             result.is_none(),
             "missing created_at must be rejected by nostr::Event deserialiser"
@@ -11417,7 +11631,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
                 .expect("sign"),
         )
         .expect("serialise");
-        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID);
+        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth);
         assert!(
             result.is_none(),
             "Timestamp::max() (u64::MAX) must return None — not wrap to 1969"
@@ -11442,7 +11656,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         .expect("serialise");
         // Tamper the content after signing — id and sig no longer agree.
         ev["content"] = serde_json::Value::String("injected instructions".into());
-        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID);
+        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth);
         assert!(
             result.is_none(),
             "tampered event must fail verify() and return None"
@@ -11461,7 +11675,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
                 .expect("sign"),
         )
         .expect("serialise");
-        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID);
+        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth);
         assert!(result.is_none(), "wrong kind must return None");
     }
 
@@ -11478,14 +11692,14 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
                 .expect("sign"),
         )
         .expect("serialise");
-        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID);
+        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth);
         assert!(result.is_none(), "mismatched h-tag must return None");
     }
 
     #[test]
     fn test_canvas_section_from_query_response_timestamp_uses_z_suffix() {
         let ev = make_canvas_event_value("instructions");
-        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID);
+        let result = canvas_section_from_query_response(&[ev], CHANNEL_UUID, CanvasRender::Birth);
         let section = result.expect("valid event must produce a section");
         assert!(
             section.contains('Z'),

@@ -35,8 +35,8 @@ use std::time::Duration;
 use acp::{AcpClient, EnvVar, McpServer};
 use anyhow::{ensure, Context, Result};
 use buzz_core::kind::{
-    KIND_CHANNEL_FACTS, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
-    KIND_STREAM_MESSAGE,
+    KIND_CANVAS, KIND_CHANNEL_FACTS, KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
 };
 use buzz_core::observer::{
     decrypt_observer_payload, encrypt_observer_payload, OBSERVER_FRAME_TELEMETRY,
@@ -3503,6 +3503,31 @@ async fn run_harness(
                                     channel_id = %ch,
                                     flagged,
                                     "channel facts changed — refresh queued for next turn"
+                                );
+                                continue;
+                            }
+
+                            // A canvas change is a cache signal too. Same
+                            // reasoning as facts: left to reach the queue it
+                            // would wake every agent in the channel on every
+                            // edit, and the edit is rarely what the channel
+                            // wants an agent to respond to.
+                            if kind_u32 == KIND_CANVAS {
+                                let ch = buzz_event.channel_id;
+                                // Our own write: the agent already knows what
+                                // it just set.
+                                if buzz_event.event.pubkey == config.keys.public_key() {
+                                    tracing::debug!(
+                                        channel_id = %ch,
+                                        "skipping own channel-canvas write"
+                                    );
+                                    continue;
+                                }
+                                let flagged = pool.mark_canvas_changed(ch);
+                                tracing::info!(
+                                    channel_id = %ch,
+                                    flagged,
+                                    "channel canvas changed — notice queued for next turn"
                                 );
                                 continue;
                             }

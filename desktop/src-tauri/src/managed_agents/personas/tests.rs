@@ -42,14 +42,11 @@ fn merge_personas_adds_missing_built_ins() {
     assert!(changed);
     assert_eq!(records.len(), BUILT_IN_PERSONAS.len());
     assert!(records.iter().all(|record| record.is_builtin));
-    assert!(records
-        .iter()
-        .any(|record| record.id == "builtin:fizz" && record.runtime.is_none()));
-    let display_names: Vec<&str> = records
-        .iter()
-        .map(|record| record.display_name.as_str())
-        .collect();
-    assert_eq!(display_names, vec!["Opus", "Sonnet", "Fable"]);
+    // Names, runtime and model depend on whether this machine has the Claude
+    // harness — the two variants are asserted directly in
+    // `builtin_names_follow_the_seed_variant` and
+    // `claude_variant_pins_harness_and_model_together`. What must hold on
+    // every machine is that the ids seed, in order, all active.
     let active_ids: Vec<&str> = records
         .iter()
         .filter(|record| record.is_active)
@@ -385,36 +382,111 @@ fn migrate_is_idempotent() {
     assert!(!migrate_retired_personas(&mut stored_pre_demotion, now));
 }
 
-// ── Fizz default harness ──────────────────────────────────────────────────────
+// ── Built-in seed variants (no Claude harness) ───────────────────────────────
 
 #[test]
-fn fizz_builtin_has_no_pinned_runtime() {
-    // The Fizz built-in must not hard-pin a runtime so it inherits the
-    // bundled default (buzz-agent) rather than requiring goose on PATH.
-    let records = built_in_persona_records("2026-01-01T00:00:00Z");
+fn builtin_has_no_pinned_runtime_without_claude() {
+    // Without the Claude harness the built-ins must not hard-pin a runtime,
+    // so they inherit the bundled default (buzz-agent) rather than requiring
+    // goose on PATH.
+    let records = built_in_persona_records("2026-01-01T00:00:00Z", false);
     let fizz = records
         .iter()
         .find(|r| r.id == "builtin:fizz")
         .expect("builtin:fizz must exist");
     assert_eq!(
         fizz.runtime, None,
-        "Fizz built-in must not pin a runtime — it should inherit the default"
+        "built-in must not pin a runtime — it should inherit the default"
+    );
+    assert_eq!(
+        fizz.model, None,
+        "a model without its harness would be handed to the default provider"
     );
 }
 
 #[test]
-fn fizz_builtin_resolves_to_buzz_agent() {
+fn builtin_resolves_to_buzz_agent_without_claude() {
     // With no runtime pin, effective_agent_command must fall through to
     // default_agent_command(), which resolves the bundled buzz-agent.
-    let records = built_in_persona_records("2026-01-01T00:00:00Z");
+    let records = built_in_persona_records("2026-01-01T00:00:00Z", false);
     assert_eq!(
         effective_agent_command(Some("builtin:fizz"), &records, None),
         default_agent_command(),
-        "Fizz must resolve to the bundled default harness, not goose"
+        "built-in must resolve to the bundled default harness, not goose"
     );
     assert_eq!(
         effective_agent_command(Some("builtin:fizz"), &records, None),
         "buzz-agent",
-        "Fizz must resolve to buzz-agent specifically"
+        "built-in must resolve to buzz-agent specifically"
     );
+}
+
+#[test]
+fn builtin_names_follow_the_seed_variant() {
+    let bees = built_in_persona_records("2026-01-01T00:00:00Z", false);
+    let names: Vec<&str> = bees.iter().map(|r| r.display_name.as_str()).collect();
+    assert_eq!(names, vec!["Fizz", "Honey", "Bumble"]);
+
+    let claude = built_in_persona_records("2026-01-01T00:00:00Z", true);
+    let names: Vec<&str> = claude.iter().map(|r| r.display_name.as_str()).collect();
+    assert_eq!(names, vec!["Opus", "Sonnet", "Fable"]);
+
+    // The name pool individualizes instance names; it must not keep the name
+    // from the other variant.
+    for record in claude.iter().chain(bees.iter()) {
+        assert_eq!(
+            record.name_pool,
+            vec![record.display_name.clone()],
+            "{} pool must match its own display name",
+            record.id
+        );
+    }
+}
+
+// ── Built-in seed variant (Claude harness present) ───────────────────────────
+
+#[test]
+fn claude_variant_pins_harness_and_model_together() {
+    // The pair is what makes the model meaningful: `effective_agent_command`
+    // takes the definition's runtime over the global default, and
+    // `resolve_linked` takes its model over the global one.
+    let records = built_in_persona_records("2026-01-01T00:00:00Z", true);
+    let expected = [
+        ("builtin:fizz", "opus[1m]"),
+        ("builtin:honey", "sonnet"),
+        ("builtin:bumble", "claude-fable-5[1m]"),
+    ];
+    for (id, model) in expected {
+        let record = records
+            .iter()
+            .find(|r| r.id == id)
+            .unwrap_or_else(|| panic!("{id} must exist"));
+        assert_eq!(record.runtime.as_deref(), Some("claude"), "{id} runtime");
+        assert_eq!(record.model.as_deref(), Some(model), "{id} model");
+        assert_eq!(
+            record.provider, None,
+            "{id}: the Claude runtime is provider_locked"
+        );
+    }
+
+    assert_eq!(
+        effective_agent_command(Some("builtin:fizz"), &records, None),
+        "claude-agent-acp",
+        "the pinned runtime must win over the default harness"
+    );
+}
+
+#[test]
+fn builtins_seed_without_instructions() {
+    // An agent's instructions are the user's to write — neither variant ships
+    // a system prompt.
+    for claude in [false, true] {
+        for record in built_in_persona_records("2026-01-01T00:00:00Z", claude) {
+            assert!(
+                record.system_prompt.is_empty(),
+                "{} seeded with instructions (claude={claude})",
+                record.id
+            );
+        }
+    }
 }

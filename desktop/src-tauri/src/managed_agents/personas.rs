@@ -6,52 +6,78 @@ use crate::{managed_agents::AgentDefinition, util::now_iso};
 
 struct BuiltInPersona {
     id: &'static str,
+    /// Name used when Claude Code is not installed — the agent is harness-
+    /// agnostic and inherits whatever the global default resolves to.
     display_name: &'static str,
+    /// Name used when Claude Code is installed, matching `claude_model`.
+    claude_display_name: &'static str,
+    /// Model id as the Claude harness reports it. Seeded only alongside
+    /// `RUNTIME_CLAUDE`, never on its own — a Claude model id set against
+    /// another provider is not a model that provider has.
+    claude_model: &'static str,
     avatar_url: Option<&'static str>,
-    system_prompt: &'static str,
-    name_pool: &'static [&'static str],
-    model: Option<&'static str>,
-    runtime: Option<&'static str>,
     default_active: bool,
 }
 
-const SHARED_SYSTEM_PROMPT: &str = "- When reporting information to me, be extremely concise and sacrifice grammar for the sake of concision\n- Write clean, self-documenting code.\n- Do NOT add comments that restate what the code clearly does.\n- Keep git commit messages minimal, no introductory text, no explanations, no conversational filler, no \"Co-Authored-By\" or AI disclaimers. Output only the raw commit message text in 2-3 lines.";
+/// The persona the Pollen rename migration keys on. Kept as constants so
+/// `migration::pollen` cannot drift from the table below.
+///
+/// LOCAL DIVERGENCE: upstream renames this persona Bumble -> Pollen. Our
+/// trio keeps Bumble as its harness-agnostic name, so both constants read
+/// the same and the migration is a no-op rather than dead code.
+pub(crate) const POLLEN_PERSONA_ID: &str = "builtin:bumble";
+/// Display name the rename migration writes.
+pub(crate) const POLLEN_DISPLAY_NAME: &str = "Bumble";
+/// The prompt the legacy record carried. Our trio ships no system prompt,
+/// but the migration still matches on this to recognise an unmodified
+/// legacy record.
+pub(crate) const POLLEN_LEGACY_SYSTEM_PROMPT: &str = "You are Bumble, a curious and adventurous researcher. Explore questions, compare options, check assumptions, and explain what you find clearly. Be candid when uncertain and favor useful evidence. Add occasional bee wordplay or 🐝🔎—keep it playful, never chaotic.";
+/// What the migration would write. Equal to the legacy prompt because our
+/// trio ships none, which makes the prompt half of the migration inert.
+pub(crate) const POLLEN_SYSTEM_PROMPT: &str = POLLEN_LEGACY_SYSTEM_PROMPT;
+/// Display name the rename migration replaces.
+pub(crate) const POLLEN_LEGACY_DISPLAY_NAME: &str = POLLEN_DISPLAY_NAME;
 
-// Named after the Claude models they are meant to be pointed at. The model is
-// not pinned here: `model`/`runtime` stay None so each one is set from the
-// persona editor once a runtime is chosen.
+/// Runtime id of the Claude Code harness in `KNOWN_ACP_RUNTIMES`.
+const RUNTIME_CLAUDE: &str = "claude";
+
+// Seeded with no system prompt: an agent's instructions are the user's to
+// write. Two naming variants, chosen once when the personas are first seeded
+// (see `built_in_persona_records`).
 const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
     BuiltInPersona {
         id: "builtin:fizz",
-        display_name: "Opus",
+        display_name: "Fizz",
+        claude_display_name: "Opus",
+        claude_model: "opus[1m]",
         avatar_url: None,
-        system_prompt: SHARED_SYSTEM_PROMPT,
-        name_pool: &["Opus"],
-        model: None,
-        runtime: None,
         default_active: true,
     },
     BuiltInPersona {
         id: "builtin:honey",
-        display_name: "Sonnet",
+        display_name: "Honey",
+        claude_display_name: "Sonnet",
+        claude_model: "sonnet",
         avatar_url: None,
-        system_prompt: SHARED_SYSTEM_PROMPT,
-        name_pool: &["Sonnet"],
-        model: None,
-        runtime: None,
         default_active: true,
     },
     BuiltInPersona {
-        id: "builtin:bumble",
-        display_name: "Fable",
+        id: POLLEN_PERSONA_ID,
+        display_name: POLLEN_DISPLAY_NAME,
+        claude_display_name: "Fable",
+        claude_model: "claude-fable-5[1m]",
         avatar_url: None,
-        system_prompt: SHARED_SYSTEM_PROMPT,
-        name_pool: &["Fable"],
-        model: None,
-        runtime: None,
         default_active: true,
     },
 ];
+
+fn built_in_display_name(persona: &BuiltInPersona, claude: bool) -> &'static str {
+    if claude {
+        persona.claude_display_name
+    } else {
+        persona.display_name
+    }
+}
 
 pub(crate) fn built_in_persona_avatar_url(id: &str) -> Option<&'static str> {
     BUILT_IN_PERSONAS
@@ -99,20 +125,30 @@ const RETIRED_PERSONAS: &[(&str, &str)] = &[
     ),
 ];
 
-fn built_in_persona_records(now: &str) -> Vec<AgentDefinition> {
+/// Build the built-in persona records.
+///
+/// `claude` selects between the two seed variants: with Claude Code installed
+/// each persona is named after the Claude model it is bound to and pinned to
+/// that harness; without it they keep their bee names and stay harness-
+/// agnostic, inheriting the global default. The harness and model are set
+/// together or not at all — a definition's own values win over the global
+/// config (`effective_config::resolve_linked`, `effective_agent_command`), so
+/// a model without its harness would be handed to whichever provider the
+/// default happens to resolve to.
+fn built_in_persona_records(now: &str, claude: bool) -> Vec<AgentDefinition> {
     BUILT_IN_PERSONAS
         .iter()
         .map(|persona| AgentDefinition {
             id: persona.id.to_string(),
-            display_name: persona.display_name.to_string(),
+            display_name: built_in_display_name(persona, claude).to_string(),
             avatar_url: persona.avatar_url.map(|s| s.to_string()),
             description: None,
-            system_prompt: persona.system_prompt.to_string(),
+            system_prompt: String::new(),
             acp_command: None,
-            runtime: persona.runtime.map(|s| s.to_string()),
-            model: persona.model.map(|s| s.to_string()),
+            runtime: claude.then(|| RUNTIME_CLAUDE.to_string()),
+            model: claude.then(|| persona.claude_model.to_string()),
             provider: None,
-            name_pool: persona.name_pool.iter().map(|s| s.to_string()).collect(),
+            name_pool: vec![built_in_display_name(persona, claude).to_string()],
             is_builtin: true,
             is_active: persona.default_active,
             shared: false,
@@ -132,7 +168,7 @@ fn built_in_persona_records(now: &str) -> Vec<AgentDefinition> {
 }
 
 pub(crate) fn built_in_persona_definition(id: &str, now: &str) -> Option<AgentDefinition> {
-    built_in_persona_records(now)
+    built_in_persona_records(now, super::discovery::claude_harness_available())
         .into_iter()
         .find(|persona| persona.id == id)
 }
@@ -168,7 +204,16 @@ fn sort_personas(records: &mut [AgentDefinition]) {
 fn merge_personas(mut stored: Vec<AgentDefinition>, now: &str) -> (Vec<AgentDefinition>, bool) {
     let mut changed = false;
 
-    for built_in in built_in_persona_records(now) {
+    // Probe for the Claude harness only when a built-in is actually about to
+    // be seeded. `load_personas` runs on many hot paths and `resolve_command`
+    // can spawn a login shell on a cold cache; every later load finds all
+    // three present and skips it.
+    let seeding = BUILT_IN_PERSONAS
+        .iter()
+        .any(|built_in| !stored.iter().any(|record| record.id == built_in.id));
+    let claude = seeding && super::discovery::claude_harness_available();
+
+    for built_in in built_in_persona_records(now, claude) {
         if let Some(existing) = stored.iter_mut().find(|record| record.id == built_in.id) {
             if !existing.is_builtin {
                 existing.is_builtin = true;

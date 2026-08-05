@@ -31,12 +31,21 @@ struct BuiltInTeam {
     persona_ids: &'static [&'static str],
 }
 
-const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
-    id: "builtin-team:welcome",
-    name: "Claude - Opus, Sonnet and Fable",
-    description: None,
-    persona_ids: &["builtin:fizz", "builtin:honey", "builtin:bumble"],
-}];
+/// The built-in teams, named to match whichever persona variant was seeded —
+/// see `personas::built_in_persona_records`. Chosen once, when the team is
+/// first seeded.
+fn built_in_teams(claude: bool) -> Vec<BuiltInTeam> {
+    vec![BuiltInTeam {
+        id: "builtin-team:welcome",
+        name: if claude {
+            "Claude - Opus, Sonnet and Fable"
+        } else {
+            "Welcome Team"
+        },
+        description: None,
+        persona_ids: &["builtin:fizz", "builtin:honey", "builtin:bumble"],
+    }]
+}
 
 // Built-in teams that have been retired. A stored copy that still exactly
 // matches its seed is purged on load (the user never touched it); customized
@@ -81,7 +90,13 @@ fn built_in_team_order(built_ins: &[BuiltInTeam], id: &str) -> Option<usize> {
 /// (name, description, persona membership). Returns the merged list and whether
 /// the store changed.
 fn merge_teams(stored: Vec<TeamRecord>, now: &str) -> (Vec<TeamRecord>, bool) {
-    merge_teams_impl(BUILT_IN_TEAMS, RETIRED_BUILT_IN_TEAMS, stored, now)
+    // Same lazy probe as `merge_personas`: only consulted when the team is
+    // missing and about to be seeded.
+    let claude = !stored
+        .iter()
+        .any(|record| record.id == "builtin-team:welcome")
+        && super::discovery::claude_harness_available();
+    merge_teams_impl(&built_in_teams(claude), RETIRED_BUILT_IN_TEAMS, stored, now)
 }
 
 fn merge_teams_impl(

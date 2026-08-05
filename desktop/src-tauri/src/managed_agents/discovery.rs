@@ -160,6 +160,27 @@ pub(crate) fn known_acp_runtime_exact(id: &str) -> Option<&'static KnownAcpRunti
     KNOWN_ACP_RUNTIMES.iter().find(|p| p.id == id)
 }
 
+/// Whether Claude Code is installed on this machine — either of its ACP
+/// adapter commands, or the underlying CLI they drive.
+///
+/// Used once, when the built-in personas and team are first seeded, to decide
+/// whether they are named after Claude models and bound to that harness (see
+/// `personas::built_in_persona_records`). Reads through `resolve_command`'s
+/// process-wide cache, which `clear_resolve_cache` invalidates after an
+/// install — but seeding is a first-run event, so a later install does not
+/// rename anything.
+pub(crate) fn claude_harness_available() -> bool {
+    let Some(runtime) = known_acp_runtime_exact("claude") else {
+        return false;
+    };
+    runtime
+        .commands
+        .iter()
+        .copied()
+        .chain(runtime.underlying_cli)
+        .any(|command| resolve_command(command).is_some())
+}
+
 /// The agent command a freshly-created agent defaults to when the create
 /// request supplies none. Resolves the bundled `buzz-agent` from the catalog so
 /// the default cannot drift from the provider definition. Falls back to the id

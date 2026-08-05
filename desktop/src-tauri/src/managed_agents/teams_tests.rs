@@ -339,7 +339,13 @@ fn welcome_team_is_seeded_and_idempotent() {
     assert_eq!(records.len(), 1);
     let welcome = &records[0];
     assert_eq!(welcome.id, "builtin-team:welcome");
-    assert_eq!(welcome.name, "Claude - Opus, Sonnet and Fable");
+    // The name depends on whether this machine has the Claude harness — the
+    // variant itself is covered by `welcome_team_name_follows_seed_variant`.
+    assert!(
+        welcome.name == "Claude - Opus, Sonnet and Fable" || welcome.name == "Welcome Team",
+        "unexpected seed name: {}",
+        welcome.name
+    );
     assert_eq!(welcome.description, None);
     assert_eq!(
         welcome.persona_ids,
@@ -358,6 +364,22 @@ fn welcome_team_is_seeded_and_idempotent() {
         serde_json::to_value(records_after_second_merge).unwrap(),
         expected
     );
+}
+
+#[test]
+fn welcome_team_name_follows_seed_variant() {
+    // Same conditional as the personas: named after the Claude models when
+    // that harness is present, bee names otherwise.
+    let claude = super::built_in_teams(true);
+    assert_eq!(claude[0].name, "Claude - Opus, Sonnet and Fable");
+
+    let bees = super::built_in_teams(false);
+    assert_eq!(bees[0].name, "Welcome Team");
+
+    // The id is stable across both, so a machine that gains the harness later
+    // is not seeded a second team.
+    assert_eq!(claude[0].id, bees[0].id);
+    assert_eq!(claude[0].persona_ids, bees[0].persona_ids);
 }
 
 #[test]

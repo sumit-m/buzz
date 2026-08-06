@@ -2125,3 +2125,41 @@ test("buildTranscript session/new bare systemPrompt field takes precedence over 
     "_meta.systemPrompt.append must not appear when bare field is present",
   );
 });
+
+// ── Effort ───────────────────────────────────────────────────────────────────
+// There is no ACP notification for effort the way `current_mode_update` covers
+// Mode, so the harness emits `effort_applied` carrying what the adapter
+// reported *after* applying it. The point of the event is that it can disagree
+// with what was requested.
+
+function effortEvent(payload) {
+  return { ...baseEvent, seq: 5, kind: "effort_applied", payload };
+}
+
+function effortItems(events) {
+  return buildTranscript(events).filter((item) => item.title === "Effort");
+}
+
+test("buildTranscript reports the effort the adapter confirmed", () => {
+  const [item] = effortItems([
+    effortEvent({ effort: "high", requested: "high" }),
+  ]);
+  assert.equal(item.text, "high");
+});
+
+test("buildTranscript shows the clamp when the adapter applied a different effort", () => {
+  // claude-agent-acp falls back to `default` for a level the selected model
+  // does not support. Showing only "default" would hide that the configured
+  // level never took effect.
+  const [item] = effortItems([
+    effortEvent({ effort: "default", requested: "max" }),
+  ]);
+  assert.equal(item.text, "default (requested max)");
+});
+
+test("buildTranscript renders no Effort line when the harness sent no value", () => {
+  // Effort is optional and model-dependent — its absence is normal, not an
+  // error, so nothing should appear rather than an empty row.
+  assert.equal(effortItems([effortEvent({ requested: "high" })]).length, 0);
+  assert.equal(effortItems([effortEvent({})]).length, 0);
+});

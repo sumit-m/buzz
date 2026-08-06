@@ -88,7 +88,7 @@ export function AgentEffortField({
           onEnvVarsChange({ ...envVars, [EFFORT_ENV_KEY]: value });
         }}
         options={options}
-        placeholder="Not set"
+        placeholder="Choose Effort"
         value={current}
       />
       {selectedDescription ? (

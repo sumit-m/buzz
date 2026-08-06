@@ -11,7 +11,12 @@ import { PersonaDropdownField } from "./PersonaDropdownField";
  */
 export const PERMISSION_MODE_ENV_KEY = "BUZZ_ACP_PERMISSION_MODE";
 
-/** Labels for the modes claude-agent-acp advertises. Unknown ids show raw. */
+/**
+ * Friendly labels, best-effort. The mode catalog is per-harness — `auto` is
+ * claude-agent-acp's and does not exist elsewhere — so this is a lookup over
+ * whatever the harness actually advertised, never a list to offer from. Ids
+ * with no entry render raw.
+ */
 const MODE_LABELS: Record<string, string> = {
   acceptEdits: "Accept edits — auto-approve file edits, ask for other tools",
   auto: "Auto — the harness decides, no prompt",
@@ -86,11 +91,6 @@ export function AgentPermissionModeField({
         placeholder="Harness default"
         value={current}
       />
-      <p className="text-xs text-muted-foreground">
-        Agents reply by running the <code>buzz</code> CLI, which the default{" "}
-        <code>dontAsk</code> refuses. Pick <code>auto</code> if an agent says it
-        cannot send messages.
-      </p>
     </div>
   );
 }

@@ -801,6 +801,15 @@ pub struct AgentModelsResponse {
     pub selected_model: Option<String>,
     /// Whether this agent supports model switching.
     pub supports_switching: bool,
+    /// Permission modes this harness advertises on `session/new`, in the order
+    /// it listed them. Empty when the adapter exposes none (goose, buzz-agent),
+    /// which the UI reads as "no mode picker for this harness".
+    ///
+    /// LOCAL: unfiltered on purpose — every mode the harness offers is
+    /// selectable, `bypassPermissions` included. See `PermissionMode` in
+    /// `crates/buzz-acp/src/config.rs`.
+    #[serde(default)]
+    pub permission_modes: Vec<String>,
 }
 
 /// A single model available from an agent.

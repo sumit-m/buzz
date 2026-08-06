@@ -435,6 +435,10 @@ export function usePersonaModelDiscovery({
 
   return {
     discoveredModelOptions,
+    // Permission modes ride the same probe as the model catalog, so they are
+    // available wherever discovery already ran. Empty for harnesses that
+    // advertise none, which the picker treats as "hide the field".
+    discoveredPermissionModes: activeModelDiscoveryData?.permissionModes ?? [],
     modelDiscoveryLoading: modelDiscoveryPending,
     modelDiscoveryStatus:
       modelDiscoveryPending || discoveredModelOptions !== null

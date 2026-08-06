@@ -274,6 +274,7 @@ pub async fn discover_agent_models(
             agent_default_model: None,
             selected_model: None,
             supports_switching: true,
+            permission_modes: Vec::new(),
         });
     }
     #[cfg(not(feature = "mesh-llm"))]
@@ -538,6 +539,7 @@ async fn discover_openai_compatible_models(
         agent_default_model: None,
         selected_model,
         supports_switching: true,
+        permission_modes: Vec::new(),
     }))
 }
 
@@ -684,6 +686,7 @@ async fn discover_anthropic_models(
         agent_default_model: None,
         selected_model,
         supports_switching: true,
+        permission_modes: Vec::new(),
     }))
 }
 
@@ -781,6 +784,20 @@ pub(super) fn normalize_agent_models(
 
     let supports_switching = !models.is_empty();
 
+    // Rides the same probe as the model catalog — `buzz-acp models` emits both
+    // from one `session/new`. Order is the adapter's, so the UI can present its
+    // preferred mode first.
+    let permission_modes = raw["stable"]["permissionModes"]
+        .as_array()
+        .map(|modes| {
+            modes
+                .iter()
+                .filter_map(|mode| mode.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
     AgentModelsResponse {
         agent_name,
         agent_version,
@@ -788,6 +805,7 @@ pub(super) fn normalize_agent_models(
         agent_default_model,
         selected_model: persisted_model,
         supports_switching,
+        permission_modes,
     }
 }
 

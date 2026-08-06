@@ -585,6 +585,14 @@ export type AgentModelsResponse = {
   agentDefaultModel: string | null;
   selectedModel: string | null;
   supportsSwitching: boolean;
+  /**
+   * Permission modes this harness advertises on `session/new`, in its own
+   * order. Empty when the adapter exposes none (goose, buzz-agent) — the mode
+   * picker hides itself rather than guessing a list.
+   *
+   * Optional so a response from an older sidecar still parses.
+   */
+  permissionModes?: string[];
 };
 export type AgentModelInfo = {
   id: string;

@@ -6353,7 +6353,7 @@ async fn run_authenticate(args: AuthenticateArgs) -> Result<()> {
 /// Flow: spawn → initialize → session/new → print models → shutdown.
 /// No relay connection, no MCP servers, no subscriptions. ~2-5s total.
 async fn run_models(args: ModelsArgs) -> Result<()> {
-    use acp::{extract_model_config_options, extract_model_state};
+    use acp::{extract_model_config_options, extract_model_state, extract_permission_modes};
 
     let agent_args = config::normalize_agent_args(&args.agent.agent_command, args.agent.agent_args);
     let cwd = current_working_directory()?;
@@ -6409,6 +6409,10 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
     // Extract model info from session/new response.
     let config_options = extract_model_config_options(&session_resp.raw);
     let model_state = extract_model_state(&session_resp.raw);
+    // Rides the same probe as models: one spawn, one session/new. Spawning an
+    // adapter is expensive enough to have its own timeout, so the mode catalog
+    // must not cost a second one.
+    let permission_modes = extract_permission_modes(&session_resp.raw);
 
     if args.json {
         // Structured JSON output — consumed by Phase 3 `get_agent_models`.
@@ -6419,6 +6423,7 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
             },
             "stable": {
                 "configOptions": config_options,
+                "permissionModes": permission_modes,
             },
             "unstable": model_state.as_ref().map(|ms| serde_json::json!({
                 "currentModelId": ms.get("currentModelId"),
@@ -6482,6 +6487,16 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
 
         if !has_models {
             println!("No model information available from this agent.");
+        }
+
+        println!();
+        if permission_modes.is_empty() {
+            println!("No permission modes advertised by this agent.");
+        } else {
+            println!("Permission modes (configId: mode):");
+            for mode in &permission_modes {
+                println!("  - {mode}");
+            }
         }
     }
 
@@ -9555,7 +9570,7 @@ mod build_mcp_servers_tests {
             model: None,
             effort_level: None,
             session_title: None,
-            permission_mode: config::PermissionMode::BypassPermissions,
+            permission_mode: config::PermissionMode::new("dontAsk"),
             respond_to: config::RespondTo::Anyone,
             respond_to_allowlist: std::collections::HashSet::new(),
             allowed_respond_to: vec![],
@@ -10692,7 +10707,7 @@ mod error_outcome_emission_tests {
             model: None,
             effort_level: None,
             session_title: None,
-            permission_mode: config::PermissionMode::BypassPermissions,
+            permission_mode: config::PermissionMode::new("dontAsk"),
             respond_to: config::RespondTo::Anyone,
             respond_to_allowlist: HashSet::new(),
             allowed_respond_to: vec![],

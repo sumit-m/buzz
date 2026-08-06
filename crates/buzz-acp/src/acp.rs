@@ -2261,6 +2261,53 @@ pub fn extract_model_config_options(result: &serde_json::Value) -> Vec<serde_jso
         .unwrap_or_default()
 }
 
+/// `configId` under which ACP adapters expose the permission mode, both in the
+/// `session/new` `configOptions` catalog and in `session/set_config_option`.
+/// Discovery and application share this constant so they cannot drift.
+pub const PERMISSION_MODE_CONFIG_ID: &str = "mode";
+
+/// Extract the permission-mode `configOptions` entry from a `session/new` result.
+///
+/// Keyed on `configId == "mode"` — the exact id `apply_permission_mode` sends to
+/// `session/set_config_option` — rather than on `category`, so discovery and
+/// application can never disagree about which entry is the permission mode.
+/// Some adapters spell the key `id` instead of `configId`; both are accepted,
+/// matching [`extract_model_config_options`]'s note.
+///
+/// Returns the raw entry, whose `options` array holds `{ value, displayName }`
+/// pairs — every mode this harness advertises, unfiltered.
+pub fn extract_mode_config_option(result: &serde_json::Value) -> Option<serde_json::Value> {
+    result["configOptions"].as_array().and_then(|arr| {
+        arr.iter()
+            .find(|opt| {
+                let id = opt
+                    .get("configId")
+                    .or_else(|| opt.get("id"))
+                    .and_then(|v| v.as_str());
+                id == Some(PERMISSION_MODE_CONFIG_ID)
+            })
+            .cloned()
+    })
+}
+
+/// Extract just the mode values from a `session/new` result, in the order the
+/// adapter advertised them. Empty when the adapter exposes no mode option.
+pub fn extract_permission_modes(result: &serde_json::Value) -> Vec<String> {
+    let Some(entry) = extract_mode_config_option(result) else {
+        return Vec::new();
+    };
+    entry["options"]
+        .as_array()
+        .map(|options| {
+            options
+                .iter()
+                .filter_map(|o| o.get("value").and_then(|v| v.as_str()))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Extract `SessionModelState` (unstable path) from a `session/new` result.
 ///
 /// Returns the `models` object if present: `{ currentModelId, availableModels: [...] }`.
@@ -2917,6 +2964,91 @@ mod tests {
     fn extract_model_config_options_empty_when_no_config_options() {
         let result = serde_json::json!({ "sessionId": "sess-1" });
         assert!(super::extract_model_config_options(&result).is_empty());
+    }
+
+    /// The catalog claude-agent-acp 0.61.0 advertises, captured in block/buzz#2884.
+    fn session_new_with_modes() -> serde_json::Value {
+        serde_json::json!({
+            "sessionId": "sess-1",
+            "configOptions": [
+                {
+                    "configId": "model",
+                    "category": "model",
+                    "displayName": "Model",
+                    "options": [{ "value": "opus", "displayName": "Opus" }]
+                },
+                {
+                    "configId": "mode",
+                    "category": "mode",
+                    "displayName": "Mode",
+                    "currentValue": "default",
+                    "options": [
+                        { "value": "auto", "displayName": "Auto" },
+                        { "value": "default", "displayName": "Manual" },
+                        { "value": "acceptEdits", "displayName": "Accept Edits" },
+                        { "value": "plan", "displayName": "Plan Mode" },
+                        { "value": "dontAsk", "displayName": "Don't Ask" },
+                        { "value": "bypassPermissions", "displayName": "Bypass Permissions" }
+                    ]
+                }
+            ]
+        })
+    }
+
+    #[test]
+    fn extract_permission_modes_returns_every_advertised_mode_in_order() {
+        // Unfiltered by design: the operator picks, not this harness. Order is
+        // the adapter's, so the UI can present its preferred default first.
+        assert_eq!(
+            super::extract_permission_modes(&session_new_with_modes()),
+            vec![
+                "auto",
+                "default",
+                "acceptEdits",
+                "plan",
+                "dontAsk",
+                "bypassPermissions"
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_mode_config_option_keys_on_config_id_not_category() {
+        // `category` is not what `set_config_option` addresses. An adapter that
+        // categorises the entry differently must still be found by its id.
+        let result = serde_json::json!({
+            "configOptions": [{
+                "configId": super::PERMISSION_MODE_CONFIG_ID,
+                "category": "permissions",
+                "options": [{ "value": "plan" }]
+            }]
+        });
+        assert_eq!(super::extract_permission_modes(&result), vec!["plan"]);
+    }
+
+    #[test]
+    fn extract_permission_modes_accepts_the_id_spelling() {
+        // Some adapters spell the key `id`; extract_model_config_options
+        // documents the same variance.
+        let result = serde_json::json!({
+            "configOptions": [{
+                "id": "mode",
+                "options": [{ "value": "dontAsk" }]
+            }]
+        });
+        assert_eq!(super::extract_permission_modes(&result), vec!["dontAsk"]);
+    }
+
+    #[test]
+    fn extract_permission_modes_empty_when_adapter_advertises_none() {
+        // Goose and buzz-agent expose no mode entry; discovery must degrade to
+        // an empty list rather than inventing one.
+        let result = serde_json::json!({
+            "configOptions": [{ "configId": "model", "options": [{ "value": "opus" }] }]
+        });
+        assert!(super::extract_permission_modes(&result).is_empty());
+        assert!(super::extract_mode_config_option(&result).is_none());
+        assert!(super::extract_permission_modes(&serde_json::json!({})).is_empty());
     }
 
     #[test]

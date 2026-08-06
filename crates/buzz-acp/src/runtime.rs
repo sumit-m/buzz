@@ -113,7 +113,7 @@ fn make_prompt_context(
         channel_info: pool::ChannelInfoResolver::new(channels, rest_client),
         context_message_limit: config.context_message_limit,
         max_turns_per_session: config.max_turns_per_session,
-        permission_mode: config.permission_mode,
+        permission_mode: config.permission_mode.clone(),
         agent_keys: config.keys.clone(),
         agent_owner_pubkey: resolve_agent_owner(config)
             .as_deref()

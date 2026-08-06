@@ -67,13 +67,18 @@ export function AgentPermissionModeField({
   // mode that would be rejected. Modes are per-harness and `auto` is further
   // gated per-model by `supportsAutoMode`, so this is a normal transition.
   const current = selected ? stored : "";
-  // Shown under the field so it gets the dialog's full width. Absent for
-  // "Harness default" and for adapters that ship names without descriptions.
+  // Shown under the field so it gets the dialog's full width. Absent while
+  // unset, and for adapters that ship names without descriptions.
   const selectedDescription = selected?.description?.trim();
-  const options = [
-    { label: "Harness default", value: "" },
-    ...modes.map((mode) => ({ label: modeLabel(mode), value: mode.id })),
-  ];
+  // Only the harness's own modes — no synthetic "unset" row. Every adapter that
+  // advertises modes also advertises one meaning "ask me normally"
+  // (claude-agent-acp calls it "Manual"), so ours only added a second row for
+  // an idea the harness already had a name for. Until something is chosen the
+  // control shows its placeholder.
+  const options = modes.map((mode) => ({
+    label: modeLabel(mode),
+    value: mode.id,
+  }));
 
   return (
     <div className="space-y-1.5">
@@ -85,16 +90,10 @@ export function AgentPermissionModeField({
         disabled={disabled}
         id={id}
         onValueChange={(value) => {
-          const next = { ...envVars };
-          if (value) {
-            next[PERMISSION_MODE_ENV_KEY] = value;
-          } else {
-            delete next[PERMISSION_MODE_ENV_KEY];
-          }
-          onEnvVarsChange(next);
+          onEnvVarsChange({ ...envVars, [PERMISSION_MODE_ENV_KEY]: value });
         }}
         options={options}
-        placeholder="Harness default"
+        placeholder="Not set"
         value={current}
       />
       {selectedDescription ? (

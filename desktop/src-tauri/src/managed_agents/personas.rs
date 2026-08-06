@@ -56,6 +56,21 @@ const PERMISSION_MODE_ENV_KEY: &str = "BUZZ_ACP_PERMISSION_MODE";
 /// checkpoint the way `bypassPermissions` would.
 const CLAUDE_PERMISSION_MODE: &str = "auto";
 
+/// Env var the harness reads its reasoning-effort level from.
+const EFFORT_ENV_KEY: &str = "BUZZ_ACP_EFFORT";
+
+/// Effort level seeded for the Claude variant.
+///
+/// Unlike the mode this is a preference, not a fix for a broken agent — a
+/// mis-seeded mode leaves the trio mute, a mis-seeded effort does not.
+///
+/// Safe to seed for all three without checking each model's catalog first:
+/// `buzz-acp` sends a level only when the *post-model-switch* catalog
+/// advertises it (`effort_advertised` in `pool.rs`), so a model that does not
+/// offer `high` silently keeps the adapter's default instead of failing the
+/// spawn. The dialog's own probe reports what a given model really supports.
+const CLAUDE_EFFORT: &str = "high";
+
 // Seeded with no system prompt: an agent's instructions are the user's to
 // write. Two naming variants, chosen once when the personas are first seeded
 // (see `built_in_persona_records`).
@@ -152,9 +167,9 @@ const RETIRED_PERSONAS: &[(&str, &str)] = &[
 /// default happens to resolve to.
 /// Seed env for the built-in personas.
 ///
-/// `auto` is claude-agent-acp's mode and exists on no other harness, so it
-/// rides the same set-together rule as the runtime and model: seeded only
-/// alongside `RUNTIME_CLAUDE`, never on its own.
+/// Both values are claude-agent-acp's own — `auto` exists on no other harness,
+/// and effort levels are per-model — so they ride the same set-together rule as
+/// the runtime and model: seeded only alongside `RUNTIME_CLAUDE`, never alone.
 fn built_in_persona_env(claude: bool) -> std::collections::BTreeMap<String, String> {
     let mut env = std::collections::BTreeMap::new();
     if claude {
@@ -162,6 +177,7 @@ fn built_in_persona_env(claude: bool) -> std::collections::BTreeMap<String, Stri
             PERMISSION_MODE_ENV_KEY.to_string(),
             CLAUDE_PERMISSION_MODE.to_string(),
         );
+        env.insert(EFFORT_ENV_KEY.to_string(), CLAUDE_EFFORT.to_string());
     }
     env
 }

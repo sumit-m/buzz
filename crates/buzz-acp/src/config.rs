@@ -118,53 +118,88 @@ impl std::fmt::Display for RespondTo {
 /// Permission mode for agents that support `session/set_config_option` with
 /// `configId: "mode"` (e.g. `claude-agent-acp`).
 ///
-/// - `default` — agent's built-in behaviour (permission requests per tool call).
-/// - `acceptEdits` — auto-approve file edits, still ask for other tools.
-/// - `bypassPermissions` — skip the permission flow entirely.
-/// - `dontAsk` — never prompt; reject anything that would require permission.
-/// - `plan` — planning-only mode (no tool execution).
-#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
-pub enum PermissionMode {
-    /// Agent default — permission requests per tool call.
-    #[value(alias = "default")]
-    Default,
-    /// Auto mode — fully autonomous execution; model-gated (requires a model
-    /// that supports `supportsAutoMode`).  Degrades gracefully to `default`
-    /// when the session's active model does not support it.
-    #[value(alias = "auto")]
-    Auto,
-    /// Auto-approve file edits, still ask for other tools.
-    #[value(alias = "acceptEdits")]
-    AcceptEdits,
-    /// Skip the permission flow entirely.
-    #[value(alias = "bypassPermissions")]
-    BypassPermissions,
-    /// Never prompt; reject anything that would require permission.
-    #[value(alias = "dontAsk")]
-    DontAsk,
-    /// Planning-only mode (no tool execution).
-    #[value(alias = "plan")]
-    Plan,
-}
+/// LOCAL DIVERGENCE: upstream models this as a fixed `clap::ValueEnum` over
+/// four variants. Here it is a pass-through string, so any mode the harness
+/// advertises in its `session/new` `configOptions` can be selected — the same
+/// treatment `model` already gets. `buzz-acp models` reports the catalog; see
+/// [`crate::acp::extract_permission_modes`].
+///
+/// Upstream has gone back and forth on `bypassPermissions` — removed from the
+/// enum in block/buzz #4609 so configuration could not restore it, then handed
+/// back by the #5323 revert, which also restored it as the default. The
+/// pass-through sidesteps the question: every mode the adapter advertises is
+/// reachable, and none is privileged by this type.
+///
+/// The guarantee #4609 actually made still holds either way — `buzz-acp` never
+/// *grants* a permission request; `handle_permission_request` denies
+/// unconditionally. An adapter that stops asking is the adapter's own
+/// behaviour, which that PR places outside this harness's scope.
+///
+/// The default here stays `dontAsk` rather than following upstream back to
+/// `bypassPermissions`: Buzz shows no human permission prompt, so an agent that
+/// silently proceeds is less safe than one that refuses and says so. Personas
+/// that want otherwise set `BUZZ_ACP_PERMISSION_MODE` explicitly.
+///
+/// Values are sent verbatim, so unknown modes reach adapters this build has
+/// never heard of. `apply_permission_mode` already treats an unsupported mode
+/// and a failed `set_config_option` as non-fatal, so a wrong value degrades to
+/// the adapter's own default rather than failing the session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionMode(String);
 
 impl PermissionMode {
+    /// Build a mode from any spelling. Kebab-case is folded to camelCase; every
+    /// other value is kept verbatim.
+    pub fn new(mode: impl AsRef<str>) -> Self {
+        Self(normalize_permission_mode(mode.as_ref()))
+    }
+
     /// Return the wire-format string sent to the agent via
     /// `session/set_config_option`.
-    pub fn as_wire_str(&self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::Auto => "auto",
-            Self::AcceptEdits => "acceptEdits",
-            Self::BypassPermissions => "bypassPermissions",
-            Self::DontAsk => "dontAsk",
-            Self::Plan => "plan",
-        }
+    pub fn as_wire_str(&self) -> &str {
+        &self.0
     }
 
     /// Returns `true` when the mode is the agent's built-in default and
     /// therefore doesn't need to be explicitly set.
     pub fn is_default(&self) -> bool {
-        matches!(self, Self::Default)
+        self.0 == "default"
+    }
+}
+
+/// Accept kebab-case spellings (`dont-ask`, `bypass-permissions`) and convert
+/// them to the camelCase the ACP wire format uses. Values already in camelCase,
+/// or single words, pass through untouched — which is what lets an unrecognised
+/// mode from a future adapter reach it unaltered.
+///
+/// This exists because the enum this replaced was a `ValueEnum`, so every
+/// existing `BUZZ_ACP_PERMISSION_MODE=dont-ask` and every `--permission-mode
+/// accept-edits` in a script kept working.
+fn normalize_permission_mode(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if !trimmed.contains('-') {
+        return trimmed.to_string();
+    }
+    let mut out = String::with_capacity(trimmed.len());
+    for (index, word) in trimmed.split('-').filter(|w| !w.is_empty()).enumerate() {
+        if index == 0 {
+            out.push_str(&word.to_lowercase());
+            continue;
+        }
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            out.extend(first.to_uppercase());
+            out.push_str(&chars.as_str().to_lowercase());
+        }
+    }
+    out
+}
+
+impl std::str::FromStr for PermissionMode {
+    type Err = std::convert::Infallible;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        Ok(Self::new(raw))
     }
 }
 
@@ -464,15 +499,13 @@ pub struct CliArgs {
     /// Permission mode for agents that support `session/set_config_option`
     /// with `configId: "mode"` (e.g. `claude-agent-acp`).
     ///
-    /// Defaults to `bypassPermissions` which skips the per-tool-call
-    /// permission flow. Set to `default` to restore the agent's built-in
-    /// behaviour.
-    #[arg(
-        long,
-        env = "BUZZ_ACP_PERMISSION_MODE",
-        default_value = "bypass-permissions",
-        value_enum
-    )]
+    /// Any value the adapter advertises is accepted and sent verbatim — run
+    /// `buzz-acp models` to list them. Kebab-case is folded to camelCase, so
+    /// `dont-ask` and `dontAsk` are the same mode.
+    ///
+    /// Defaults to `dontAsk`, which rejects operations that need interactive
+    /// approval because Buzz does not expose a human permission prompt.
+    #[arg(long, env = "BUZZ_ACP_PERMISSION_MODE", default_value = "dontAsk")]
     pub permission_mode: PermissionMode,
 
     /// Inbound author gate: which authors' events the harness forwards.
@@ -1601,7 +1634,7 @@ mod tests {
             model: None,
             effort_level: None,
             session_title: None,
-            permission_mode: PermissionMode::BypassPermissions,
+            permission_mode: PermissionMode::new("dontAsk"),
             respond_to: RespondTo::Anyone,
             respond_to_allowlist: HashSet::new(),
             allowed_respond_to: Vec::new(),
@@ -2439,25 +2472,21 @@ channels = "ALL"
 
     #[test]
     fn test_permission_mode_wire_strings() {
-        assert_eq!(PermissionMode::Default.as_wire_str(), "default");
-        assert_eq!(PermissionMode::Auto.as_wire_str(), "auto");
-        assert_eq!(PermissionMode::AcceptEdits.as_wire_str(), "acceptEdits");
+        assert_eq!(PermissionMode::new("default").as_wire_str(), "default");
         assert_eq!(
-            PermissionMode::BypassPermissions.as_wire_str(),
-            "bypassPermissions"
+            PermissionMode::new("acceptEdits").as_wire_str(),
+            "acceptEdits"
         );
-        assert_eq!(PermissionMode::DontAsk.as_wire_str(), "dontAsk");
-        assert_eq!(PermissionMode::Plan.as_wire_str(), "plan");
+        assert_eq!(PermissionMode::new("dontAsk").as_wire_str(), "dontAsk");
+        assert_eq!(PermissionMode::new("plan").as_wire_str(), "plan");
     }
 
     #[test]
     fn test_permission_mode_is_default() {
-        assert!(PermissionMode::Default.is_default());
-        assert!(!PermissionMode::Auto.is_default());
-        assert!(!PermissionMode::BypassPermissions.is_default());
-        assert!(!PermissionMode::AcceptEdits.is_default());
-        assert!(!PermissionMode::DontAsk.is_default());
-        assert!(!PermissionMode::Plan.is_default());
+        assert!(PermissionMode::new("default").is_default());
+        assert!(!PermissionMode::new("acceptEdits").is_default());
+        assert!(!PermissionMode::new("dontAsk").is_default());
+        assert!(!PermissionMode::new("plan").is_default());
     }
 
     #[test]
@@ -2465,7 +2494,7 @@ channels = "ALL"
         // The wire string is "auto" — the adapter handles graceful downgrade
         // to "default" when the active model does not support Auto mode.
         // Verify only that the wire string is correct and distinct from "default".
-        let auto = PermissionMode::Auto;
+        let auto = PermissionMode::new("auto");
         assert_eq!(auto.as_wire_str(), "auto");
         assert_ne!(auto.as_wire_str(), "default");
         assert!(!auto.is_default());
@@ -2473,21 +2502,17 @@ channels = "ALL"
 
     #[test]
     fn test_permission_mode_display() {
-        assert_eq!(
-            format!("{}", PermissionMode::BypassPermissions),
-            "bypassPermissions"
-        );
-        assert_eq!(format!("{}", PermissionMode::Default), "default");
-        assert_eq!(format!("{}", PermissionMode::Auto), "auto");
+        assert_eq!(format!("{}", PermissionMode::new("dontAsk")), "dontAsk");
+        assert_eq!(format!("{}", PermissionMode::new("default")), "default");
     }
 
     #[test]
     fn test_summary_includes_permission_mode() {
         let mut config = test_config(SubscribeMode::Mentions);
-        config.permission_mode = PermissionMode::BypassPermissions;
+        config.permission_mode = PermissionMode::new("dontAsk");
         let s = config.summary();
         assert!(
-            s.contains("permission_mode=bypassPermissions"),
+            s.contains("permission_mode=dontAsk"),
             "summary should include permission_mode, got: {s}"
         );
     }
@@ -2495,7 +2520,7 @@ channels = "ALL"
     #[test]
     fn test_summary_permission_mode_default() {
         let mut config = test_config(SubscribeMode::Mentions);
-        config.permission_mode = PermissionMode::Default;
+        config.permission_mode = PermissionMode::new("default");
         let s = config.summary();
         assert!(
             s.contains("permission_mode=default"),
@@ -2506,51 +2531,91 @@ channels = "ALL"
     #[test]
     fn test_default_config_uses_bypass_permissions() {
         let config = test_config(SubscribeMode::Mentions);
-        assert_eq!(config.permission_mode, PermissionMode::BypassPermissions);
+        assert_eq!(config.permission_mode, PermissionMode::new("dontAsk"));
     }
 
     #[test]
-    fn test_permission_mode_value_enum_kebab_case() {
-        // clap::ValueEnum generates kebab-case by default from PascalCase variants.
-        // Verify the parse path so variant renames don't silently break CLI/env parsing.
-        use clap::ValueEnum;
+    fn permission_mode_folds_kebab_case_to_the_camel_case_wire_format() {
+        // The enum this replaced was a ValueEnum, so kebab-case is what every
+        // existing script and BUZZ_ACP_PERMISSION_MODE value already uses.
         let cases = [
-            ("default", PermissionMode::Default),
-            ("auto", PermissionMode::Auto),
-            ("accept-edits", PermissionMode::AcceptEdits),
-            ("bypass-permissions", PermissionMode::BypassPermissions),
-            ("dont-ask", PermissionMode::DontAsk),
-            ("plan", PermissionMode::Plan),
+            ("default", "default"),
+            ("accept-edits", "acceptEdits"),
+            ("dont-ask", "dontAsk"),
+            ("bypass-permissions", "bypassPermissions"),
+            ("plan", "plan"),
         ];
-        for (input, expected) in &cases {
+        for (input, wire) in &cases {
             assert_eq!(
-                PermissionMode::from_str(input, true).unwrap(),
-                *expected,
-                "kebab-case {input:?} should parse"
+                PermissionMode::new(input).as_wire_str(),
+                *wire,
+                "kebab-case {input:?} should fold to {wire:?}"
             );
         }
     }
 
     #[test]
-    fn test_permission_mode_value_enum_camel_case_aliases() {
-        // Operators may set env vars using the camelCase wire-format strings
-        // (e.g. BUZZ_ACP_PERMISSION_MODE=bypassPermissions). The #[value(alias)]
-        // attributes ensure these parse correctly.
-        use clap::ValueEnum;
-        let cases = [
-            ("default", PermissionMode::Default),
-            ("auto", PermissionMode::Auto),
-            ("acceptEdits", PermissionMode::AcceptEdits),
-            ("bypassPermissions", PermissionMode::BypassPermissions),
-            ("dontAsk", PermissionMode::DontAsk),
-            ("plan", PermissionMode::Plan),
-        ];
-        for (input, expected) in &cases {
+    fn permission_mode_passes_camel_case_through_untouched() {
+        for wire in [
+            "default",
+            "acceptEdits",
+            "dontAsk",
+            "bypassPermissions",
+            "plan",
+            "auto",
+        ] {
+            assert_eq!(PermissionMode::new(wire).as_wire_str(), wire);
+        }
+    }
+
+    #[test]
+    fn permission_mode_accepts_modes_this_build_has_never_heard_of() {
+        // The whole point of the pass-through: a mode added by a future adapter
+        // reaches it without a Buzz release. Verified against the catalog in
+        // `buzz-acp models`, not against a hardcoded list.
+        assert_eq!(
+            PermissionMode::new("someFutureMode").as_wire_str(),
+            "someFutureMode"
+        );
+        assert_eq!(
+            PermissionMode::new("some-future-mode").as_wire_str(),
+            "someFutureMode"
+        );
+    }
+
+    #[test]
+    fn permission_mode_allows_unattended_bypass() {
+        // LOCAL DIVERGENCE. block/buzz#4609 removed `bypassPermissions` from
+        // the enum so configuration could not restore it; #5323 reverted that.
+        // Either way this fork reaches the mode the same way it reaches every
+        // other one, because the operator chooses.
+        //
+        // The guarantee #4609 actually makes still holds: `buzz-acp` never
+        // grants a permission request. `handle_permission_request` denies
+        // unconditionally regardless of this value — an adapter that stops
+        // asking is the adapter's own behaviour, which that PR places outside
+        // this harness's scope.
+        for input in ["bypass-permissions", "bypassPermissions"] {
             assert_eq!(
-                PermissionMode::from_str(input, true).unwrap(),
-                *expected,
-                "camelCase alias {input:?} should parse"
+                PermissionMode::new(input).as_wire_str(),
+                "bypassPermissions",
+                "{input:?} must reach the adapter verbatim"
             );
+        }
+    }
+
+    #[test]
+    fn permission_mode_is_default_only_for_the_agents_own_default() {
+        // `is_default()` gates whether set_config_option is sent at all.
+        assert!(PermissionMode::new("default").is_default());
+        for other in [
+            "dontAsk",
+            "acceptEdits",
+            "plan",
+            "bypassPermissions",
+            "auto",
+        ] {
+            assert!(!PermissionMode::new(other).is_default(), "{other:?}");
         }
     }
 

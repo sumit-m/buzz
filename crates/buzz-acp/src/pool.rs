@@ -5722,7 +5722,7 @@ pub(crate) mod tests {
         });
         assert!(agent_supports_mode(
             &session_new,
-            PermissionMode::Auto.as_wire_str()
+            "auto"
         ));
     }
 
@@ -5733,7 +5733,7 @@ pub(crate) mod tests {
         });
         assert!(!agent_supports_mode(
             &session_new,
-            PermissionMode::Auto.as_wire_str()
+            "auto"
         ));
     }
 
@@ -5742,7 +5742,7 @@ pub(crate) mod tests {
         let session_new = json!({ "sessionId": "sess-1" });
         assert!(!agent_supports_mode(
             &session_new,
-            PermissionMode::Auto.as_wire_str()
+            "auto"
         ));
     }
 
@@ -10477,7 +10477,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             ),
             context_message_limit: 0,
             max_turns_per_session: 0,
-            permission_mode: PermissionMode::Default,
+            permission_mode: PermissionMode::new("default"),
             agent_keys: agent_keys.clone(),
             agent_owner_pubkey: owner_pubkey,
             memory_enabled: false,

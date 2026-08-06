@@ -593,6 +593,17 @@ export type AgentModelsResponse = {
    * Optional so a response from an older sidecar still parses.
    */
   permissionModes?: AgentPermissionModeInfo[];
+  /**
+   * Effort levels the harness advertises **for the probed model**.
+   *
+   * Unlike `permissionModes` this is model-dependent: the adapter rebuilds the
+   * entry on every model switch and omits it for models with no effort
+   * control. Empty means "not offered here" — either the probe passed no
+   * model, or this one has no levels.
+   *
+   * Optional so a response from an older sidecar still parses.
+   */
+  effortLevels?: AgentEffortLevelInfo[];
 };
 
 /**
@@ -603,6 +614,18 @@ export type AgentModelsResponse = {
  */
 export type AgentPermissionModeInfo = {
   /** Sent verbatim to `session/set_config_option`. */
+  id: string;
+  label: string | null;
+  description: string | null;
+};
+
+/**
+ * An effort level as its harness describes it. Same passthrough rule as
+ * {@link AgentPermissionModeInfo} — the adapter derives these names from its
+ * own level ids, so Buzz shows what it was given and nothing more.
+ */
+export type AgentEffortLevelInfo = {
+  /** Sent verbatim to `session/set_config_option` under `configId: "effort"`. */
   id: string;
   label: string | null;
   description: string | null;

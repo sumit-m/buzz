@@ -232,6 +232,15 @@ pub struct ModelsArgs {
     #[command(flatten)]
     pub agent: AuthAgentArgs,
 
+    /// Select this model before reporting, so model-dependent options describe
+    /// it rather than the agent's default.
+    ///
+    /// Effort levels are rebuilt by the adapter on every model switch, so they
+    /// are only reported when this is set — without it the catalog would
+    /// describe whichever model the agent happened to start on.
+    #[arg(long)]
+    pub model: Option<String>,
+
     /// Output structured JSON instead of human-readable text.
     #[arg(long)]
     pub json: bool,
@@ -526,6 +535,19 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_PERMISSION_MODE", default_value = "dontAsk")]
     pub permission_mode: PermissionMode,
 
+    /// Reasoning-effort level for agents that advertise `configId: "effort"`
+    /// (e.g. `claude-agent-acp`).
+    ///
+    /// Sent verbatim, like the permission mode — run
+    /// `buzz-acp models --model <ID>` to list what a given model accepts.
+    /// Unset leaves the adapter's own default alone.
+    ///
+    /// Effort is **model-dependent**: the adapter rebuilds the option on every
+    /// model switch and omits it for models with no effort control, so a value
+    /// the selected model does not support is skipped rather than sent.
+    #[arg(long, env = "BUZZ_ACP_EFFORT")]
+    pub effort: Option<String>,
+
     /// Inbound author gate: which authors' events the harness forwards.
     /// Modes: owner-only (default), allowlist, anyone, nobody.
     #[arg(
@@ -650,6 +672,9 @@ pub struct Config {
     pub session_title: Option<String>,
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
+    /// Effort level to apply after session creation. `None` = leave the
+    /// adapter's default alone.
+    pub effort: Option<String>,
     /// Inbound author gate mode.
     pub respond_to: RespondTo,
     /// Validated allowlist of pubkey hex strings (used when respond_to == Allowlist).
@@ -1279,6 +1304,14 @@ impl Config {
                 .as_deref()
                 .and_then(sanitize_session_title),
             permission_mode: args.permission_mode,
+            // Trimmed to None so a blank env var reads as "unset" rather than
+            // an empty value the adapter would reject.
+            effort: args
+                .effort
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
             respond_to: args.respond_to,
             respond_to_allowlist,
             allowed_respond_to,
@@ -1659,6 +1692,7 @@ mod tests {
             effort_level: None,
             session_title: None,
             permission_mode: PermissionMode::new("dontAsk"),
+            effort: None,
             respond_to: RespondTo::Anyone,
             respond_to_allowlist: HashSet::new(),
             allowed_respond_to: Vec::new(),

@@ -2266,17 +2266,29 @@ pub fn extract_model_config_options(result: &serde_json::Value) -> Vec<serde_jso
 /// Discovery and application share this constant so they cannot drift.
 pub const PERMISSION_MODE_CONFIG_ID: &str = "mode";
 
-/// Extract the permission-mode `configOptions` entry from a `session/new` result.
+/// `configId` under which ACP adapters expose the reasoning-effort level.
 ///
-/// Keyed on `configId == "mode"` — the exact id `apply_permission_mode` sends to
-/// `session/set_config_option` — rather than on `category`, so discovery and
-/// application can never disagree about which entry is the permission mode.
-/// Some adapters spell the key `id` instead of `configId`; both are accepted,
-/// matching [`extract_model_config_options`]'s note.
+/// Unlike [`PERMISSION_MODE_CONFIG_ID`], this entry is **model-dependent**: the
+/// adapter emits it only when the currently selected model supports effort, and
+/// rebuilds it on every model switch. A catalog read before a switch therefore
+/// describes the *previous* model — see [`extract_effort_levels`].
+pub const EFFORT_CONFIG_ID: &str = "effort";
+
+/// Extract one `configOptions` entry by its `configId`.
 ///
-/// Returns the raw entry, whose `options` array holds `{ value, displayName }`
-/// pairs — every mode this harness advertises, unfiltered.
-pub fn extract_mode_config_option(result: &serde_json::Value) -> Option<serde_json::Value> {
+/// Keyed on `configId` — the exact id `session/set_config_option` addresses —
+/// rather than on `category`, so discovery and application can never disagree
+/// about which entry they mean. Some adapters spell the key `id` instead of
+/// `configId`; both are accepted, matching [`extract_model_config_options`]'s
+/// note.
+///
+/// Accepts any value carrying a `configOptions` array, which covers both a
+/// `session/new` result and a `session/set_config_option` response — the latter
+/// returns the rebuilt catalog under the same key.
+pub fn extract_config_option(
+    result: &serde_json::Value,
+    config_id: &str,
+) -> Option<serde_json::Value> {
     result["configOptions"].as_array().and_then(|arr| {
         arr.iter()
             .find(|opt| {
@@ -2284,21 +2296,24 @@ pub fn extract_mode_config_option(result: &serde_json::Value) -> Option<serde_js
                     .get("configId")
                     .or_else(|| opt.get("id"))
                     .and_then(|v| v.as_str());
-                id == Some(PERMISSION_MODE_CONFIG_ID)
+                id == Some(config_id)
             })
             .cloned()
     })
 }
 
-/// Extract the mode options from a `session/new` result, in the order the
-/// adapter advertised them. Empty when the adapter exposes no mode option.
+/// Extract the selectable values of one `configOptions` entry, in the order the
+/// adapter advertised them. Empty when the adapter exposes no such entry.
 ///
-/// Each entry is passed through whole — `value` plus whatever `name` and
-/// `description` the adapter supplied. Buzz must not label these itself: mode
-/// ids differ per harness, and the same spelling can mean different things, so
-/// only the adapter knows what its own modes do.
-pub fn extract_permission_modes(result: &serde_json::Value) -> Vec<serde_json::Value> {
-    let Some(entry) = extract_mode_config_option(result) else {
+/// Each option is passed through whole — `value` plus whatever `name` and
+/// `description` the adapter supplied. Buzz must not label these itself: ids
+/// differ per harness, and the same spelling can mean different things, so only
+/// the adapter knows what its own values do.
+fn extract_config_option_values(
+    result: &serde_json::Value,
+    config_id: &str,
+) -> Vec<serde_json::Value> {
+    let Some(entry) = extract_config_option(result, config_id) else {
         return Vec::new();
     };
     entry["options"]
@@ -2311,6 +2326,22 @@ pub fn extract_permission_modes(result: &serde_json::Value) -> Vec<serde_json::V
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Extract the mode options from a `session/new` result.
+pub fn extract_permission_modes(result: &serde_json::Value) -> Vec<serde_json::Value> {
+    extract_config_option_values(result, PERMISSION_MODE_CONFIG_ID)
+}
+
+/// Extract the effort levels advertised for the *currently selected* model.
+///
+/// Pass the response to the `session/set_config_option` that selected the model,
+/// not the original `session/new` result: the adapter rebuilds this entry as
+/// part of the switch, so the pre-switch catalog describes the model being left.
+/// Empty when the model does not support effort — the adapter omits the entry
+/// entirely rather than sending an empty list.
+pub fn extract_effort_levels(result: &serde_json::Value) -> Vec<serde_json::Value> {
+    extract_config_option_values(result, EFFORT_CONFIG_ID)
 }
 
 /// Extract `SessionModelState` (unstable path) from a `session/new` result.
@@ -3051,7 +3082,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_mode_config_option_keys_on_config_id_not_category() {
+    fn extract_config_option_keys_on_config_id_not_category() {
         // `category` is not what `set_config_option` addresses. An adapter that
         // categorises the entry differently must still be found by its id.
         let result = serde_json::json!({
@@ -3085,8 +3116,72 @@ mod tests {
             "configOptions": [{ "configId": "model", "options": [{ "value": "opus" }] }]
         });
         assert!(super::extract_permission_modes(&result).is_empty());
-        assert!(super::extract_mode_config_option(&result).is_none());
+        assert!(super::extract_config_option(&result, super::PERMISSION_MODE_CONFIG_ID).is_none());
         assert!(super::extract_permission_modes(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn extract_effort_levels_reads_a_set_config_option_response() {
+        // The response to the model switch carries the rebuilt catalog under the
+        // same `configOptions` key, which is the whole reason effort can be
+        // probed without a second round-trip.
+        let switch_response = serde_json::json!({
+            "configOptions": [
+                { "configId": "model", "category": "model", "currentValue": "opus" },
+                {
+                    "configId": "effort",
+                    "name": "Effort",
+                    "category": "thought_level",
+                    "currentValue": "default",
+                    "options": [
+                        { "value": "default", "name": "Default" },
+                        { "value": "high", "name": "High" },
+                        { "value": "max", "name": "Max" }
+                    ]
+                }
+            ]
+        });
+        let levels = super::extract_effort_levels(&switch_response);
+        assert_eq!(
+            levels
+                .iter()
+                .map(|l| l["value"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["default", "high", "max"]
+        );
+        // Labels are the adapter's own, never ours.
+        assert_eq!(levels[2]["name"].as_str(), Some("Max"));
+    }
+
+    #[test]
+    fn extract_effort_levels_empty_when_the_model_does_not_support_it() {
+        // The adapter omits the entry entirely rather than sending an empty
+        // list, so absence is the signal that this model has no effort control.
+        let result = serde_json::json!({
+            "configOptions": [
+                { "configId": "model", "category": "model" },
+                { "configId": "mode", "options": [{ "value": "plan" }] }
+            ]
+        });
+        assert!(super::extract_effort_levels(&result).is_empty());
+        assert!(super::extract_effort_levels(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn effort_and_mode_read_independently_from_one_catalog() {
+        // Both ride the same configOptions array; extracting one must not
+        // disturb or capture the other.
+        let result = serde_json::json!({
+            "configOptions": [
+                { "configId": "effort", "options": [{ "value": "high" }] },
+                { "configId": "mode", "options": [{ "value": "auto" }] }
+            ]
+        });
+        assert_eq!(
+            super::extract_effort_levels(&result)[0]["value"].as_str(),
+            Some("high")
+        );
+        assert_eq!(mode_values(&result), vec!["auto"]);
     }
 
     #[test]

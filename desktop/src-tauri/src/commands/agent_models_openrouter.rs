@@ -109,5 +109,6 @@ pub(super) fn filter_openrouter_models(
         selected_model,
         supports_switching: true,
         permission_modes: Vec::new(),
+        effort_levels: Vec::new(),
     }))
 }

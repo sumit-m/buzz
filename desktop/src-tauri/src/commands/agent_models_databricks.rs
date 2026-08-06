@@ -290,6 +290,7 @@ pub(super) fn databricks_models_response(
         selected_model,
         supports_switching: !entries_are_empty,
         permission_modes: Vec::new(),
+        effort_levels: Vec::new(),
     })
 }
 

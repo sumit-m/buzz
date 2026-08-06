@@ -944,22 +944,25 @@ export function AgentDefinitionDialog({
             ) : null}
           </AnimatePresence>
 
-          {permissionModeFieldVisible ? (
-            <AgentPermissionModeField
-              disabled={isPending || modelDiscoveryLoading}
-              envVars={envVars}
-              id="agent-definition-permission-mode"
-              modes={discoveredPermissionModes}
-              onEnvVarsChange={setEnvVars}
-            />
-          ) : null}
-
+          {/* Directly under Model, and above Mode: effort is a property of
+              the selected model — its levels change with it and it vanishes
+              for models without one — whereas Mode belongs to the harness. */}
           {effortFieldVisible ? (
             <AgentEffortField
               disabled={isPending || effortDiscoveryLoading}
               envVars={envVars}
               id="agent-definition-effort"
               levels={discoveredEffortLevels}
+              onEnvVarsChange={setEnvVars}
+            />
+          ) : null}
+
+          {permissionModeFieldVisible ? (
+            <AgentPermissionModeField
+              disabled={isPending || modelDiscoveryLoading}
+              envVars={envVars}
+              id="agent-definition-permission-mode"
+              modes={discoveredPermissionModes}
               onEnvVarsChange={setEnvVars}
             />
           ) : null}

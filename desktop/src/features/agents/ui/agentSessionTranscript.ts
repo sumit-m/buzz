@@ -758,6 +758,29 @@ export function processTranscriptEvent(
       ctx,
       event.kind,
     );
+  } else if (event.kind === "effort_applied") {
+    // The harness emits this after `session/set_config_option`, carrying the
+    // adapter's own post-apply value rather than the one requested — an
+    // adapter that clamps an unsupported level is reported as it actually ran.
+    // There is no ACP notification for effort the way `current_mode_update`
+    // covers Mode, so this Buzz-side event is the only truthful source.
+    const payload = asRecord(event.payload);
+    const effort = asString(payload.effort) ?? "";
+    if (effort) {
+      const requested = asString(payload.requested) ?? "";
+      upsertLifecycleItem(
+        d,
+        `effort:${ch}:${event.turnId ?? event.seq}`,
+        "status",
+        "Effort",
+        requested && requested !== effort
+          ? `${effort} (requested ${requested})`
+          : effort,
+        event.timestamp,
+        ctx,
+        event.kind,
+      );
+    }
   } else if (event.kind === "acp_parse_error") {
     upsertTextItem(
       d,

@@ -496,10 +496,28 @@ fn claude_variant_seeds_the_permission_mode() {
 }
 
 #[test]
-fn non_claude_variant_seeds_no_permission_mode() {
-    // `auto` is claude-agent-acp's and exists on no other harness, so it rides
-    // the same set-together rule as the runtime and model — seeding it against
-    // whatever the global default resolves to would send a mode that harness
+fn claude_variant_seeds_the_effort_level() {
+    // A preference rather than a fix, unlike the mode above — a mis-seeded
+    // mode leaves the trio mute, a mis-seeded effort does not. buzz-acp sends a
+    // level only when the post-switch catalog advertises it, so seeding all
+    // three without consulting each model's catalog is safe: one that does not
+    // offer `high` keeps the adapter's default.
+    for record in built_in_persona_records("2026-01-01T00:00:00Z", true) {
+        assert_eq!(
+            record.env_vars.get("BUZZ_ACP_EFFORT").map(String::as_str),
+            Some("high"),
+            "{} must seed the effort level",
+            record.id
+        );
+    }
+}
+
+#[test]
+fn non_claude_variant_seeds_no_env() {
+    // Both seeded values are claude-agent-acp's own — `auto` exists on no other
+    // harness, and effort levels are per-model — so they ride the same
+    // set-together rule as the runtime and model. Seeding either against
+    // whatever the global default resolves to would send a value that harness
     // never advertised.
     for record in built_in_persona_records("2026-01-01T00:00:00Z", false) {
         assert!(

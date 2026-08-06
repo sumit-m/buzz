@@ -1,5 +1,9 @@
+import type { AgentPermissionModeInfo } from "@/shared/api/types";
+import {
+  PERSONA_FIELD_DESCRIPTION_CLASS,
+  PERSONA_LABEL_OPTIONAL_CLASS,
+} from "./agentConfigOptions";
 import type { EnvVarsValue } from "./EnvVarsEditor";
-import { PERSONA_LABEL_OPTIONAL_CLASS } from "./agentConfigOptions";
 import { PersonaDropdownField } from "./PersonaDropdownField";
 
 /**
@@ -12,22 +16,19 @@ import { PersonaDropdownField } from "./PersonaDropdownField";
 export const PERMISSION_MODE_ENV_KEY = "BUZZ_ACP_PERMISSION_MODE";
 
 /**
- * Friendly labels, best-effort. The mode catalog is per-harness — `auto` is
- * claude-agent-acp's and does not exist elsewhere — so this is a lookup over
- * whatever the harness actually advertised, never a list to offer from. Ids
- * with no entry render raw.
+ * Name a mode using only what its harness said about it.
+ *
+ * Buzz deliberately ships no label table. Mode ids are per-harness — `auto` is
+ * claude-agent-acp's and exists nowhere else — and the same spelling can mean
+ * something different on another adapter, so inventing names here would be
+ * guessing on the operator's behalf. An adapter that supplies nothing shows
+ * its raw id, which is at least true.
+ *
+ * The description is deliberately left out: it belongs under the field, where
+ * it has the full dialog width, rather than in a dropdown row that clips it.
  */
-const MODE_LABELS: Record<string, string> = {
-  acceptEdits: "Accept edits — auto-approve file edits, ask for other tools",
-  auto: "Auto — the harness decides, no prompt",
-  bypassPermissions: "Bypass permissions — skip the permission flow entirely",
-  default: "Manual — ask for every tool call",
-  dontAsk: "Don't ask — refuse anything needing approval",
-  plan: "Plan only — no tool execution",
-};
-
-function modeLabel(mode: string) {
-  return MODE_LABELS[mode] ?? mode;
+function modeLabel(mode: AgentPermissionModeInfo) {
+  return mode.label?.trim() || mode.id;
 }
 
 /**
@@ -51,23 +52,28 @@ export function AgentPermissionModeField({
   disabled?: boolean;
   envVars: EnvVarsValue;
   id: string;
-  modes: readonly string[];
+  modes: readonly AgentPermissionModeInfo[];
   onEnvVarsChange: (next: EnvVarsValue) => void;
 }) {
   if (modes.length === 0) {
     return null;
   }
 
-  const current = envVars[PERMISSION_MODE_ENV_KEY]?.trim() ?? "";
+  const stored = envVars[PERMISSION_MODE_ENV_KEY]?.trim() ?? "";
+  const selected = modes.find((mode) => mode.id === stored);
+  // Only ever offer what this harness advertises. A stored mode it does not
+  // support — `auto` seeded for Claude, then the model or harness changed —
+  // is not a choice here, so the control reads as unset rather than listing a
+  // mode that would be rejected. Modes are per-harness and `auto` is further
+  // gated per-model by `supportsAutoMode`, so this is a normal transition.
+  const current = selected ? stored : "";
+  // Shown under the field so it gets the dialog's full width. Absent for
+  // "Harness default" and for adapters that ship names without descriptions.
+  const selectedDescription = selected?.description?.trim();
   const options = [
     { label: "Harness default", value: "" },
-    ...modes.map((mode) => ({ label: modeLabel(mode), value: mode })),
+    ...modes.map((mode) => ({ label: modeLabel(mode), value: mode.id })),
   ];
-  // A mode saved by hand, or by a harness that has since stopped listing it,
-  // must stay visible — otherwise opening the dialog silently discards it.
-  if (current && !modes.includes(current)) {
-    options.push({ label: `${current} (not advertised)`, value: current });
-  }
 
   return (
     <div className="space-y-1.5">
@@ -91,6 +97,9 @@ export function AgentPermissionModeField({
         placeholder="Harness default"
         value={current}
       />
+      {selectedDescription ? (
+        <p className={PERSONA_FIELD_DESCRIPTION_CLASS}>{selectedDescription}</p>
+      ) : null}
     </div>
   );
 }

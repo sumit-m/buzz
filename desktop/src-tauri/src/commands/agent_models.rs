@@ -18,11 +18,12 @@ use super::agent_update_rollback::{rollback_failed_agent_update, AgentUpdateRoll
 use crate::{
     app_state::AppState,
     managed_agents::{
-        current_instance_id, discovery_env_with_baked_floor, find_managed_agent_mut,
-        known_acp_runtime, load_global_agent_config, load_managed_agents, load_personas,
-        managed_agent_avatar_url, missing_command_message, normalize_agent_args, resolve_command,
-        save_managed_agents, sync_managed_agent_processes, try_regenerate_nest, AgentModelInfo,
-        AgentModelsResponse, ManagedAgentRecord, UpdateManagedAgentRequest,
+        build_managed_agent_summary, current_instance_id, discovery_env_with_baked_floor,
+        find_managed_agent_mut, known_acp_runtime, load_global_agent_config, load_managed_agents,
+        load_personas, managed_agent_avatar_url, missing_command_message, normalize_agent_args,
+        resolve_command, save_managed_agents, sync_managed_agent_processes, try_regenerate_nest,
+        AgentModelInfo, AgentModelsResponse, AgentPermissionModeInfo, ManagedAgentRecord,
+        UpdateManagedAgentRequest,
         UpdateManagedAgentResponse, DEFAULT_ACP_COMMAND,
     },
     relay::{relay_ws_url_with_override, sync_managed_agent_profile},
@@ -787,13 +788,25 @@ pub(super) fn normalize_agent_models(
     // Rides the same probe as the model catalog — `buzz-acp models` emits both
     // from one `session/new`. Order is the adapter's, so the UI can present its
     // preferred mode first.
+    // Labels are the adapter's, never ours. `name` is what claude-agent-acp
+    // emits; `displayName` is the spelling in the ACP docs — accept either and
+    // fall back to showing the raw id.
     let permission_modes = raw["stable"]["permissionModes"]
         .as_array()
         .map(|modes| {
             modes
                 .iter()
-                .filter_map(|mode| mode.as_str())
-                .map(str::to_string)
+                .filter_map(|mode| {
+                    let id = mode["value"].as_str()?.to_string();
+                    Some(AgentPermissionModeInfo {
+                        id,
+                        label: mode["name"]
+                            .as_str()
+                            .or_else(|| mode["displayName"].as_str())
+                            .map(str::to_string),
+                        description: mode["description"].as_str().map(str::to_string),
+                    })
+                })
                 .collect()
         })
         .unwrap_or_default();

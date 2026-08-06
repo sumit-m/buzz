@@ -20,7 +20,10 @@ import {
 } from "@/features/agents/lib/agentAccessWarning";
 import { useAgentRunLocation } from "./AgentRunLocationContext";
 import { PersonaDropdownField } from "./PersonaDropdownField";
-import type { PersonaDropdownOption } from "./agentConfigOptions";
+import {
+  PERSONA_FIELD_DESCRIPTION_CLASS,
+  type PersonaDropdownOption,
+} from "./agentConfigOptions";
 
 /**
  * Inbound author gate UI for create/edit agent dialogs.
@@ -234,7 +237,7 @@ export function CreateAgentRespondToField({
       )}
       {disabledReason ? (
         <p
-          className="text-xs text-muted-foreground"
+          className={PERSONA_FIELD_DESCRIPTION_CLASS}
           data-testid="agent-respond-to-disabled-reason"
         >
           {disabledReason}
@@ -242,7 +245,7 @@ export function CreateAgentRespondToField({
       ) : null}
       {mode === "anyone" ? accessWarning : null}
       {mode === "owner-only" ? (
-        <p className="text-xs text-muted-foreground">
+        <p className={PERSONA_FIELD_DESCRIPTION_CLASS}>
           Only you and your agents can send instructions.
         </p>
       ) : null}

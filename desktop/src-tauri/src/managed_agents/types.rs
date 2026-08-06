@@ -809,7 +809,22 @@ pub struct AgentModelsResponse {
     /// selectable, `bypassPermissions` included. See `PermissionMode` in
     /// `crates/buzz-acp/src/config.rs`.
     #[serde(default)]
-    pub permission_modes: Vec<String>,
+    pub permission_modes: Vec<AgentPermissionModeInfo>,
+}
+
+/// A permission mode as its harness describes it.
+///
+/// Buzz never writes these labels. Mode ids differ per harness and the same
+/// spelling can mean different things elsewhere, so only the adapter knows
+/// what its own modes do — `label` and `description` are passed through
+/// verbatim and are absent when it supplies none.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPermissionModeInfo {
+    /// Sent verbatim to `session/set_config_option`.
+    pub id: String,
+    pub label: Option<String>,
+    pub description: Option<String>,
 }
 
 /// A single model available from an agent.

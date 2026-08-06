@@ -30,6 +30,20 @@ export const PERSONA_FIELD_CONTROL_CLASS =
 export const PERSONA_LABEL_OPTIONAL_CLASS =
   "ml-1 text-xs font-normal text-muted-foreground/50";
 
+/**
+ * The harness's own description for a selected model or permission mode,
+ * rendered under its field. Shared so the two stay visually identical — they
+ * sit in adjacent form rows, and a difference in size or spacing reads as a
+ * mistake. Spacing is left to the field container's `space-y-1.5`.
+ *
+ * The `/55` tint matches this dialog's placeholder text — see the
+ * `placeholder:text-muted-foreground/55` in `PERSONA_FIELD_CONTROL_CLASS`.
+ * These descriptions are informational, not values the user set, so they read
+ * at the same weight as placeholder prose rather than competing with it.
+ */
+export const PERSONA_FIELD_DESCRIPTION_CLASS =
+  "text-sm text-muted-foreground/55";
+
 /** Shared advanced-fields expand/collapse easing for the agent dialogs. */
 export const ADVANCED_FIELDS_MOTION_TRANSITION = {
   duration: 0.18,

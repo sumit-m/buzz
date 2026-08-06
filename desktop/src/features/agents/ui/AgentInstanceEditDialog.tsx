@@ -89,6 +89,7 @@ import { useAgentDialogDefaults } from "./useAgentDialogDefaults";
 import { AgentAiDefaultsNotice } from "./AgentAiDefaults";
 import { AgentDefaultsDialog } from "./AgentDefaultsDialog";
 import { useProviderApiKeyFieldState } from "./providerApiKeyFieldState";
+import { AgentPermissionModeField } from "./AgentPermissionModeField";
 import { resolveModelFieldStatusMessage } from "./agentConfigControls";
 import { AdvancedRequiredBadge } from "./AdvancedRequiredBadge";
 import { showAgentProfileSyncWarning } from "./agentProfileSyncWarning";
@@ -431,6 +432,7 @@ export function AgentInstanceEditDialog({
 
   const {
     discoveredModelOptions,
+    discoveredPermissionModes,
     modelDiscoveryLoading,
     modelDiscoveryStatus,
     agentDefaultModel,
@@ -1120,6 +1122,13 @@ export function AgentInstanceEditDialog({
               storedEffort={inheritTransition ? null : storedEffort}
               value={effortPickKept ? effortLevel : storedEffort}
               onChange={setEffortLevel}
+            />
+            <AgentPermissionModeField
+              disabled={updateMutation.isPending || modelDiscoveryLoading}
+              envVars={envVars}
+              id="edit-agent-permission-mode"
+              modes={discoveredPermissionModes}
+              onEnvVarsChange={setEnvVars}
             />
 
             <AgentAiDefaultsNotice

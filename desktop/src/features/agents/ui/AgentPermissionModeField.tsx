@@ -93,7 +93,7 @@ export function AgentPermissionModeField({
           onEnvVarsChange({ ...envVars, [PERMISSION_MODE_ENV_KEY]: value });
         }}
         options={options}
-        placeholder="Not set"
+        placeholder="Choose Mode"
         value={current}
       />
       {selectedDescription ? (

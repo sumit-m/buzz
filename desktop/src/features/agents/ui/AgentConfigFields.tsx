@@ -947,7 +947,7 @@ export function AgentConfigFields({
           <button
             aria-expanded={advancedOpen}
             className={cn(
-              "inline-flex h-9 items-center gap-1.5 text-sm font-medium text-foreground transition-colors hover:text-foreground/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+              "inline-flex h-7 items-center gap-1.5 text-sm font-medium text-foreground transition-colors hover:text-foreground/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
               unstyled && "ml-3",
             )}
             data-testid="global-agent-advanced-toggle"

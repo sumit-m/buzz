@@ -3,9 +3,14 @@
  * nor the linked definition sets parallelism. Keep in sync with
  * `managed_agents::DEFAULT_AGENT_PARALLELISM` in the Tauri backend.
  */
-export const DEFAULT_AGENT_PARALLELISM = 10;
+export const DEFAULT_AGENT_PARALLELISM = 1;
 
-export const AGENT_PARALLELISM_PLACEHOLDER = `App default (${DEFAULT_AGENT_PARALLELISM})`;
+/**
+ * The placeholder is the bare number: it is what the field will use if left
+ * blank, and "App default (N)" spent a whole line restating the help text
+ * underneath.
+ */
+export const AGENT_PARALLELISM_PLACEHOLDER = `${DEFAULT_AGENT_PARALLELISM}`;
 export const AGENT_PARALLELISM_HELP = `Leave blank to use the app default (currently ${DEFAULT_AGENT_PARALLELISM}). Custom values may be 1–32.`;
 export const EDIT_AGENT_PARALLELISM_HELP =
   "Current value for this agent. Custom values may be 1–32.";

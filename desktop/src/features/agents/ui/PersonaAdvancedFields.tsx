@@ -24,6 +24,7 @@ import {
 import {
   CARD_MINT_KEY_ANNOTATIONS,
   PERSONA_FIELD_CONTROL_CLASS,
+  PERSONA_FIELD_DESCRIPTION_CLASS,
   PERSONA_FIELD_SHELL_CLASS,
   PERSONA_LABEL_OPTIONAL_CLASS,
 } from "./agentConfigOptions";
@@ -162,85 +163,83 @@ export function PersonaAdvancedFields({
 
       {afterRespondTo}
 
-      <div className="grid gap-5 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <label
-            className="text-sm font-medium text-foreground"
-            htmlFor="persona-session-policy"
-          >
-            Conversation context
-          </label>
-          <PersonaDropdownField
-            ariaDescribedBy="persona-session-policy-description"
+      <div className="space-y-1.5">
+        <label
+          className="text-sm font-medium text-foreground"
+          htmlFor="persona-session-policy"
+        >
+          Conversation context
+        </label>
+        <PersonaDropdownField
+          ariaDescribedBy="persona-session-policy-description"
+          disabled={disabled}
+          id="persona-session-policy"
+          onValueChange={(value) =>
+            onBehaviorDraftChange({
+              ...behaviorDraft,
+              sessionPolicy: value as AcpSessionPolicy,
+            })
+          }
+          options={[
+            { label: "Entire channel", value: "channel" },
+            { label: "Each thread", value: "thread" },
+          ]}
+          placeholder="Entire channel"
+          value={behaviorDraft.sessionPolicy}
+        />
+        <p
+          className={PERSONA_FIELD_DESCRIPTION_CLASS}
+          id="persona-session-policy-description"
+        >
+          {behaviorDraft.sessionPolicy === "thread"
+            ? "Keeps a separate conversation for each channel thread. Direct messages remain shared."
+            : "Shares one conversation across every thread in a channel."}
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <label
+          className="text-sm font-medium text-foreground"
+          htmlFor="persona-parallelism"
+        >
+          Parallelism
+          <span className={PERSONA_LABEL_OPTIONAL_CLASS}>Optional</span>
+        </label>
+        <div
+          className={cn(
+            "flex min-h-11 items-center px-3",
+            PERSONA_FIELD_SHELL_CLASS,
+          )}
+        >
+          <Input
+            className={cn(
+              "h-8 px-0 py-0 leading-6 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+              PERSONA_FIELD_CONTROL_CLASS,
+            )}
             disabled={disabled}
-            id="persona-session-policy"
-            onValueChange={(value) =>
+            id="persona-parallelism"
+            inputMode="numeric"
+            max={32}
+            min={1}
+            onChange={(event) =>
               onBehaviorDraftChange({
                 ...behaviorDraft,
-                sessionPolicy: value as AcpSessionPolicy,
+                parallelism: event.target.value,
               })
             }
-            options={[
-              { label: "Entire channel", value: "channel" },
-              { label: "Each thread", value: "thread" },
-            ]}
-            placeholder="Entire channel"
-            value={behaviorDraft.sessionPolicy}
+            placeholder={AGENT_PARALLELISM_PLACEHOLDER}
+            type="number"
+            value={behaviorDraft.parallelism}
           />
-          <p
-            className="text-xs text-muted-foreground"
-            id="persona-session-policy-description"
-          >
-            {behaviorDraft.sessionPolicy === "thread"
-              ? "Keeps a separate conversation for each channel thread. Direct messages remain shared."
-              : "Shares one conversation across every thread in a channel."}
-          </p>
         </div>
-
-        <div className="space-y-1.5">
-          <label
-            className="text-sm font-medium text-foreground"
-            htmlFor="persona-parallelism"
-          >
-            Parallelism
-            <span className={PERSONA_LABEL_OPTIONAL_CLASS}>Optional</span>
-          </label>
-          <div
-            className={cn(
-              "flex min-h-11 items-center px-3",
-              PERSONA_FIELD_SHELL_CLASS,
-            )}
-          >
-            <Input
-              className={cn(
-                "h-8 px-0 py-0 leading-6 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
-                PERSONA_FIELD_CONTROL_CLASS,
-              )}
-              disabled={disabled}
-              id="persona-parallelism"
-              inputMode="numeric"
-              max={32}
-              min={1}
-              onChange={(event) =>
-                onBehaviorDraftChange({
-                  ...behaviorDraft,
-                  parallelism: event.target.value,
-                })
-              }
-              placeholder={AGENT_PARALLELISM_PLACEHOLDER}
-              type="number"
-              value={behaviorDraft.parallelism}
-            />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {AGENT_PARALLELISM_HELP}
+        <p className={PERSONA_FIELD_DESCRIPTION_CLASS}>
+          {AGENT_PARALLELISM_HELP}
+        </p>
+        {personaParallelismHint !== null ? (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            {personaParallelismHint}
           </p>
-          {personaParallelismHint !== null ? (
-            <p className="text-xs text-amber-600 dark:text-amber-400">
-              {personaParallelismHint}
-            </p>
-          ) : null}
-        </div>
+        ) : null}
       </div>
 
       <div className="space-y-1.5">

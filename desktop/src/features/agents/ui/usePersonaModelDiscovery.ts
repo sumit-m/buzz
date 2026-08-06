@@ -435,6 +435,10 @@ export function usePersonaModelDiscovery({
 
   return {
     discoveredModelOptions,
+    // Raw catalog entries, so callers can show a selected model's own
+    // description. `discoveredModelOptions` is label/value only, and the
+    // description belongs under the field where it has the full width.
+    discoveredModels: activeModelDiscoveryData?.models ?? [],
     // Permission modes ride the same probe as the model catalog, so they are
     // available wherever discovery already ran. Empty for harnesses that
     // advertise none, which the picker treats as "hide the field".

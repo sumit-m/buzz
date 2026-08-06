@@ -11,6 +11,10 @@ import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
 import { AgentCreationPreview } from "./AgentCreationPreview";
 import { AgentIdentityFields } from "./AgentDescriptionField";
+import {
+  AgentPermissionModeField,
+  PERMISSION_MODE_ENV_KEY,
+} from "./AgentPermissionModeField";
 import { PersonaDropdownField } from "./PersonaDropdownField";
 import type { EnvVarsValue } from "./EnvVarsEditor";
 import { PersonaAdvancedFields } from "./PersonaAdvancedFields";
@@ -512,6 +516,8 @@ export function AgentDefinitionDialog({
   );
   const {
     discoveredModelOptions,
+    discoveredModels,
+    discoveredPermissionModes,
     modelDiscoveryLoading,
     modelDiscoveryStatus,
     agentDefaultModel,
@@ -591,6 +597,20 @@ export function AgentDefinitionDialog({
       })),
     { label: "Custom provider...", value: CUSTOM_PROVIDER_DROPDOWN_VALUE },
   ];
+  // The Mode field owns BUZZ_ACP_PERMISSION_MODE whenever it is on screen, so
+  // the raw env editor must not offer a second, untyped editor for the same
+  // key — the rule PersonaProviderApiKeyField already follows for its secret.
+  // When no harness advertises modes the field is absent and the raw editor
+  // stays the only way to set it.
+  // The selected model's own description, shown under the field for the same
+  // reason Mode's is: the dropdown row clips it. Absent until discovery lands,
+  // for a custom id the harness never advertised, and for adapters that ship
+  // names without descriptions.
+  const selectedModelDescription = discoveredModels
+    .find((candidate) => candidate.id === model.trim())
+    ?.description?.trim();
+  const permissionModeFieldVisible =
+    aiConfigurationMode === "custom" && discoveredPermissionModes.length > 0;
   const modelDropdownOptions: PersonaDropdownOption[] =
     buildModelDropdownOptions({
       allowCustom: !isRelayMesh,
@@ -901,6 +921,7 @@ export function AgentDefinitionDialog({
                 disabled={isPending}
                 isExplicitModelRequired={isExplicitModelRequired}
                 model={model}
+                modelDescription={selectedModelDescription}
                 modelDiscoveryStatus={modelDiscoveryStatus}
                 modelDropdownOptions={modelDropdownOptions}
                 modelSelectValue={modelSelectValue}
@@ -914,6 +935,16 @@ export function AgentDefinitionDialog({
               />
             ) : null}
           </AnimatePresence>
+
+          {permissionModeFieldVisible ? (
+            <AgentPermissionModeField
+              disabled={isPending || modelDiscoveryLoading}
+              envVars={envVars}
+              id="agent-definition-permission-mode"
+              modes={discoveredPermissionModes}
+              onEnvVarsChange={setEnvVars}
+            />
+          ) : null}
 
           {aiConfigurationMode === "defaults" ? (
             <AgentCreateAiDefaultsSummary
@@ -984,9 +1015,12 @@ export function AgentDefinitionDialog({
                   disabled={isPending}
                   envVars={envVars}
                   fileSatisfiedEnvKeys={localModeGate.fileSatisfiedEnvKeys}
-                  hiddenEnvKeys={
-                    topLevelSecretEnvVar ? [topLevelSecretEnvVar] : []
-                  }
+                  hiddenEnvKeys={[
+                    ...(topLevelSecretEnvVar ? [topLevelSecretEnvVar] : []),
+                    ...(permissionModeFieldVisible
+                      ? [PERMISSION_MODE_ENV_KEY]
+                      : []),
+                  ]}
                   inheritedEnvVars={inheritedEnvVarsForAdvanced}
                   model={model}
                   modelTuningRuntimeId={runtime}

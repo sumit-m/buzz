@@ -592,7 +592,20 @@ export type AgentModelsResponse = {
    *
    * Optional so a response from an older sidecar still parses.
    */
-  permissionModes?: string[];
+  permissionModes?: AgentPermissionModeInfo[];
+};
+
+/**
+ * A permission mode as its harness describes it. Buzz never writes these
+ * labels: mode ids differ per harness and the same spelling can mean
+ * different things elsewhere, so `label`/`description` come from the adapter
+ * or not at all.
+ */
+export type AgentPermissionModeInfo = {
+  /** Sent verbatim to `session/set_config_option`. */
+  id: string;
+  label: string | null;
+  description: string | null;
 };
 export type AgentModelInfo = {
   id: string;

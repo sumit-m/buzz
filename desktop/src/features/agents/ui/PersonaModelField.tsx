@@ -8,6 +8,7 @@ import type { PersonaModelDiscoveryStatus } from "./personaModelDiscoveryStatus"
 import {
   type PersonaDropdownOption,
   PERSONA_FIELD_CONTROL_CLASS,
+  PERSONA_FIELD_DESCRIPTION_CLASS,
   PERSONA_FIELD_SHELL_CLASS,
   PERSONA_LABEL_OPTIONAL_CLASS,
 } from "./agentConfigOptions";
@@ -18,6 +19,12 @@ type PersonaModelFieldProps = {
   model: string;
   modelDiscoveryStatus: PersonaModelDiscoveryStatus | null;
   modelDropdownOptions: readonly PersonaDropdownOption[];
+  /**
+   * The selected model's own description, from the harness catalog. Rendered
+   * inside this field's container so it sits as close under the control as
+   * Mode's does — a sibling outside would inherit the form's larger gap.
+   */
+  modelDescription?: string;
   showSharedComputeAutoHint: boolean;
   modelSelectValue: string;
   onCustomModelChange: (value: string) => void;
@@ -28,6 +35,7 @@ type PersonaModelFieldProps = {
 
 export function PersonaModelField({
   disabled,
+  modelDescription,
   isExplicitModelRequired,
   model,
   modelDiscoveryStatus,
@@ -109,6 +117,9 @@ export function PersonaModelField({
           >
             {modelDiscoveryStatus.message}
           </p>
+        ) : null}
+        {modelDescription ? (
+          <p className={PERSONA_FIELD_DESCRIPTION_CLASS}>{modelDescription}</p>
         ) : null}
       </div>
     </motion.div>

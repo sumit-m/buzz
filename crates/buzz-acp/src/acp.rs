@@ -2290,9 +2290,14 @@ pub fn extract_mode_config_option(result: &serde_json::Value) -> Option<serde_js
     })
 }
 
-/// Extract just the mode values from a `session/new` result, in the order the
+/// Extract the mode options from a `session/new` result, in the order the
 /// adapter advertised them. Empty when the adapter exposes no mode option.
-pub fn extract_permission_modes(result: &serde_json::Value) -> Vec<String> {
+///
+/// Each entry is passed through whole — `value` plus whatever `name` and
+/// `description` the adapter supplied. Buzz must not label these itself: mode
+/// ids differ per harness, and the same spelling can mean different things, so
+/// only the adapter knows what its own modes do.
+pub fn extract_permission_modes(result: &serde_json::Value) -> Vec<serde_json::Value> {
     let Some(entry) = extract_mode_config_option(result) else {
         return Vec::new();
     };
@@ -2301,8 +2306,8 @@ pub fn extract_permission_modes(result: &serde_json::Value) -> Vec<String> {
         .map(|options| {
             options
                 .iter()
-                .filter_map(|o| o.get("value").and_then(|v| v.as_str()))
-                .map(str::to_owned)
+                .filter(|o| o.get("value").and_then(|v| v.as_str()).is_some())
+                .cloned()
                 .collect()
         })
         .unwrap_or_default()
@@ -2982,17 +2987,27 @@ mod tests {
                     "category": "mode",
                     "displayName": "Mode",
                     "currentValue": "default",
+                    // Shape as claude-agent-acp 0.63.0 actually emits it:
+                    // `name`/`description`, not `displayName`.
                     "options": [
-                        { "value": "auto", "displayName": "Auto" },
-                        { "value": "default", "displayName": "Manual" },
-                        { "value": "acceptEdits", "displayName": "Accept Edits" },
-                        { "value": "plan", "displayName": "Plan Mode" },
-                        { "value": "dontAsk", "displayName": "Don't Ask" },
-                        { "value": "bypassPermissions", "displayName": "Bypass Permissions" }
+                        { "value": "auto", "name": "Auto", "description": "Claude decides" },
+                        { "value": "default", "name": "Manual" },
+                        { "value": "acceptEdits", "name": "Accept Edits" },
+                        { "value": "plan", "name": "Plan Mode" },
+                        { "value": "dontAsk", "name": "Don't Ask" },
+                        { "value": "bypassPermissions", "name": "Bypass Permissions" }
                     ]
                 }
             ]
         })
+    }
+
+    /// Mode `value`s in advertised order — the shape most assertions care about.
+    fn mode_values(result: &serde_json::Value) -> Vec<String> {
+        super::extract_permission_modes(result)
+            .iter()
+            .filter_map(|o| o["value"].as_str().map(str::to_owned))
+            .collect()
     }
 
     #[test]
@@ -3000,7 +3015,7 @@ mod tests {
         // Unfiltered by design: the operator picks, not this harness. Order is
         // the adapter's, so the UI can present its preferred default first.
         assert_eq!(
-            super::extract_permission_modes(&session_new_with_modes()),
+            mode_values(&session_new_with_modes()),
             vec![
                 "auto",
                 "default",
@@ -3010,6 +3025,29 @@ mod tests {
                 "bypassPermissions"
             ]
         );
+    }
+
+    #[test]
+    fn extract_permission_modes_keeps_the_adapters_own_labels() {
+        // Buzz must never label these itself: ids differ per harness and the
+        // same spelling can mean different things elsewhere.
+        let modes = super::extract_permission_modes(&session_new_with_modes());
+        let auto = &modes[0];
+        assert_eq!(auto["value"].as_str(), Some("auto"));
+        assert_eq!(auto["name"].as_str(), Some("Auto"));
+    }
+
+    #[test]
+    fn extract_permission_modes_drops_options_with_no_value() {
+        // A value is the only field that must exist — it is what
+        // `set_config_option` sends.
+        let result = serde_json::json!({
+            "configOptions": [{
+                "configId": "mode",
+                "options": [{ "name": "Broken" }, { "value": "plan" }]
+            }]
+        });
+        assert_eq!(mode_values(&result), vec!["plan"]);
     }
 
     #[test]
@@ -3023,7 +3061,7 @@ mod tests {
                 "options": [{ "value": "plan" }]
             }]
         });
-        assert_eq!(super::extract_permission_modes(&result), vec!["plan"]);
+        assert_eq!(mode_values(&result), vec!["plan"]);
     }
 
     #[test]
@@ -3036,7 +3074,7 @@ mod tests {
                 "options": [{ "value": "dontAsk" }]
             }]
         });
-        assert_eq!(super::extract_permission_modes(&result), vec!["dontAsk"]);
+        assert_eq!(mode_values(&result), vec!["dontAsk"]);
     }
 
     #[test]

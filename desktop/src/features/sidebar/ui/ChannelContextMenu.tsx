@@ -38,6 +38,16 @@ import {
   ContextMenuSubTrigger,
 } from "@/shared/ui/context-menu";
 
+/**
+ * LOCAL: channel sections do not behave well enough to offer yet, so the entry
+ * is hidden rather than removed.
+ *
+ * Everything behind it — the submenu, the assign/unassign/create callbacks, and
+ * the props the sidebar already threads down — is left wired and typechecked,
+ * so restoring the entry is this one flag rather than an archaeology exercise.
+ */
+const SHOW_MOVE_TO_SECTION = false;
+
 function MoveToSectionSubmenu({
   channelId,
   sections,
@@ -225,13 +235,15 @@ export function ChannelContextMenuItems({
     ? Boolean(onMarkChannelRead)
     : Boolean(onMarkChannelUnread);
   const showMuteToggle = Boolean(onMuteChannel && onUnmuteChannel);
-  const showMove = Boolean(
-    sections &&
-      assignments &&
-      onAssignChannel &&
-      onUnassignChannel &&
-      onCreateSectionForChannel,
-  );
+  const showMove =
+    SHOW_MOVE_TO_SECTION &&
+    Boolean(
+      sections &&
+        assignments &&
+        onAssignChannel &&
+        onUnassignChannel &&
+        onCreateSectionForChannel,
+    );
 
   return (
     <>

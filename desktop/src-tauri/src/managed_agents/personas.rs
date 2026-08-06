@@ -41,6 +41,21 @@ pub(crate) const POLLEN_LEGACY_DISPLAY_NAME: &str = POLLEN_DISPLAY_NAME;
 /// Runtime id of the Claude Code harness in `KNOWN_ACP_RUNTIMES`.
 const RUNTIME_CLAUDE: &str = "claude";
 
+/// Env var the harness reads its permission mode from.
+const PERMISSION_MODE_ENV_KEY: &str = "BUZZ_ACP_PERMISSION_MODE";
+
+/// Permission mode seeded for the Claude variant.
+///
+/// Without it these agents are mute on arrival. `buzz-acp` defaults to
+/// `dontAsk` and denies every `session/request_permission`; the `claude`
+/// runtime is given no MCP server, so `base_prompt.md` sends replies through
+/// the `buzz` CLI — a Bash call that mode refuses. A freshly seeded agent
+/// answers "shell tool access is denied" instead of the greeting.
+///
+/// `auto` is enough: it lets the CLI run without waiving the permission
+/// checkpoint the way `bypassPermissions` would.
+const CLAUDE_PERMISSION_MODE: &str = "auto";
+
 // Seeded with no system prompt: an agent's instructions are the user's to
 // write. Two naming variants, chosen once when the personas are first seeded
 // (see `built_in_persona_records`).
@@ -135,6 +150,22 @@ const RETIRED_PERSONAS: &[(&str, &str)] = &[
 /// config (`effective_config::resolve_linked`, `effective_agent_command`), so
 /// a model without its harness would be handed to whichever provider the
 /// default happens to resolve to.
+/// Seed env for the built-in personas.
+///
+/// `auto` is claude-agent-acp's mode and exists on no other harness, so it
+/// rides the same set-together rule as the runtime and model: seeded only
+/// alongside `RUNTIME_CLAUDE`, never on its own.
+fn built_in_persona_env(claude: bool) -> std::collections::BTreeMap<String, String> {
+    let mut env = std::collections::BTreeMap::new();
+    if claude {
+        env.insert(
+            PERMISSION_MODE_ENV_KEY.to_string(),
+            CLAUDE_PERMISSION_MODE.to_string(),
+        );
+    }
+    env
+}
+
 fn built_in_persona_records(now: &str, claude: bool) -> Vec<AgentDefinition> {
     BUILT_IN_PERSONAS
         .iter()
@@ -156,7 +187,7 @@ fn built_in_persona_records(now: &str, claude: bool) -> Vec<AgentDefinition> {
             source_team_persona_slug: None,
             catalog_source: None,
             team_catalog_source: None,
-            env_vars: std::collections::BTreeMap::new(),
+            env_vars: built_in_persona_env(claude),
             respond_to: None,
             respond_to_allowlist: Vec::new(),
             parallelism: None,

@@ -477,6 +477,41 @@ fn claude_variant_pins_harness_and_model_together() {
 }
 
 #[test]
+fn claude_variant_seeds_the_permission_mode() {
+    // Without this the seeded trio is mute on arrival: buzz-acp defaults to
+    // `dontAsk` and denies every permission request, the `claude` runtime gets
+    // no MCP server, and base_prompt.md sends replies through the `buzz` CLI —
+    // a Bash call that mode refuses. Verified 2026-08-06: `auto` lets it run.
+    for record in built_in_persona_records("2026-01-01T00:00:00Z", true) {
+        assert_eq!(
+            record
+                .env_vars
+                .get("BUZZ_ACP_PERMISSION_MODE")
+                .map(String::as_str),
+            Some("auto"),
+            "{} must seed the permission mode",
+            record.id
+        );
+    }
+}
+
+#[test]
+fn non_claude_variant_seeds_no_permission_mode() {
+    // `auto` is claude-agent-acp's and exists on no other harness, so it rides
+    // the same set-together rule as the runtime and model — seeding it against
+    // whatever the global default resolves to would send a mode that harness
+    // never advertised.
+    for record in built_in_persona_records("2026-01-01T00:00:00Z", false) {
+        assert!(
+            record.env_vars.is_empty(),
+            "{} seeded env without the Claude harness: {:?}",
+            record.id,
+            record.env_vars
+        );
+    }
+}
+
+#[test]
 fn builtins_seed_without_instructions() {
     // An agent's instructions are the user's to write — neither variant ships
     // a system prompt.

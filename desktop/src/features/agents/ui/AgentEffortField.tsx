@@ -33,6 +33,11 @@ function levelLabel(level: AgentEffortLevelInfo) {
  * control at all, the selected model has none, or the probe has not answered
  * yet. In every one of them there is nothing truthful to offer.
  *
+ * Offers only what the harness advertised, so choosing "no particular effort"
+ * means picking the adapter's own such value rather than one Buzz invented.
+ * A consequence worth knowing: once set there is no dropdown route back to
+ * unset — the adapter's no-override level is the way to express that.
+ *
  * Unlike the permission mode, this list is **per model**. The adapter rebuilds
  * it on every model switch, so a level stored for one model may not exist for
  * the next; the field reads as unset in that case rather than showing a level
@@ -59,10 +64,16 @@ export function AgentEffortField({
   const selected = levels.find((level) => level.id === stored);
   const current = selected ? stored : "";
   const selectedDescription = selected?.description?.trim();
-  const options = [
-    { label: "Harness default", value: "" },
-    ...levels.map((level) => ({ label: levelLabel(level), value: level.id })),
-  ];
+  // Only the harness's own levels — no synthetic "unset" row. The adapter
+  // already ships its own no-override value (claude-agent-acp calls it
+  // "Default" and maps it to a null effort flag), so adding one of ours put two
+  // rows meaning almost the same thing next to each other. Until something is
+  // chosen the control shows its placeholder, which is unset without pretending
+  // to be a level.
+  const options = levels.map((level) => ({
+    label: levelLabel(level),
+    value: level.id,
+  }));
 
   return (
     <div className="space-y-1.5">
@@ -74,16 +85,10 @@ export function AgentEffortField({
         disabled={disabled}
         id={id}
         onValueChange={(value) => {
-          const next = { ...envVars };
-          if (value) {
-            next[EFFORT_ENV_KEY] = value;
-          } else {
-            delete next[EFFORT_ENV_KEY];
-          }
-          onEnvVarsChange(next);
+          onEnvVarsChange({ ...envVars, [EFFORT_ENV_KEY]: value });
         }}
         options={options}
-        placeholder="Harness default"
+        placeholder="Not set"
         value={current}
       />
       {selectedDescription ? (

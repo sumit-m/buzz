@@ -15,6 +15,7 @@ import {
   AgentPermissionModeField,
   PERMISSION_MODE_ENV_KEY,
 } from "./AgentPermissionModeField";
+import { AgentEffortField, EFFORT_ENV_KEY } from "./AgentEffortField";
 import { PersonaDropdownField } from "./PersonaDropdownField";
 import type { EnvVarsValue } from "./EnvVarsEditor";
 import { PersonaAdvancedFields } from "./PersonaAdvancedFields";
@@ -515,9 +516,11 @@ export function AgentDefinitionDialog({
     [globalConfig.env_vars, envVars],
   );
   const {
+    discoveredEffortLevels,
     discoveredModelOptions,
     discoveredModels,
     discoveredPermissionModes,
+    effortDiscoveryLoading,
     modelDiscoveryLoading,
     modelDiscoveryStatus,
     agentDefaultModel,
@@ -526,6 +529,7 @@ export function AgentDefinitionDialog({
     isCustomProviderEditing,
     modelFieldVisible,
     open,
+    selectedModel: model,
     // Gate provider by runtime: runtimes that don't support LLM provider
     // selection (codex, claude) must not inherit the global provider — doing
     // so causes them to discover models from the wrong provider.
@@ -611,6 +615,10 @@ export function AgentDefinitionDialog({
     ?.description?.trim();
   const permissionModeFieldVisible =
     aiConfigurationMode === "custom" && discoveredPermissionModes.length > 0;
+  // Effort is per model, so this appears and disappears as the model changes —
+  // unlike Mode, which is a property of the harness.
+  const effortFieldVisible =
+    aiConfigurationMode === "custom" && discoveredEffortLevels.length > 0;
   const modelDropdownOptions: PersonaDropdownOption[] =
     buildModelDropdownOptions({
       allowCustom: !isRelayMesh,
@@ -946,6 +954,16 @@ export function AgentDefinitionDialog({
             />
           ) : null}
 
+          {effortFieldVisible ? (
+            <AgentEffortField
+              disabled={isPending || effortDiscoveryLoading}
+              envVars={envVars}
+              id="agent-definition-effort"
+              levels={discoveredEffortLevels}
+              onEnvVarsChange={setEnvVars}
+            />
+          ) : null}
+
           {aiConfigurationMode === "defaults" ? (
             <AgentCreateAiDefaultsSummary
               canChooseProvider={runtimeCanChooseLlmProvider}
@@ -1020,6 +1038,7 @@ export function AgentDefinitionDialog({
                     ...(permissionModeFieldVisible
                       ? [PERMISSION_MODE_ENV_KEY]
                       : []),
+                    ...(effortFieldVisible ? [EFFORT_ENV_KEY] : []),
                   ]}
                   inheritedEnvVars={inheritedEnvVarsForAdvanced}
                   model={model}

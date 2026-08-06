@@ -3,6 +3,7 @@ import * as React from "react";
 import { discoverAgentModels } from "@/shared/api/agentModels";
 import type {
   AcpRuntimeCatalogEntry,
+  AgentEffortLevelInfo,
   AgentModelsResponse,
 } from "@/shared/api/types";
 import type { EnvVarsValue } from "./EnvVarsEditor";
@@ -21,6 +22,46 @@ import { generateBareModelLabel } from "./modelCapabilities";
 export const MODEL_DISCOVERY_LOADING_VALUE = "__model_discovery_loading__";
 
 const MODEL_DISCOVERY_CREDENTIAL_DEBOUNCE_MS = 250;
+
+/**
+ * Effort probing spawns an adapter, so never issue one per keystroke. A picked
+ * model pays this delay once; a hand-typed custom model id would otherwise
+ * spawn an adapter per character.
+ */
+const EFFORT_DISCOVERY_DEBOUNCE_MS = 400;
+
+/**
+ * Effort levels, cached per (agent config, model) for the life of the process.
+ *
+ * Module scope, not a ref: the dialog unmounts on close, and a hook-local cache
+ * would re-probe a model the user already looked at — another adapter spawn to
+ * learn what we were just told. The adapter's answer only changes when the
+ * adapter or the account does, neither of which happens mid-session, so a
+ * process-lifetime cache is the right lifetime rather than merely a convenient
+ * one. The key carries the agent config, so editing the harness, provider, or
+ * env misses rather than serving another agent's answer.
+ */
+const effortLevelCache = new Map<string, readonly AgentEffortLevelInfo[]>();
+
+/**
+ * Cache key for one effort answer, or `null` when there is nothing to probe.
+ *
+ * Both halves are load-bearing. Without the model every model would share one
+ * answer, which is precisely wrong for a per-model option; without the
+ * discovery key — which already encodes harness, args, provider and env — two
+ * differently-configured agents would share one, and model availability is
+ * account-scoped.
+ */
+export function effortCacheKeyFor(
+  discoveryKey: string | null,
+  model: string,
+): string | null {
+  const trimmedModel = model.trim();
+  if (discoveryKey === null || !trimmedModel) {
+    return null;
+  }
+  return `${discoveryKey}::${trimmedModel}`;
+}
 
 function stableModelDiscoveryEnvKey(envVars: EnvVarsValue): string {
   return JSON.stringify(
@@ -203,6 +244,7 @@ export function usePersonaModelDiscovery({
   modelFieldVisible,
   open,
   provider,
+  selectedModel = "",
   selectedRuntime,
 }: {
   envVars: EnvVarsValue;
@@ -210,6 +252,16 @@ export function usePersonaModelDiscovery({
   modelFieldVisible: boolean;
   open: boolean;
   provider: string;
+  /**
+   * The model currently chosen in the form. Drives effort discovery only —
+   * the model catalog itself must not depend on it, or picking a model would
+   * re-probe the very list it was picked from.
+   *
+   * Omit it unless the caller renders an effort field: effort discovery costs
+   * an adapter spawn per model, and there is no point paying for an answer
+   * nothing displays.
+   */
+  selectedModel?: string;
   selectedRuntime: AcpRuntimeCatalogEntry | undefined;
 }) {
   const [modelDiscoveryData, setModelDiscoveryData] =
@@ -402,6 +454,95 @@ export function usePersonaModelDiscovery({
     trimmedProvider,
   ]);
 
+  // ── Effort discovery ───────────────────────────────────────────────────────
+  // A second, narrower probe. Effort levels are rebuilt by the adapter on every
+  // model switch and omitted for models with no effort control, so they can
+  // only be learned by selecting a model — which is why this cannot ride the
+  // catalog probe above.
+  const [effortLevels, setEffortLevels] = React.useState<
+    readonly AgentEffortLevelInfo[]
+  >([]);
+  const [effortDiscoveryLoading, setEffortDiscoveryLoading] =
+    React.useState(false);
+  const effortRequestRef = React.useRef(0);
+
+  const trimmedSelectedModel = selectedModel.trim();
+  const effortCacheKey = effortCacheKeyFor(modelDiscoveryKey, selectedModel);
+
+  React.useEffect(() => {
+    const requestId = effortRequestRef.current + 1;
+    effortRequestRef.current = requestId;
+
+    if (effortCacheKey === null || discoveryAgentCommand === null) {
+      setEffortLevels([]);
+      setEffortDiscoveryLoading(false);
+      return;
+    }
+
+    const cached = effortLevelCache.get(effortCacheKey);
+    if (cached) {
+      setEffortLevels(cached);
+      setEffortDiscoveryLoading(false);
+      return;
+    }
+
+    setEffortLevels([]);
+    setEffortDiscoveryLoading(true);
+
+    const timeout = window.setTimeout(() => {
+      void discoverAgentModels({
+        agentCommand: discoveryAgentCommand,
+        agentArgs: selectedRuntimeDefaultArgs ?? [],
+        provider: trimmedProvider || undefined,
+        envVars,
+        definitionEnv: selectedRuntimeDefinitionEnv ?? {},
+        model: trimmedSelectedModel,
+      })
+        .then((response) => {
+          if (effortRequestRef.current !== requestId) {
+            return;
+          }
+          const levels = response.effortLevels ?? [];
+          // Cache the empty answer too. "This model has no effort control" is a
+          // real result, and re-probing it on every reselect is exactly the
+          // cost this cache exists to avoid.
+          effortLevelCache.set(effortCacheKey, levels);
+          setEffortLevels(levels);
+        })
+        .catch(() => {
+          if (effortRequestRef.current !== requestId) {
+            return;
+          }
+          // Deliberately silent: the catalog probe above already surfaces
+          // harness errors, and a second copy under the effort field would be
+          // noise. Nothing is cached, so a transient failure does not latch as
+          // "no levels" for the rest of the session.
+          setEffortLevels([]);
+        })
+        .finally(() => {
+          if (effortRequestRef.current === requestId) {
+            setEffortDiscoveryLoading(false);
+          }
+        });
+    }, EFFORT_DISCOVERY_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timeout);
+      if (effortRequestRef.current === requestId) {
+        effortRequestRef.current += 1;
+        setEffortDiscoveryLoading(false);
+      }
+    };
+  }, [
+    discoveryAgentCommand,
+    effortCacheKey,
+    envVars,
+    selectedRuntimeDefaultArgs,
+    selectedRuntimeDefinitionEnv,
+    trimmedProvider,
+    trimmedSelectedModel,
+  ]);
+
   const activeModelDiscoveryData =
     modelDiscoveryKey !== null && modelDiscoveryDataKey === modelDiscoveryKey
       ? modelDiscoveryData
@@ -443,6 +584,11 @@ export function usePersonaModelDiscovery({
     // available wherever discovery already ran. Empty for harnesses that
     // advertise none, which the picker treats as "hide the field".
     discoveredPermissionModes: activeModelDiscoveryData?.permissionModes ?? [],
+    // Effort levels for the currently selected model. Empty both while the
+    // probe runs and when the model has no effort control, which the picker
+    // treats the same way: hide the field.
+    discoveredEffortLevels: effortLevels,
+    effortDiscoveryLoading,
     modelDiscoveryLoading: modelDiscoveryPending,
     modelDiscoveryStatus:
       modelDiscoveryPending || discoveredModelOptions !== null

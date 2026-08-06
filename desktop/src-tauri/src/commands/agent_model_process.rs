@@ -13,6 +13,7 @@ pub(super) async fn run_agent_models_command(
     agent_args: Vec<String>,
     persisted_model: Option<String>,
     merged_env: BTreeMap<String, String>,
+    probe_model: Option<String>,
 ) -> Result<AgentModelsResponse, String> {
     // Clone the env map for redaction below — `merged_env` is moved
     // into the spawn_blocking closure and we still need the values to
@@ -40,6 +41,14 @@ pub(super) async fn run_agent_models_command(
             .arg("--json")
             .env("BUZZ_ACP_AGENT_COMMAND", &agent_command)
             .env("BUZZ_ACP_AGENT_ARGS", agent_args.join(","));
+        // Selecting a model costs an extra round-trip, so ask only when a
+        // caller wants the model-dependent options back.
+        if let Some(ref model) = probe_model {
+            let model = model.trim();
+            if !model.is_empty() {
+                cmd.arg("--model").arg(model);
+            }
+        }
         if let Some(meta) = known_acp_runtime(&agent_command) {
             for (key, value) in meta.default_env {
                 if std::env::var(key).is_err() {

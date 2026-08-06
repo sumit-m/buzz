@@ -1029,6 +1029,10 @@ pub struct PromptContext {
     pub max_turns_per_session: u32,
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
+    /// Effort level to apply after session creation, or `None` to leave the
+    /// adapter's default alone. Applied only when the *post-model-switch*
+    /// catalog advertises it, since effort levels are per-model.
+    pub effort: Option<String>,
     /// Agent identity — used to derive the NIP-AE conversation key at
     /// session creation for core injection.
     pub agent_keys: nostr::Keys,
@@ -11677,6 +11681,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             channel_context_message_limit: 0,
             max_turns_per_session: 0,
             permission_mode: PermissionMode::new("default"),
+            effort: None,
             agent_keys: agent_keys.clone(),
             agent_owner_pubkey: owner_pubkey,
             memory_enabled: false,

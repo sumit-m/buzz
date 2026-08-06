@@ -810,6 +810,14 @@ pub struct AgentModelsResponse {
     /// `crates/buzz-acp/src/config.rs`.
     #[serde(default)]
     pub permission_modes: Vec<AgentPermissionModeInfo>,
+    /// Effort levels the harness advertises **for the probed model**.
+    ///
+    /// Unlike `permission_modes` this is model-dependent: the adapter rebuilds
+    /// the entry on every model switch and omits it entirely for models with no
+    /// effort control. Empty therefore means "not offered here" — either the
+    /// probe selected no model, or this one has no levels.
+    #[serde(default)]
+    pub effort_levels: Vec<AgentEffortLevelInfo>,
 }
 
 /// A permission mode as its harness describes it.
@@ -822,6 +830,20 @@ pub struct AgentModelsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct AgentPermissionModeInfo {
     /// Sent verbatim to `session/set_config_option`.
+    pub id: String,
+    pub label: Option<String>,
+    pub description: Option<String>,
+}
+
+/// An effort level as its harness describes it.
+///
+/// Same passthrough rule as [`AgentPermissionModeInfo`]: the adapter derives
+/// these names from its own level ids, so Buzz shows what it was given and
+/// nothing more.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentEffortLevelInfo {
+    /// Sent verbatim to `session/set_config_option` under `configId: "effort"`.
     pub id: String,
     pub label: Option<String>,
     pub description: Option<String>,

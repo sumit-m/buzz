@@ -115,6 +115,7 @@ fn make_prompt_context(
         channel_context_message_limit: config.channel_context_message_limit,
         max_turns_per_session: config.max_turns_per_session,
         permission_mode: config.permission_mode.clone(),
+        effort: config.effort.clone(),
         agent_keys: config.keys.clone(),
         agent_owner_pubkey: resolve_agent_owner(config)
             .as_deref()

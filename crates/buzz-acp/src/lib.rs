@@ -6410,7 +6410,10 @@ async fn run_authenticate(args: AuthenticateArgs) -> Result<()> {
 /// Flow: spawn → initialize → session/new → print models → shutdown.
 /// No relay connection, no MCP servers, no subscriptions. ~2-5s total.
 async fn run_models(args: ModelsArgs) -> Result<()> {
-    use acp::{extract_model_config_options, extract_model_state, extract_permission_modes};
+    use acp::{
+        extract_effort_levels, extract_model_config_options, extract_model_state,
+        extract_permission_modes, resolve_model_switch_method, ModelSwitchMethod,
+    };
 
     let agent_args = config::normalize_agent_args(&args.agent.agent_command, args.agent.agent_args);
     let cwd = current_working_directory()?;
@@ -6471,6 +6474,50 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
     // must not cost a second one.
     let permission_modes = extract_permission_modes(&session_resp.raw);
 
+    // Effort levels are model-dependent, so they cost one extra round-trip on
+    // the session we already hold — cheap next to another adapter spawn.
+    //
+    // Only the stable `set_config_option` path can answer this: its response
+    // carries the rebuilt `configOptions`, whereas `session/set_model` returns
+    // nothing we could read the new levels from. An adapter reachable only by
+    // the unstable path therefore reports no levels rather than the outgoing
+    // model's, which would be worse than silence.
+    let effort_levels = match args.model.as_deref() {
+        Some(model) if !model.trim().is_empty() => {
+            match resolve_model_switch_method(&session_resp.raw, model.trim()) {
+                Some(ModelSwitchMethod::ConfigOption {
+                    config_id,
+                    option_value,
+                }) => {
+                    let switched = tokio::time::timeout(
+                        MODELS_TIMEOUT,
+                        client.session_set_config_option(
+                            &session_resp.session_id,
+                            &config_id,
+                            &option_value,
+                        ),
+                    )
+                    .await;
+                    match switched {
+                        Ok(Ok(response)) => extract_effort_levels(&response),
+                        // Non-fatal: the model list is the primary product here,
+                        // and a probe that fails to select one still reports it.
+                        Ok(Err(e)) => {
+                            eprintln!("warning: could not select model {model}: {e}");
+                            Vec::new()
+                        }
+                        Err(_) => {
+                            eprintln!("warning: timed out selecting model {model}");
+                            Vec::new()
+                        }
+                    }
+                }
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    };
+
     if args.json {
         // Structured JSON output — consumed by Phase 3 `get_agent_models`.
         let output = serde_json::json!({
@@ -6481,6 +6528,8 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
             "stable": {
                 "configOptions": config_options,
                 "permissionModes": permission_modes,
+                // Empty unless --model selected a model that supports effort.
+                "effortLevels": effort_levels,
             },
             "unstable": model_state.as_ref().map(|ms| serde_json::json!({
                 "currentModelId": ms.get("currentModelId"),
@@ -6553,6 +6602,20 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
             println!("Permission modes (configId: mode):");
             for mode in &permission_modes {
                 println!("  - {mode}");
+            }
+        }
+
+        println!();
+        match args.model.as_deref() {
+            None => println!("Effort levels: pass --model <ID> to report them."),
+            Some(model) if effort_levels.is_empty() => {
+                println!("No effort levels advertised for model {model}.");
+            }
+            Some(model) => {
+                println!("Effort levels for {model} (configId: effort):");
+                for level in &effort_levels {
+                    println!("  - {level}");
+                }
             }
         }
     }
@@ -9629,6 +9692,7 @@ mod build_mcp_servers_tests {
             effort_level: None,
             session_title: None,
             permission_mode: config::PermissionMode::new("dontAsk"),
+            effort: None,
             respond_to: config::RespondTo::Anyone,
             respond_to_allowlist: std::collections::HashSet::new(),
             allowed_respond_to: vec![],
@@ -10767,6 +10831,7 @@ mod error_outcome_emission_tests {
             effort_level: None,
             session_title: None,
             permission_mode: config::PermissionMode::new("dontAsk"),
+            effort: None,
             respond_to: config::RespondTo::Anyone,
             respond_to_allowlist: HashSet::new(),
             allowed_respond_to: vec![],

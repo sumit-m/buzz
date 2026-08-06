@@ -22,7 +22,8 @@ use crate::{
         find_managed_agent_mut, known_acp_runtime, load_global_agent_config, load_managed_agents,
         load_personas, managed_agent_avatar_url, missing_command_message, normalize_agent_args,
         resolve_command, save_managed_agents, sync_managed_agent_processes, try_regenerate_nest,
-        AgentModelInfo, AgentModelsResponse, AgentPermissionModeInfo, ManagedAgentRecord,
+        AgentEffortLevelInfo, AgentModelInfo, AgentModelsResponse, AgentPermissionModeInfo,
+        ManagedAgentRecord,
         UpdateManagedAgentRequest,
         UpdateManagedAgentResponse, DEFAULT_ACP_COMMAND,
     },
@@ -151,6 +152,10 @@ pub async fn get_agent_models(
         agent_args,
         persisted_model,
         merged_env,
+        // No model selected: this path serves callers that want the catalog
+        // only, and the extra round-trip would cost them for nothing. The
+        // draft-discovery path below asks when the dialog needs effort levels.
+        None,
     )
     .await
 }
@@ -189,6 +194,13 @@ pub struct DiscoverAgentModelsInput {
     /// Merged below user `env_vars` so user overrides always win.
     #[serde(default)]
     pub definition_env: BTreeMap<String, String>,
+    /// Select this model during the probe so model-dependent options — today
+    /// only effort levels — describe it rather than the agent's default.
+    ///
+    /// Costs one extra round-trip on the session the probe already holds, so
+    /// callers that only need the model list leave it unset.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// Query available models from an unsaved agent configuration.
@@ -276,6 +288,7 @@ pub async fn discover_agent_models(
             selected_model: None,
             supports_switching: true,
             permission_modes: Vec::new(),
+        effort_levels: Vec::new(),
         });
     }
     #[cfg(not(feature = "mesh-llm"))]
@@ -322,7 +335,15 @@ pub async fn discover_agent_models(
         return Ok(models);
     }
 
-    run_agent_models_command(resolved_acp, resolved_agent, agent_args, None, merged_env).await
+    run_agent_models_command(
+        resolved_acp,
+        resolved_agent,
+        agent_args,
+        None,
+        merged_env,
+        input.model,
+    )
+    .await
 }
 
 #[derive(Debug, Deserialize)]
@@ -541,6 +562,7 @@ async fn discover_openai_compatible_models(
         selected_model,
         supports_switching: true,
         permission_modes: Vec::new(),
+        effort_levels: Vec::new(),
     }))
 }
 
@@ -688,6 +710,7 @@ async fn discover_anthropic_models(
         selected_model,
         supports_switching: true,
         permission_modes: Vec::new(),
+        effort_levels: Vec::new(),
     }))
 }
 
@@ -785,31 +808,24 @@ pub(super) fn normalize_agent_models(
 
     let supports_switching = !models.is_empty();
 
-    // Rides the same probe as the model catalog — `buzz-acp models` emits both
-    // from one `session/new`. Order is the adapter's, so the UI can present its
-    // preferred mode first.
-    // Labels are the adapter's, never ours. `name` is what claude-agent-acp
-    // emits; `displayName` is the spelling in the ACP docs — accept either and
-    // fall back to showing the raw id.
-    let permission_modes = raw["stable"]["permissionModes"]
-        .as_array()
-        .map(|modes| {
-            modes
-                .iter()
-                .filter_map(|mode| {
-                    let id = mode["value"].as_str()?.to_string();
-                    Some(AgentPermissionModeInfo {
-                        id,
-                        label: mode["name"]
-                            .as_str()
-                            .or_else(|| mode["displayName"].as_str())
-                            .map(str::to_string),
-                        description: mode["description"].as_str().map(str::to_string),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // Both ride the same probe as the model catalog — `buzz-acp models` emits
+    // them from one `session/new`. Order is the adapter's, so the UI can
+    // present its preferred entry first.
+    let permission_modes = parse_config_option_choices(&raw["stable"]["permissionModes"], |c| {
+        AgentPermissionModeInfo {
+            id: c.id,
+            label: c.label,
+            description: c.description,
+        }
+    });
+    // Empty unless the probe passed `--model`: effort levels describe one model,
+    // so a catalog read without a selection would describe the wrong one.
+    let effort_levels =
+        parse_config_option_choices(&raw["stable"]["effortLevels"], |c| AgentEffortLevelInfo {
+            id: c.id,
+            label: c.label,
+            description: c.description,
+        });
 
     AgentModelsResponse {
         agent_name,
@@ -819,7 +835,45 @@ pub(super) fn normalize_agent_models(
         selected_model: persisted_model,
         supports_switching,
         permission_modes,
+        effort_levels,
     }
+}
+
+/// One adapter-advertised choice, before it is given a domain-specific type.
+struct ConfigOptionChoice {
+    id: String,
+    label: Option<String>,
+    description: Option<String>,
+}
+
+/// Map an adapter's `options` array into typed choices, dropping any entry with
+/// no `value` — that field is what `set_config_option` sends, so an entry
+/// without one is unselectable.
+///
+/// Labels are the adapter's, never ours. `name` is what claude-agent-acp emits;
+/// `displayName` is the spelling in the ACP docs — accept either, and fall back
+/// to showing the raw id when it supplies neither.
+fn parse_config_option_choices<T>(
+    raw: &serde_json::Value,
+    build: impl Fn(ConfigOptionChoice) -> T,
+) -> Vec<T> {
+    raw.as_array()
+        .map(|choices| {
+            choices
+                .iter()
+                .filter_map(|choice| {
+                    Some(build(ConfigOptionChoice {
+                        id: choice["value"].as_str()?.to_string(),
+                        label: choice["name"]
+                            .as_str()
+                            .or_else(|| choice["displayName"].as_str())
+                            .map(str::to_string),
+                        description: choice["description"].as_str().map(str::to_string),
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -89,13 +89,19 @@ fn built_in_team_order(built_ins: &[BuiltInTeam], id: &str) -> Option<usize> {
 /// built-ins, and preserve any user customizations to existing built-in teams
 /// (name, description, persona membership). Returns the merged list and whether
 /// the store changed.
-fn merge_teams(stored: Vec<TeamRecord>, now: &str) -> (Vec<TeamRecord>, bool) {
-    // Same lazy probe as `merge_personas`: only consulted when the team is
-    // missing and about to be seeded.
+fn merge_teams(
+    stored: Vec<TeamRecord>,
+    now: &str,
+    claude_variant: impl FnOnce() -> bool,
+) -> (Vec<TeamRecord>, bool) {
+    // Same lazy probe as `merge_personas`, and deliberately the same answer:
+    // the team is named after the trio it holds, so a Welcome Team of bees must
+    // not introduce itself as "Claude - Opus, Sonnet and Fable". Consulted only
+    // when the team is missing and about to be seeded.
     let claude = !stored
         .iter()
         .any(|record| record.id == "builtin-team:welcome")
-        && super::discovery::claude_harness_available();
+        && claude_variant();
     merge_teams_impl(&built_in_teams(claude), RETIRED_BUILT_IN_TEAMS, stored, now)
 }
 
@@ -186,7 +192,11 @@ pub(crate) fn load_teams_readonly(path: &std::path::Path) -> Result<Vec<TeamReco
         Vec::new()
     };
 
-    let (mut records, _changed) = merge_teams(records, &now);
+    // No `AppHandle`, so the harness choice is unreadable here. This path only
+    // runs against a store that already holds the Welcome Team, so the variant
+    // is never consulted; `false` keeps it from inventing a Claude name if it
+    // ever is.
+    let (mut records, _changed) = merge_teams(records, &now, || false);
     sort_teams(&mut records);
     Ok(records)
 }
@@ -204,7 +214,8 @@ pub fn load_teams<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<TeamRecor
         Vec::new()
     };
 
-    let (mut records, changed) = merge_teams(records, &now);
+    let (mut records, changed) =
+        merge_teams(records, &now, || super::personas::seeds_claude_variant(app));
     sort_teams(&mut records);
 
     if changed || !path.exists() {

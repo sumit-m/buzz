@@ -214,26 +214,30 @@ fn built_in_persona_records(now: &str, claude: bool) -> Vec<AgentDefinition> {
         .collect()
 }
 
-/// Which trio to seed: the harness the user *chose*, not merely one that is
-/// installed.
+/// Which trio to seed: the harness the user *chose*, and only that.
 ///
-/// Onboarding asks for a default harness whenever more than one is ready, and
-/// picking Codex on a machine that also has Claude Code installed used to still
-/// seed Opus, Sonnet and Fable — three agents named after models they would
-/// never run. The selection is the answer once it exists.
+/// Onboarding asks for a default harness and offers "Skip for now". Skipping
+/// discards the draft, so no choice reaches disk — and an installed Claude Code
+/// used to fill that silence, seeding Opus, Sonnet and Fable for someone who had
+/// just declined to pick Claude. Installing a harness is not choosing one. With
+/// no choice recorded the bee names are seeded instead: they pin no harness and
+/// no model, so they follow whatever default is set later.
 ///
-/// Before it exists there is nothing to honour, so an installed Claude harness
-/// still decides. That covers a persona load that beats the harness step, and
-/// it is what shipped, so nothing regresses for anyone who never sees that step
-/// because Claude Code is their only harness.
-fn seeds_claude_variant(app: &AppHandle) -> bool {
-    match crate::managed_agents::global_config::load_global_agent_config(app)
-        .ok()
-        .and_then(|config| config.preferred_runtime)
-    {
-        Some(runtime) => runtime == RUNTIME_CLAUDE,
-        None => super::discovery::claude_harness_available(),
-    }
+/// Ordering is what makes the choice answerable here. `MachineBootstrap` renders
+/// the community flow only once machine onboarding — identity, harness, defaults
+/// — has completed, and the first persona load is the Welcome Team intro inside
+/// that flow. The answer is on disk before anything asks.
+pub(crate) fn seeds_claude_variant(app: &AppHandle) -> bool {
+    seeds_claude_variant_for(
+        crate::managed_agents::global_config::load_global_agent_config(app)
+            .ok()
+            .and_then(|config| config.preferred_runtime)
+            .as_deref(),
+    )
+}
+
+fn seeds_claude_variant_for(preferred_runtime: Option<&str>) -> bool {
+    preferred_runtime == Some(RUNTIME_CLAUDE)
 }
 
 pub(crate) fn built_in_persona_definition(id: &str, now: &str) -> Option<AgentDefinition> {

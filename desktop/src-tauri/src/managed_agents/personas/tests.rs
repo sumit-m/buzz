@@ -1,7 +1,8 @@
 use super::{
     built_in_persona_records, ensure_persona_ids_are_active, ensure_persona_is_active,
-    merge_personas, migrate_retired_personas, validate_persona_activation_change,
-    validate_persona_deletion, BUILT_IN_PERSONAS, RETIRED_PERSONAS,
+    merge_personas, migrate_retired_personas, seeds_claude_variant_for,
+    validate_persona_activation_change, validate_persona_deletion, BUILT_IN_PERSONAS,
+    RETIRED_PERSONAS, RUNTIME_CLAUDE,
 };
 use crate::managed_agents::discovery::{default_agent_command, effective_agent_command};
 use crate::managed_agents::AgentDefinition;
@@ -450,6 +451,16 @@ fn merge_personas_does_not_ask_for_a_variant_when_nothing_is_seeded() {
 
     assert!(!changed);
     assert_eq!(records.len(), BUILT_IN_PERSONAS.len());
+}
+
+/// Selection, not installation. "Skip for now" on the onboarding harness step
+/// discards the draft, so nothing is written — and that silence must not be read
+/// as a vote for Claude just because Claude Code happens to be installed.
+#[test]
+fn only_a_chosen_claude_harness_seeds_the_claude_variant() {
+    assert!(seeds_claude_variant_for(Some(RUNTIME_CLAUDE)));
+    assert!(!seeds_claude_variant_for(Some("codex")));
+    assert!(!seeds_claude_variant_for(None));
 }
 
 #[test]

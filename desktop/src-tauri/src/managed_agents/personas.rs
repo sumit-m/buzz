@@ -466,6 +466,22 @@ pub fn load_personas<R: tauri::Runtime>(
     Ok(records)
 }
 
+/// Definitions exactly as stored — no built-in merge, and so no write-back.
+///
+/// For readers that only *render* the current set rather than act on it.
+/// Seeding is a write, and `load_personas` performs it on first read: a
+/// renderer calling that on a cold first launch decides which trio the user
+/// gets roughly a second into boot, long before onboarding has asked them which
+/// harness they want. `regenerate_nest_context` is exactly such a reader — it
+/// paints AGENTS.md with whatever agents exist, and "none yet" is a truthful
+/// answer during onboarding.
+pub fn load_personas_unseeded(app: &AppHandle) -> Result<Vec<AgentDefinition>, String> {
+    Ok(crate::managed_agents::storage::load_agent_definitions(app)?
+        .iter()
+        .filter_map(|record| record.to_definition_view())
+        .collect())
+}
+
 /// Read the raw persona records at `path` — no built-in merge, no write-back.
 /// The single disk-read seam for persona definitions: `load_personas` layers
 /// the built-in merge on top, and the boot-time readers that need raw records

@@ -214,6 +214,28 @@ fn built_in_persona_records(now: &str, claude: bool) -> Vec<AgentDefinition> {
         .collect()
 }
 
+/// Which trio to seed: the harness the user *chose*, not merely one that is
+/// installed.
+///
+/// Onboarding asks for a default harness whenever more than one is ready, and
+/// picking Codex on a machine that also has Claude Code installed used to still
+/// seed Opus, Sonnet and Fable — three agents named after models they would
+/// never run. The selection is the answer once it exists.
+///
+/// Before it exists there is nothing to honour, so an installed Claude harness
+/// still decides. That covers a persona load that beats the harness step, and
+/// it is what shipped, so nothing regresses for anyone who never sees that step
+/// because Claude Code is their only harness.
+fn seeds_claude_variant(app: &AppHandle) -> bool {
+    match crate::managed_agents::global_config::load_global_agent_config(app)
+        .ok()
+        .and_then(|config| config.preferred_runtime)
+    {
+        Some(runtime) => runtime == RUNTIME_CLAUDE,
+        None => super::discovery::claude_harness_available(),
+    }
+}
+
 pub(crate) fn built_in_persona_definition(id: &str, now: &str) -> Option<AgentDefinition> {
     built_in_persona_records(now, super::discovery::claude_harness_available())
         .into_iter()
@@ -248,17 +270,22 @@ fn sort_personas(records: &mut [AgentDefinition]) {
     });
 }
 
-fn merge_personas(mut stored: Vec<AgentDefinition>, now: &str) -> (Vec<AgentDefinition>, bool) {
+/// `claude_variant` decides which of the two name sets is seeded, and is
+/// called at most once — only when a built-in is actually missing. `load_personas`
+/// runs on many hot paths, and answering it can read the global config or spawn
+/// a login shell through `resolve_command` on a cold cache; every later load
+/// finds all three present and never asks.
+fn merge_personas(
+    mut stored: Vec<AgentDefinition>,
+    now: &str,
+    claude_variant: impl FnOnce() -> bool,
+) -> (Vec<AgentDefinition>, bool) {
     let mut changed = false;
 
-    // Probe for the Claude harness only when a built-in is actually about to
-    // be seeded. `load_personas` runs on many hot paths and `resolve_command`
-    // can spawn a login shell on a cold cache; every later load finds all
-    // three present and skips it.
     let seeding = BUILT_IN_PERSONAS
         .iter()
         .any(|built_in| !stored.iter().any(|record| record.id == built_in.id));
-    let claude = seeding && super::discovery::claude_harness_available();
+    let claude = seeding && claude_variant();
 
     for built_in in built_in_persona_records(now, claude) {
         if let Some(existing) = stored.iter_mut().find(|record| record.id == built_in.id) {
@@ -427,7 +454,7 @@ pub fn load_personas<R: tauri::Runtime>(
         .filter_map(|record| record.to_definition_view())
         .collect();
 
-    let (records, changed) = merge_personas(records, &now);
+    let (records, changed) = merge_personas(records, &now, || seeds_claude_variant(app));
     if changed {
         save_personas(app, &records)?;
     }

@@ -40,16 +40,22 @@ export const WELCOME_GUIDE_INTRO_MESSAGE =
 export type WelcomeTeamRole = "lead" | "teammate";
 
 export type WelcomeTeamStarterDefinition = Readonly<{
-  name: string;
   personaId: string;
   role: WelcomeTeamRole;
 }>;
 
-/** Stable identities used to provision the Rust-seeded Welcome Team. */
+/**
+ * Stable identities used to provision the Rust-seeded Welcome Team.
+ *
+ * Ids only. The names are the personas' — seeded as Opus/Sonnet/Fable or
+ * Fizz/Honey/Bumble depending on the harness chosen during onboarding — and
+ * naming them here as well pinned the Claude set onto every machine, so a
+ * Codex user met three agents named after models they would never run.
+ */
 export const WELCOME_TEAM_STARTERS = [
-  { name: "Opus", personaId: "builtin:fizz", role: "lead" },
-  { name: "Sonnet", personaId: "builtin:honey", role: "teammate" },
-  { name: "Fable", personaId: "builtin:bumble", role: "teammate" },
+  { personaId: "builtin:fizz", role: "lead" },
+  { personaId: "builtin:honey", role: "teammate" },
+  { personaId: "builtin:bumble", role: "teammate" },
 ] as const satisfies readonly WelcomeTeamStarterDefinition[];
 
 export type WelcomeTeamAgents = [ManagedAgent, ManagedAgent, ManagedAgent];
@@ -170,7 +176,7 @@ async function ensureWelcomeTeamPersonasActive() {
 
   for (const starter of WELCOME_TEAM_STARTERS) {
     if (!personasById.has(starter.personaId)) {
-      throw new Error(`${starter.name} agent not found.`);
+      throw new Error(`Built-in agent ${starter.personaId} not found.`);
     }
   }
 
@@ -214,7 +220,6 @@ async function ensureWelcomeTeamMembership(
 }
 
 export async function buildWelcomeStarterCreateInput(
-  starter: WelcomeTeamStarterDefinition,
   persona: AgentPersona,
   runtimes: readonly AcpRuntime[],
   preferredRuntimeId: string | null,
@@ -226,8 +231,8 @@ export async function buildWelcomeStarterCreateInput(
     preferredRuntimeId,
   );
   return {
+    // The name comes from the persona via `buildInstanceInputForDefinition`.
     ...(await buildInstanceInputForDefinition(persona, runtime)),
-    name: starter.name,
     teamId: WELCOME_TEAM_ID,
     relayUrl: relayUrl ?? undefined,
     spawnAfterCreate: false,
@@ -346,10 +351,9 @@ async function provisionWelcomeTeam(
   for (const starter of WELCOME_TEAM_STARTERS) {
     const persona = personasById.get(starter.personaId);
     if (!persona) {
-      throw new Error(`${starter.name} agent not found.`);
+      throw new Error(`Built-in agent ${starter.personaId} not found.`);
     }
     const desired = await buildWelcomeStarterCreateInput(
-      starter,
       persona,
       runtimes,
       globalConfig.preferred_runtime,

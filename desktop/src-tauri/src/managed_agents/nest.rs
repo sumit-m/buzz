@@ -7,7 +7,7 @@
 //! Static template content in AGENTS.md (above the managed-section markers)
 //! and SKILL.md is refreshed when the embedded template version changes.
 
-use super::{load_managed_agents, load_personas, AgentDefinition, ManagedAgentRecord};
+use super::{load_managed_agents, load_personas_unseeded, AgentDefinition, ManagedAgentRecord};
 #[cfg(test)]
 use super::{BackendKind, RespondTo};
 use crate::app_state::AppState;
@@ -936,7 +936,11 @@ pub async fn regenerate_nest_context<R: tauri::Runtime>(
         return Ok(());
     }
 
-    let personas = load_personas(app)?;
+    // Unseeded: this renders AGENTS.md, and a renderer must not create the
+    // records it is describing. `try_regenerate_nest` runs in boot setup, so
+    // seeding here would pick the built-in trio's harness variant before
+    // onboarding has asked which harness the user wants.
+    let personas = load_personas_unseeded(app)?;
     let agents = load_managed_agents(app)?;
     let state = app.state::<AppState>();
     // Capture the relay target once, before any network work, so this

@@ -119,7 +119,7 @@ fn merge_teams_demotes_retired_built_ins() {
     let mut retired = team("builtin-team:legacy", "Legacy");
     retired.is_builtin = true;
 
-    let (records, changed) = merge_teams(vec![retired], "2026-05-07T00:00:00Z");
+    let (records, changed) = merge_teams(vec![retired], "2026-05-07T00:00:00Z", || false);
 
     assert!(changed);
     let demoted = records
@@ -293,7 +293,7 @@ fn migration_pristine_fizz_is_purged() {
         updated_at: "2026-01-01T00:00:00Z".to_string(),
     };
 
-    let (records, changed) = merge_teams(vec![pristine], "2026-07-01T00:00:00Z");
+    let (records, changed) = merge_teams(vec![pristine], "2026-07-01T00:00:00Z", || false);
 
     assert!(changed);
     assert!(!records.iter().any(|t| t.id == "builtin-team:fizz"));
@@ -320,7 +320,7 @@ fn migration_customized_fizz_is_demoted_to_user_team() {
         updated_at: "2026-01-01T00:00:00Z".to_string(),
     };
 
-    let (records, changed) = merge_teams(vec![customized], "2026-07-01T00:00:00Z");
+    let (records, changed) = merge_teams(vec![customized], "2026-07-01T00:00:00Z", || false);
 
     assert!(changed);
     let demoted = records
@@ -333,19 +333,13 @@ fn migration_customized_fizz_is_demoted_to_user_team() {
 
 #[test]
 fn welcome_team_is_seeded_and_idempotent() {
-    let (records, changed) = merge_teams(Vec::new(), "2026-07-01T00:00:00Z");
+    let (records, changed) = merge_teams(Vec::new(), "2026-07-01T00:00:00Z", || false);
 
     assert!(changed);
     assert_eq!(records.len(), 1);
     let welcome = &records[0];
     assert_eq!(welcome.id, "builtin-team:welcome");
-    // The name depends on whether this machine has the Claude harness — the
-    // variant itself is covered by `welcome_team_name_follows_seed_variant`.
-    assert!(
-        welcome.name == "Claude - Opus, Sonnet and Fable" || welcome.name == "Welcome Team",
-        "unexpected seed name: {}",
-        welcome.name
-    );
+    assert_eq!(welcome.name, "Welcome Team");
     assert_eq!(welcome.description, None);
     assert_eq!(
         welcome.persona_ids,
@@ -358,7 +352,8 @@ fn welcome_team_is_seeded_and_idempotent() {
     assert!(welcome.is_builtin);
 
     let expected = serde_json::to_value(&records).unwrap();
-    let (records_after_second_merge, changed) = merge_teams(records, "2026-07-02T00:00:00Z");
+    let (records_after_second_merge, changed) =
+        merge_teams(records, "2026-07-02T00:00:00Z", || false);
     assert!(!changed);
     assert_eq!(
         serde_json::to_value(records_after_second_merge).unwrap(),
@@ -368,8 +363,9 @@ fn welcome_team_is_seeded_and_idempotent() {
 
 #[test]
 fn welcome_team_name_follows_seed_variant() {
-    // Same conditional as the personas: named after the Claude models when
-    // that harness is present, bee names otherwise.
+    // Same answer as the personas, because the team is named after the trio it
+    // holds: Claude model names when that harness was chosen, bee names
+    // otherwise.
     let claude = super::built_in_teams(true);
     assert_eq!(claude[0].name, "Claude - Opus, Sonnet and Fable");
 
@@ -383,8 +379,26 @@ fn welcome_team_name_follows_seed_variant() {
 }
 
 #[test]
+fn welcome_team_seed_uses_the_variant_it_is_asked_for() {
+    let (claude, _) = merge_teams(Vec::new(), "2026-07-01T00:00:00Z", || true);
+    assert_eq!(claude[0].name, "Claude - Opus, Sonnet and Fable");
+}
+
+/// Answering costs a global-config read, and `load_teams` runs on hot paths.
+#[test]
+fn welcome_team_seed_does_not_ask_for_a_variant_once_present() {
+    let (seeded, _) = merge_teams(Vec::new(), "2026-07-01T00:00:00Z", || false);
+
+    let (_, changed) = merge_teams(seeded, "2026-07-02T00:00:00Z", || {
+        panic!("the seed variant must only be resolved when the team is missing")
+    });
+
+    assert!(!changed);
+}
+
+#[test]
 fn welcome_team_seed_does_not_overwrite_customization() {
-    let (mut records, _) = merge_teams(Vec::new(), "2026-07-01T00:00:00Z");
+    let (mut records, _) = merge_teams(Vec::new(), "2026-07-01T00:00:00Z", || false);
     let welcome = records
         .iter_mut()
         .find(|team| team.id == "builtin-team:welcome")
@@ -393,7 +407,7 @@ fn welcome_team_seed_does_not_overwrite_customization() {
     welcome.description = Some("My customized starter team.".to_string());
     welcome.persona_ids = vec!["builtin:honey".to_string()];
 
-    let (records, changed) = merge_teams(records, "2026-07-02T00:00:00Z");
+    let (records, changed) = merge_teams(records, "2026-07-02T00:00:00Z", || false);
 
     assert!(!changed);
     let welcome = records

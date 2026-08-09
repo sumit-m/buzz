@@ -182,11 +182,10 @@ test("all Welcome starters use the onboarding runtime preference", async () => {
 
   for (const starter of WELCOME_TEAM_STARTERS) {
     const input = await buildWelcomeStarterCreateInput(
-      starter,
       {
         id: starter.personaId,
-        displayName: starter.name,
-        systemPrompt: `${starter.name} prompt`,
+        displayName: starter.personaId,
+        systemPrompt: `${starter.personaId} prompt`,
         model: null,
         provider: null,
         runtime: null,
@@ -203,6 +202,9 @@ test("all Welcome starters use the onboarding runtime preference", async () => {
     assert.equal(input.agentCommand, "claude-code-acp");
     assert.equal(input.harnessOverride, true);
     assert.equal(input.personaId, starter.personaId);
+    // The agent takes the persona's name, so a bee-variant install gets bees
+    // rather than three agents named after Claude models.
+    assert.equal(input.name, starter.personaId);
     assert.equal(input.teamId, WELCOME_TEAM_ID);
     assert.equal(input.relayUrl, RELAY_A);
     assert.equal(input.spawnAfterCreate, false);
@@ -293,10 +295,12 @@ test("existing Welcome starter needs no update when runtime already matches", ()
 
 test("welcome team starter definitions and role identities are stable", () => {
   assert.equal(WELCOME_TEAM_ID, "builtin-team:welcome");
+  // Ids and roles only: the display names belong to the seeded personas, which
+  // differ by harness.
   assert.deepEqual(WELCOME_TEAM_STARTERS, [
-    { name: "Opus", personaId: "builtin:fizz", role: "lead" },
-    { name: "Sonnet", personaId: "builtin:honey", role: "teammate" },
-    { name: "Fable", personaId: "builtin:bumble", role: "teammate" },
+    { personaId: "builtin:fizz", role: "lead" },
+    { personaId: "builtin:honey", role: "teammate" },
+    { personaId: "builtin:bumble", role: "teammate" },
   ]);
 });
 
@@ -319,7 +323,7 @@ test("starter matching uses persona identity rather than display name", () => {
     name: "Honey the Helper",
     personaId: honey.personaId,
   });
-  const nameOnlyHoney = makeAgent({ name: honey.name, pubkey: PUB_B });
+  const nameOnlyHoney = makeAgent({ name: "Honey", pubkey: PUB_B });
 
   assert.equal(
     pickWelcomeTeamStarterAgentForRelay(

@@ -37,7 +37,7 @@ fn custom_persona(id: &str, display_name: &str) -> AgentDefinition {
 
 #[test]
 fn merge_personas_adds_missing_built_ins() {
-    let (records, changed) = merge_personas(Vec::new(), "2026-03-19T00:00:00Z");
+    let (records, changed) = merge_personas(Vec::new(), "2026-03-19T00:00:00Z", || false);
 
     assert!(changed);
     assert_eq!(records.len(), BUILT_IN_PERSONAS.len());
@@ -61,7 +61,7 @@ fn merge_personas_adds_missing_built_ins() {
 #[test]
 fn merge_personas_preserves_custom_records() {
     let custom = custom_persona("custom:test", "Custom");
-    let (records, changed) = merge_personas(vec![custom.clone()], "2026-03-19T00:00:00Z");
+    let (records, changed) = merge_personas(vec![custom.clone()], "2026-03-19T00:00:00Z", || false);
 
     assert!(changed);
     assert!(records.iter().any(|record| record.id == custom.id));
@@ -77,7 +77,10 @@ fn merge_personas_preserves_builtin_edits() {
     edited_builtin.env_vars =
         std::collections::BTreeMap::from([("USER_SETTING".to_string(), "value".to_string())]);
 
-    let (records, changed) = merge_personas(vec![edited_builtin.clone()], "2026-03-19T00:00:00Z");
+    let (records, changed) =
+        merge_personas(vec![edited_builtin.clone()], "2026-03-19T00:00:00Z", || {
+            false
+        });
 
     assert!(changed); // The remaining seeded built-ins are added.
     let fizz = records
@@ -96,7 +99,7 @@ fn merge_personas_restores_builtin_marker_without_resetting_edits() {
     let mut edited_builtin = custom_persona("builtin:fizz", "My Fizz");
     edited_builtin.is_builtin = false;
 
-    let (records, changed) = merge_personas(vec![edited_builtin], "2026-03-19T00:00:00Z");
+    let (records, changed) = merge_personas(vec![edited_builtin], "2026-03-19T00:00:00Z", || false);
 
     assert!(changed);
     let fizz = records
@@ -115,7 +118,7 @@ fn merge_personas_adds_fizz_and_retires_old_builtins_for_existing_store() {
         persona.avatar_url = None;
     }
 
-    let (records, changed) = merge_personas(legacy_builtins, "2026-03-19T00:00:00Z");
+    let (records, changed) = merge_personas(legacy_builtins, "2026-03-19T00:00:00Z", || false);
 
     assert!(changed);
     let fizz = records
@@ -144,7 +147,7 @@ fn merge_personas_demotes_retired_builtins() {
     retired.is_active = true;
     let original_created_at = retired.created_at.clone();
 
-    let (records, changed) = merge_personas(vec![retired], "2026-04-01T00:00:00Z");
+    let (records, changed) = merge_personas(vec![retired], "2026-04-01T00:00:00Z", || false);
 
     assert!(changed);
     let demoted = records
@@ -419,6 +422,34 @@ fn builtin_resolves_to_buzz_agent_without_claude() {
         "buzz-agent",
         "built-in must resolve to buzz-agent specifically"
     );
+}
+
+/// The seed variant follows what the caller decides, and `load_personas`
+/// decides it from the harness the user selected during onboarding.
+#[test]
+fn merge_personas_seeds_the_variant_it_is_asked_for() {
+    let (claude, _) = merge_personas(Vec::new(), "2026-03-19T00:00:00Z", || true);
+    let names: Vec<&str> = claude.iter().map(|r| r.display_name.as_str()).collect();
+    assert_eq!(names, vec!["Opus", "Sonnet", "Fable"]);
+
+    let (bees, _) = merge_personas(Vec::new(), "2026-03-19T00:00:00Z", || false);
+    let names: Vec<&str> = bees.iter().map(|r| r.display_name.as_str()).collect();
+    assert_eq!(names, vec!["Fizz", "Honey", "Bumble"]);
+}
+
+/// Answering the question reads the global config and can spawn a login shell
+/// resolving harness commands. `load_personas` is on hot paths, so the question
+/// must not be asked once the three are on disk.
+#[test]
+fn merge_personas_does_not_ask_for_a_variant_when_nothing_is_seeded() {
+    let (seeded, _) = merge_personas(Vec::new(), "2026-03-19T00:00:00Z", || false);
+
+    let (records, changed) = merge_personas(seeded, "2026-03-20T00:00:00Z", || {
+        panic!("the seed variant must only be resolved when a built-in is missing")
+    });
+
+    assert!(!changed);
+    assert_eq!(records.len(), BUILT_IN_PERSONAS.len());
 }
 
 #[test]

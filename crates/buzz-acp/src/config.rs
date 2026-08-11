@@ -39,6 +39,14 @@ pub(crate) const DEFAULT_MAX_TURN_DURATION_SECS: u64 = 7200;
 /// deadline (`max_turn_duration + IN_FLIGHT_DEADLINE_BUFFER_SECS`).
 pub(crate) const MAX_TURN_DURATION_CEILING_SECS: u64 = 604_800;
 
+/// Default window for a plain channel mention.
+///
+/// Larger than the thread/DM limit on purpose: a thread is already a scoped
+/// conversation, whereas a channel mention arrives with nothing around it.
+/// Override via `--channel-context-message-limit` /
+/// `BUZZ_ACP_CHANNEL_CONTEXT_MESSAGE_LIMIT`.
+pub(crate) const DEFAULT_CHANNEL_CONTEXT_MESSAGE_LIMIT: u32 = 50;
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to parse nostr keys: {0}")]
@@ -431,7 +439,8 @@ pub struct CliArgs {
     /// Deliberately its own knob, and larger than the thread/DM limit: a thread
     /// is already a scoped conversation, whereas a channel mention arrives with
     /// no surrounding context at all. Set to 0 to disable channel context. Max 100.
-    #[arg(long, env = "BUZZ_ACP_CHANNEL_CONTEXT_MESSAGE_LIMIT", default_value_t = 50,
+    #[arg(long, env = "BUZZ_ACP_CHANNEL_CONTEXT_MESSAGE_LIMIT",
+          default_value_t = DEFAULT_CHANNEL_CONTEXT_MESSAGE_LIMIT,
           value_parser = clap::value_parser!(u32).range(0..=100))]
     pub channel_context_message_limit: u32,
 
@@ -1641,7 +1650,7 @@ mod tests {
             no_mention_filter: false,
             config_path: PathBuf::from("./buzz-acp.toml"),
             context_message_limit: 12,
-            channel_context_message_limit: 50,
+            channel_context_message_limit: DEFAULT_CHANNEL_CONTEXT_MESSAGE_LIMIT,
             max_turns_per_session: 0,
             presence_enabled: true,
             typing_enabled: true,

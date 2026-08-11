@@ -301,6 +301,25 @@ impl SessionState {
         }
     }
 
+    /// Clear the mid-session refresh notices this turn actually delivered.
+    ///
+    /// Separate from [`Self::mark_channel_delivery_success`] rather than folded
+    /// into it: that method is upstream's, and keeping its signature untouched
+    /// keeps the next rebase small. Both are called from the same two success
+    /// sites, and for the same reason — a notice consumed while composing a
+    /// prompt has not reached the agent until the turn returns. Draining on
+    /// read, which is what this replaces, lost the news entirely when a turn
+    /// failed, timed out or was cancelled: the flag was already gone, so the
+    /// agent went on answering from a facts list its channel had changed.
+    pub(crate) fn mark_refresh_delivered(&mut self, channel_id: &Uuid, facts: bool, canvas: bool) {
+        if facts {
+            self.facts_refresh_pending.remove(channel_id);
+        }
+        if canvas {
+            self.canvas_refresh_pending.remove(channel_id);
+        }
+    }
+
     /// Record that a channel's canvas changed under a live session.
     ///
     /// Mirrors [`Self::mark_facts_changed`]: a channel with no session fetches
@@ -2849,12 +2868,16 @@ pub async fn run_prompt_task(
     // cache feeds session *birth*, which wants the full section, and this is
     // the shorter replacement form. `mark_facts_changed` already dropped the
     // stale entry, so the next birth re-fetches.
+    //
+    // The flag is *read*, not taken: it is cleared by `mark_refresh_delivered`
+    // once the turn carrying it succeeds, so a failed turn re-delivers.
     let mut facts_refresh: Option<String> = None;
+    let mut facts_refresh_taken = false;
     if let PromptSource::Channel(scope) = &source {
         if agent
             .state
             .facts_refresh_pending
-            .remove(&scope.channel_id())
+            .contains(&scope.channel_id())
         {
             facts_refresh = crate::facts_fetch::fetch_facts_section(
                 scope.channel_id(),
@@ -2862,6 +2885,8 @@ pub async fn run_prompt_task(
                 crate::facts_fetch::FactsRender::Refresh,
             )
             .await;
+            // A failed fetch leaves the flag set for the next turn to retry.
+            facts_refresh_taken = facts_refresh.is_some();
         }
     }
 
@@ -2873,21 +2898,27 @@ pub async fn run_prompt_task(
     // posture on an undeterminable channel type: a session that never received
     // a `[Channel Canvas]` section must not be told one moved.
     let mut canvas_refresh: Option<String> = None;
+    let mut canvas_refresh_taken = false;
     if let PromptSource::Channel(scope) = &source {
         if agent
             .state
             .canvas_refresh_pending
-            .remove(&scope.channel_id())
+            .contains(&scope.channel_id())
         {
             let (is_dm, _, _) =
                 resolve_new_session_channel_context(resolved_channel_info.as_ref()).await;
-            if !is_dm {
+            if is_dm {
+                // Nothing to deliver here, and nothing ever will be — clear it
+                // rather than re-resolving the same DM on every future turn.
+                canvas_refresh_taken = true;
+            } else {
                 canvas_refresh = fetch_canvas_section(
                     scope.channel_id(),
                     &ctx.rest_client,
                     CanvasRender::Refresh,
                 )
                 .await;
+                canvas_refresh_taken = canvas_refresh.is_some();
             }
         }
     }
@@ -3594,6 +3625,11 @@ pub async fn run_prompt_task(
                                 &pending_delivered_event_ids,
                                 &pending_hydrated_thread_roots,
                             );
+                            agent.state.mark_refresh_delivered(
+                                &scope.channel_id(),
+                                facts_refresh_taken,
+                                canvas_refresh_taken,
+                            );
                         }
                         apply_completed_before_control_signal(
                             &mut agent.state,
@@ -3637,6 +3673,11 @@ pub async fn run_prompt_task(
                     standing_sent,
                     &pending_delivered_event_ids,
                     &pending_hydrated_thread_roots,
+                );
+                agent.state.mark_refresh_delivered(
+                    &scope.channel_id(),
+                    facts_refresh_taken,
+                    canvas_refresh_taken,
                 );
             } else if !agent.has_system_prompt_support() {
                 agent.state.heartbeat_standing_context_sent = true;
@@ -6228,6 +6269,61 @@ async fn clear_reactions(rest: crate::relay::RestClient, event_ids: Vec<String>)
 
 #[cfg(test)]
 pub(crate) mod tests {
+
+    /// A notice is queued when the channel changes and cleared when a turn
+    /// carrying it succeeds — never in between.
+    ///
+    /// The bug this pins: the flags used to be drained while the prompt was
+    /// being composed, so a turn that then failed, timed out or was cancelled
+    /// took the only record of the change with it. The agent kept answering
+    /// from a facts list its channel had already replaced.
+    #[test]
+    fn refresh_notices_survive_a_turn_that_never_succeeds() {
+        let mut state = SessionState::default();
+        let ch = Uuid::new_v4();
+        let scope = SessionScope::Conversation { channel_id: ch };
+        state.sessions.insert(scope.clone(), "sess-1".to_string());
+        state
+            .facts_sections
+            .insert(scope.clone(), "[Channel Facts]".into());
+        state
+            .canvas_sections
+            .insert(scope.clone(), "[Channel Canvas]".into());
+
+        assert!(state.mark_facts_changed(&ch));
+        assert!(state.mark_canvas_changed(&ch));
+
+        // A turn composes the notices and then fails: nothing is marked.
+        assert!(state.facts_refresh_pending.contains(&ch));
+        assert!(state.canvas_refresh_pending.contains(&ch));
+
+        // The next turn succeeds and carries both.
+        state.mark_refresh_delivered(&ch, true, true);
+        assert!(state.facts_refresh_pending.is_empty());
+        assert!(state.canvas_refresh_pending.is_empty());
+    }
+
+    /// Each notice clears on its own. A canvas fetch that failed while the
+    /// facts one succeeded must leave the canvas queued for the next turn.
+    #[test]
+    fn refresh_notices_clear_independently() {
+        let mut state = SessionState::default();
+        let ch = Uuid::new_v4();
+        state.sessions.insert(
+            SessionScope::Conversation { channel_id: ch },
+            "sess-1".to_string(),
+        );
+        state.mark_facts_changed(&ch);
+        state.mark_canvas_changed(&ch);
+
+        state.mark_refresh_delivered(&ch, true, false);
+
+        assert!(state.facts_refresh_pending.is_empty());
+        assert!(
+            state.canvas_refresh_pending.contains(&ch),
+            "an undelivered canvas notice must outlive the turn"
+        );
+    }
 
     /// A refresh only means something for a session that already carries a
     /// facts section. Flagging a channel with no session would deliver the

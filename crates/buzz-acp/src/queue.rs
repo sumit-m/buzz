@@ -1977,6 +1977,7 @@ fn format_context_hints(
     thread_tags: &ThreadTags,
     is_dm: bool,
     conversation_context_status: ConversationContextStatus,
+    had_delivered_events: bool,
     reply_anchor: Option<&str>,
 ) -> String {
     let channel_id = scope.channel_id();
@@ -2079,9 +2080,22 @@ fn format_context_hints(
         append_thread_reply_instruction(&mut s, reply_anchor.unwrap_or(root));
         crate::prompt_framing::semantic_section("context", &s)
     } else {
-        let ctx_hint = if has_conversation_context {
+        // Three states, not two. From the second turn on the window below is a
+        // delta — everything older already went out earlier in this session —
+        // and an agent told only "the newest messages" reads the short list as
+        // the whole of what it has.
+        let ctx_hint = if has_conversation_context && had_delivered_events {
+            "Channel context included below. It is only what is new since the \
+             last turn — earlier messages were already delivered in this \
+             session. Use `buzz messages get --channel <UUID>` to re-read them, \
+             or `buzz messages search --channel <UUID> --query \"...\"` for anything older."
+        } else if has_conversation_context {
             "Channel context included below. It is the newest messages only — \
              use `buzz messages search --channel <UUID> --query \"...\"` for anything older."
+        } else if conversation_context_had_delivered_events {
+            "Earlier channel context was already delivered in this session and \
+             nothing has arrived since. Use `buzz messages get --channel <UUID>` \
+             to re-read it."
         } else {
             "Hint: Use `buzz messages get --channel <UUID>` for recent messages if needed."
         };
@@ -2094,10 +2108,7 @@ fn format_context_hints(
         // hint that follows is about this turn's context, not the channel.
         append_channel_description(&mut s, channel_info);
         append_project_home(&mut s, channel_info, channel_id);
-        s.push_str(&format!(
-            "
-{ctx_hint}"
-        ));
+        s.push_str(&format!("\n{ctx_hint}"));
         append_top_level_reply_instruction(&mut s);
         crate::prompt_framing::semantic_section("context", &s)
     }
@@ -2183,10 +2194,17 @@ fn conversation_context_status(
     }
 }
 
-/// Format a conversation context section (thread or DM).
+/// Format a conversation context section (thread, DM or channel).
+///
+/// `had_delivered_events` changes the channel header only. Once the delivery
+/// delta has taken effect, `messages.len()` counts what is *new* while `total`
+/// still counts the whole channel — so "3 of 812" reads as a three-message
+/// window when the agent is holding fifty. Threads and DMs keep upstream's
+/// wording, which is already correct for them.
 fn format_conversation_context(
     ctx: &ConversationContext,
     profile_lookup: Option<&PromptProfileLookup>,
+    had_delivered_events: bool,
 ) -> String {
     let (tag, messages, total, truncated) = match ctx {
         ConversationContext::Thread {
@@ -2223,15 +2241,19 @@ fn format_conversation_context(
     let included = messages.len().to_string();
     let total = total.to_string();
     let truncated = truncated.to_string();
-    crate::prompt_framing::semantic_section_with_attributes(
-        tag,
-        &[
-            ("included", included.as_str()),
-            ("total", total.as_str()),
-            ("truncated", truncated.as_str()),
-        ],
-        &body,
-    )
+    // A channel window on an established session carries only what the agent
+    // has not been handed yet. Without saying so, "included=3 total=812" reads
+    // as a thin sample of the channel rather than everything new since the
+    // last turn.
+    let mut attributes = vec![
+        ("included", included.as_str()),
+        ("total", total.as_str()),
+        ("truncated", truncated.as_str()),
+    ];
+    if matches!(ctx, ConversationContext::Channel { .. }) && had_delivered_events {
+        attributes.push(("window", "new-since-last-turn"));
+    }
+    crate::prompt_framing::semantic_section_with_attributes(tag, &attributes, &body)
 }
 
 /// Arguments for [`format_prompt`] beyond the required [`FlushBatch`].
@@ -2475,12 +2497,17 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
             args.conversation_context,
             args.conversation_context_had_session_events,
         ),
+        args.conversation_context_had_delivered_events,
         reply_anchor.as_deref(),
     ));
 
     // 3. Conversation context (thread or DM).
     if let Some(ctx) = args.conversation_context {
-        sections.push(format_conversation_context(ctx, args.profile_lookup));
+        sections.push(format_conversation_context(
+            ctx,
+            args.profile_lookup,
+            args.conversation_context_had_delivered_events,
+        ));
     }
 
     // 4. Cancelled + re-prompt framing. When a turn was cancelled to deliver
@@ -3828,13 +3855,113 @@ mod tests {
             total: 812,
             truncated: true,
         };
-        let rendered = format_conversation_context(&ctx, None);
+        let rendered = format_conversation_context(&ctx, None, false);
         assert!(
             rendered
                 .starts_with("<channel-context included=\"1\" total=\"812\" truncated=\"true\">"),
             "got: {rendered}"
         );
         assert!(rendered.contains("we agreed on Tuesday"));
+    }
+
+    #[test]
+    fn test_channel_context_header_counts_the_delta_as_new() {
+        // After the delivery delta, `messages` is what is new while `total` is
+        // still the whole channel. "1 of 812" would read as a one-message
+        // window to an agent already holding fifty.
+        let ctx = ConversationContext::Channel {
+            messages: vec![ContextMessage {
+                event_id: "a".repeat(64),
+                pubkey: "abc".into(),
+                timestamp: "2026-08-01T10:00:00Z".into(),
+                content: "and Wednesday works too".into(),
+            }],
+            total: 812,
+            truncated: true,
+        };
+        let rendered = format_conversation_context(&ctx, None, true);
+        assert!(
+            rendered.starts_with("[Channel Context (1 new, 812 in the channel, truncated)]"),
+            "got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_thread_and_dm_headers_keep_upstream_wording_when_delta_applied() {
+        // The count only reads wrong for the channel window, which is built
+        // from the whole channel. Threads and DMs are already scoped.
+        for ctx in [
+            ConversationContext::Thread {
+                messages: vec![ContextMessage {
+                    event_id: "b".repeat(64),
+                    pubkey: "abc".into(),
+                    timestamp: "2026-08-01T10:00:00Z".into(),
+                    content: "reply".into(),
+                }],
+                total: 9,
+                truncated: false,
+            },
+            ConversationContext::Dm {
+                messages: vec![ContextMessage {
+                    event_id: "c".repeat(64),
+                    pubkey: "abc".into(),
+                    timestamp: "2026-08-01T10:00:00Z".into(),
+                    content: "dm".into(),
+                }],
+                total: 9,
+                truncated: false,
+            },
+        ] {
+            let rendered = format_conversation_context(&ctx, None, true);
+            assert!(rendered.contains("(1 of 9 messages)"), "got: {rendered}");
+        }
+    }
+
+    #[test]
+    fn test_channel_hint_says_earlier_context_already_went_out() {
+        let channel_id = Uuid::new_v4();
+        let tags = ThreadTags::default();
+
+        let first = format_context_hints(
+            channel_id,
+            None,
+            &tags,
+            false,
+            ConversationContextStatus::Included,
+            false,
+            None,
+        );
+        assert!(first.contains("the newest messages only"), "got: {first}");
+
+        let later = format_context_hints(
+            channel_id,
+            None,
+            &tags,
+            false,
+            ConversationContextStatus::Included,
+            true,
+            None,
+        );
+        assert!(
+            later.contains("only what is new since the last turn"),
+            "got: {later}"
+        );
+
+        // Delta emptied the window: say so rather than falling back to the
+        // hint that implies nothing has ever been delivered.
+        let nothing_new = format_context_hints(
+            channel_id,
+            None,
+            &tags,
+            false,
+            ConversationContextStatus::PreviouslyDelivered,
+            true,
+            None,
+        );
+        assert!(
+            nothing_new.contains("nothing has arrived since"),
+            "got: {nothing_new}"
+        );
     }
 
     #[test]

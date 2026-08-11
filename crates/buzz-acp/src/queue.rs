@@ -3820,7 +3820,7 @@ mod tests {
         // Same paired-tag framing threads and DMs already use.
         let ctx = ConversationContext::Channel {
             messages: vec![ContextMessage {
-                event_id: "e1".into(),
+                event_id: String::new(),
                 pubkey: "abc".into(),
                 timestamp: "2026-08-01T10:00:00Z".into(),
                 content: "we agreed on Tuesday".into(),
@@ -3855,7 +3855,7 @@ mod tests {
         };
         let ctx = ConversationContext::Channel {
             messages: vec![ContextMessage {
-                event_id: "e1".into(),
+                event_id: String::new(),
                 pubkey: "abc".into(),
                 timestamp: "2026-08-01T10:00:00Z".into(),
                 content: "we agreed on Tuesday".into(),

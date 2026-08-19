@@ -19,24 +19,17 @@ struct BuiltInPersona {
     default_active: bool,
 }
 
-/// The persona the Pollen rename migration keys on. Kept as constants so
-/// `migration::pollen` cannot drift from the table below.
+/// The bee persona upstream renamed from Bumble to Pollen.
 ///
-/// LOCAL DIVERGENCE: upstream renames this persona Bumble -> Pollen. Our
-/// trio keeps Bumble as its harness-agnostic name, so both constants read
-/// the same and the migration is a no-op rather than dead code.
+/// This build seeds a Claude-named trio, so nothing here uses these for a
+/// built-in. They stay because upstream's one-shot rename migration
+/// (`migration/pollen.rs`) reads them to find records seeded before the rename,
+/// and those records exist on any profile that ran an older build.
 pub(crate) const POLLEN_PERSONA_ID: &str = "builtin:bumble";
-/// Display name the rename migration writes.
-pub(crate) const POLLEN_DISPLAY_NAME: &str = "Bumble";
-/// The prompt the legacy record carried. Our trio ships no system prompt,
-/// but the migration still matches on this to recognise an unmodified
-/// legacy record.
+pub(crate) const POLLEN_DISPLAY_NAME: &str = "Pollen";
+pub(crate) const POLLEN_LEGACY_DISPLAY_NAME: &str = "Bumble";
+pub(crate) const POLLEN_SYSTEM_PROMPT: &str = "You are Pollen, a curious and adventurous researcher. Explore questions, compare options, check assumptions, and explain what you find clearly. Be candid when uncertain and favor useful evidence. Add occasional bee wordplay or 🐝🔎—keep it playful, never chaotic.";
 pub(crate) const POLLEN_LEGACY_SYSTEM_PROMPT: &str = "You are Bumble, a curious and adventurous researcher. Explore questions, compare options, check assumptions, and explain what you find clearly. Be candid when uncertain and favor useful evidence. Add occasional bee wordplay or 🐝🔎—keep it playful, never chaotic.";
-/// What the migration would write. Equal to the legacy prompt because our
-/// trio ships none, which makes the prompt half of the migration inert.
-pub(crate) const POLLEN_SYSTEM_PROMPT: &str = POLLEN_LEGACY_SYSTEM_PROMPT;
-/// Display name the rename migration replaces.
-pub(crate) const POLLEN_LEGACY_DISPLAY_NAME: &str = POLLEN_DISPLAY_NAME;
 
 /// Runtime id of the Claude Code harness in `KNOWN_ACP_RUNTIMES`.
 const RUNTIME_CLAUDE: &str = "claude";
@@ -92,8 +85,8 @@ const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
         default_active: true,
     },
     BuiltInPersona {
-        id: POLLEN_PERSONA_ID,
-        display_name: POLLEN_DISPLAY_NAME,
+        id: "builtin:bumble",
+        display_name: "Bumble",
         claude_display_name: "Fable",
         claude_model: "claude-fable-5[1m]",
         avatar_url: None,
@@ -227,7 +220,7 @@ fn built_in_persona_records(now: &str, claude: bool) -> Vec<AgentDefinition> {
 /// the community flow only once machine onboarding — identity, harness, defaults
 /// — has completed, and the first persona load is the Welcome Team intro inside
 /// that flow. The answer is on disk before anything asks.
-pub(crate) fn seeds_claude_variant(app: &AppHandle) -> bool {
+pub(crate) fn seeds_claude_variant<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
     seeds_claude_variant_for(
         crate::managed_agents::global_config::load_global_agent_config(app)
             .ok()
@@ -475,7 +468,9 @@ pub fn load_personas<R: tauri::Runtime>(
 /// harness they want. `regenerate_nest_context` is exactly such a reader — it
 /// paints AGENTS.md with whatever agents exist, and "none yet" is a truthful
 /// answer during onboarding.
-pub fn load_personas_unseeded(app: &AppHandle) -> Result<Vec<AgentDefinition>, String> {
+pub fn load_personas_unseeded<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Vec<AgentDefinition>, String> {
     Ok(crate::managed_agents::storage::load_agent_definitions(app)?
         .iter()
         .filter_map(|record| record.to_definition_view())

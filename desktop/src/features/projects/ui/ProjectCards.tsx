@@ -6,7 +6,6 @@ import {
   GitCommit,
   GitPullRequest,
   Plus,
-  TerminalSquare,
   Trash2,
 } from "lucide-react";
 import * as React from "react";
@@ -30,7 +29,6 @@ import {
   selectionItemFromProject,
   type ProjectSelectionItem,
 } from "@/features/projects/lib/projectSelection";
-import { projectTerminalLabel } from "@/features/projects/ui/useOpenProjectTerminal";
 import { PROJECT_LIST_ROW_META_TEXT_CLASS } from "@/features/projects/ui/projectListRowStyles";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -367,18 +365,14 @@ function ProjectCardButton({
 
 function ProjectActionsMenu({
   project,
-  hasLocal,
   canDelete,
   disabled,
   onDelete,
-  onOpenTerminal,
 }: {
   project: Project;
-  hasLocal: boolean;
   canDelete: boolean;
   disabled: boolean;
   onDelete: (project: Project) => Promise<void> | void;
-  onOpenTerminal: (project: Project) => Promise<void> | void;
 }) {
   const [confirmOpen, setConfirmOpen] = React.useState(false);
 
@@ -389,16 +383,6 @@ function ProjectActionsMenu({
           link={projectShareLink(project)}
           testId={`project-copy-link-${project.dtag}`}
         />
-        <DropdownMenuItem
-          onSelect={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            void onOpenTerminal(project);
-          }}
-        >
-          <TerminalSquare className="h-4 w-4" />
-          {projectTerminalLabel(hasLocal)}
-        </DropdownMenuItem>
         <DropdownMenuItem
           className="text-destructive focus:text-destructive"
           disabled={!canDelete || disabled}
@@ -459,12 +443,10 @@ type ProjectItemProps = {
   selectionRangeItems?: ProjectSelectionItem[];
   summary: ProjectActivitySummary | undefined;
   repositoryUnavailableReason?: ProjectRepoUnavailableReason;
-  hasLocal: boolean;
   canDelete: boolean;
   deleteDisabled: boolean;
   onDelete: (project: Project) => Promise<void> | void;
   onOpen: (project: Project) => void;
-  onOpenTerminal: (project: Project) => Promise<void> | void;
 };
 
 // Memoized: these cards render in unbounded grids/lists; identity-stable
@@ -475,12 +457,10 @@ export const ProjectGridCard = React.memo(function ProjectGridCard({
   profiles,
   summary,
   repositoryUnavailableReason,
-  hasLocal,
   canDelete,
   deleteDisabled,
   onDelete,
   onOpen,
-  onOpenTerminal,
 }: ProjectItemProps) {
   return (
     <Card
@@ -524,9 +504,7 @@ export const ProjectGridCard = React.memo(function ProjectGridCard({
             <ProjectActionsMenu
               canDelete={canDelete}
               disabled={deleteDisabled}
-              hasLocal={hasLocal}
               onDelete={onDelete}
-              onOpenTerminal={onOpenTerminal}
               project={project}
             />
           </div>
@@ -567,12 +545,10 @@ export const ProjectListRow = React.memo(function ProjectListRow({
   selectionRangeItems,
   summary,
   repositoryUnavailableReason,
-  hasLocal,
   canDelete,
   deleteDisabled,
   onDelete,
   onOpen,
-  onOpenTerminal,
 }: ProjectItemProps) {
   const repositoryCount = project.repositoryAddresses.length;
   const selectionItem = selectionItemFromProject({
@@ -626,9 +602,7 @@ export const ProjectListRow = React.memo(function ProjectListRow({
         <ProjectActionsMenu
           canDelete={canDelete}
           disabled={deleteDisabled}
-          hasLocal={hasLocal}
           onDelete={onDelete}
-          onOpenTerminal={onOpenTerminal}
           project={project}
         />
       }

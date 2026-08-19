@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { FolderGit2, Globe, SquareTerminal } from "lucide-react";
+import { FolderGit2, Globe, SquareTerminal, Trash2 } from "lucide-react";
 
 import type {
   Project,
@@ -23,6 +23,17 @@ import {
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useRelayOrigin } from "@/shared/lib/useRelayOrigin";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
+import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { DropdownMenuItem } from "@/shared/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
@@ -48,7 +59,11 @@ export type RepositoryListItem = {
 };
 
 type RepositoryItemProps = RepositoryListItem & {
+  /** True when the signer owns the repository — the gate for destroying it. */
+  canDelete: boolean;
+  deleteDisabled: boolean;
   hasLocal: boolean;
+  onDelete: (project: Project, repository: Repository) => Promise<void> | void;
   onOpen: (project: Project, repository: Repository) => void;
   onOpenTerminal: (repository: Repository) => void;
   profiles?: UserProfileLookup;
@@ -168,27 +183,96 @@ function repositoryPeople(
 }
 
 function RepositoryActionsMenu({
+  canDelete,
+  deleteDisabled,
   hasLocal,
+  onDelete,
   onOpenTerminal,
+  project,
   repository,
-}: Pick<RepositoryItemProps, "hasLocal" | "onOpenTerminal" | "repository">) {
+}: Pick<
+  RepositoryItemProps,
+  | "canDelete"
+  | "deleteDisabled"
+  | "hasLocal"
+  | "onDelete"
+  | "onOpenTerminal"
+  | "project"
+  | "repository"
+>) {
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+
   return (
-    <ProjectListRowMenu label={`More options for ${repository.name}`}>
-      <CopyShareLinkMenuItem
-        link={repositoryShareLink(repository)}
-        testId={`repository-copy-link-${repository.dtag}`}
-      />
-      <DropdownMenuItem
-        onSelect={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          onOpenTerminal(repository);
-        }}
+    <AlertDialog onOpenChange={setConfirmOpen} open={confirmOpen}>
+      <ProjectListRowMenu label={`More options for ${repository.name}`}>
+        <CopyShareLinkMenuItem
+          link={repositoryShareLink(repository)}
+          testId={`repository-copy-link-${repository.dtag}`}
+        />
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onOpenTerminal(repository);
+          }}
+        >
+          <SquareTerminal className="h-4 w-4" />
+          {projectTerminalLabel(hasLocal)}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className="text-destructive focus:text-destructive"
+          data-testid={`repository-delete-${repository.dtag}`}
+          disabled={!canDelete || deleteDisabled}
+          onSelect={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (canDelete && !deleteDisabled) {
+              setConfirmOpen(true);
+            }
+          }}
+        >
+          <Trash2 className="h-4 w-4" />
+          Delete repository
+        </DropdownMenuItem>
+      </ProjectListRowMenu>
+      <AlertDialogContent
+        data-testid={`repository-delete-confirm-${repository.dtag}`}
       >
-        <SquareTerminal className="h-4 w-4" />
-        {projectTerminalLabel(hasLocal)}
-      </DropdownMenuItem>
-    </ProjectListRowMenu>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete repository?</AlertDialogTitle>
+          {/* The relay copy and the working copy are two different things and
+              people conflate them, so the wording names both fates. */}
+          <AlertDialogDescription>
+            Delete {repository.name} for everyone. Its commits, branches, tasks
+            and reviews are destroyed on the relay and cannot be recovered. Your
+            local clone is left alone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel asChild>
+            <Button disabled={deleteDisabled} type="button" variant="outline">
+              Cancel
+            </Button>
+          </AlertDialogCancel>
+          <AlertDialogAction asChild>
+            <Button
+              data-testid={`repository-delete-confirm-button-${repository.dtag}`}
+              disabled={deleteDisabled}
+              onClick={(event) => {
+                event.preventDefault();
+                void Promise.resolve(onDelete(project, repository)).finally(
+                  () => setConfirmOpen(false),
+                );
+              }}
+              type="button"
+              variant="destructive"
+            >
+              {deleteDisabled ? "Deleting..." : "Delete repository"}
+            </Button>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -198,7 +282,10 @@ export const RepositoryGridCard = React.memo(function RepositoryGridCard(
   props: RepositoryItemProps,
 ) {
   const {
+    canDelete,
+    deleteDisabled,
     hasLocal,
+    onDelete,
     onOpen,
     onOpenTerminal,
     profiles,
@@ -226,8 +313,12 @@ export const RepositoryGridCard = React.memo(function RepositoryGridCard(
           />
           <div className="pointer-events-auto ml-auto">
             <RepositoryActionsMenu
+              canDelete={canDelete}
+              deleteDisabled={deleteDisabled}
               hasLocal={hasLocal}
+              onDelete={onDelete}
               onOpenTerminal={onOpenTerminal}
+              project={project}
               repository={repository}
             />
           </div>
@@ -265,7 +356,10 @@ export const RepositoryListRow = React.memo(function RepositoryListRow(
   props: RepositoryItemProps,
 ) {
   const {
+    canDelete,
+    deleteDisabled,
     hasLocal,
+    onDelete,
     onOpen,
     onOpenTerminal,
     profiles,
@@ -308,8 +402,12 @@ export const RepositoryListRow = React.memo(function RepositoryListRow(
       titleSecondaryTestId="repositories-row-description"
       trailing={
         <RepositoryActionsMenu
+          canDelete={canDelete}
+          deleteDisabled={deleteDisabled}
           hasLocal={hasLocal}
+          onDelete={onDelete}
           onOpenTerminal={onOpenTerminal}
+          project={project}
           repository={repository}
         />
       }

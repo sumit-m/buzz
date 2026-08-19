@@ -232,6 +232,8 @@ export const RepositoryGridCard = React.memo(function RepositoryGridCard(
             />
           </div>
         </div>
+        {/* Blank when there is none: the placeholder said nothing and read
+            as content. Height is still reserved so the grid stays aligned. */}
         <p
           className={cn(
             PROJECT_GRID_CARD_BODY_CLASS,
@@ -239,7 +241,7 @@ export const RepositoryGridCard = React.memo(function RepositoryGridCard(
           )}
           data-testid="projects-grid-card-body"
         >
-          {repository.description || "A repository in this project."}
+          {repository.description}
         </p>
         <div className="pointer-events-auto mt-auto">
           <ProjectPeopleStack

@@ -9,7 +9,6 @@ import type {
   Repository,
 } from "@/features/projects/hooks";
 import {
-  hasLocalCheckout,
   hasLocalRepositoryCheckout,
 } from "@/features/projects/lib/projectLocalRepos";
 import type { ProjectRepoUnavailableReason } from "@/features/projects/lib/projectRepoAvailability";
@@ -117,10 +116,8 @@ const EMPTY_PEOPLE: string[] = [];
 export function ProjectsOverviewProjectItems({
   currentPubkey,
   deleteDisabled,
-  localRepoNames,
   onDelete,
   onOpen,
-  onOpenTerminal,
   profiles,
   repositoryUnavailableReasonFor,
   summaries,
@@ -129,10 +126,8 @@ export function ProjectsOverviewProjectItems({
 }: {
   currentPubkey: string | undefined;
   deleteDisabled: boolean;
-  localRepoNames: Set<string>;
   onDelete: (project: Project) => void;
   onOpen: (project: Project) => void;
-  onOpenTerminal: (project: Project) => void;
   profiles?: UserProfileLookup;
   repositoryUnavailableReasonFor: (
     project: Project,
@@ -234,10 +229,8 @@ export function ProjectsOverviewProjectItems({
                           profiles,
                         )}
                         deleteDisabled={deleteDisabled}
-                        hasLocal={hasLocalCheckout(project, localRepoNames)}
                         onDelete={onDelete}
                         onOpen={onOpen}
-                        onOpenTerminal={onOpenTerminal}
                         people={peopleByProject.get(project.id) ?? EMPTY_PEOPLE}
                         profiles={profiles}
                         project={project}
@@ -279,10 +272,8 @@ export function ProjectsOverviewProjectItems({
                       profiles,
                     )}
                     deleteDisabled={deleteDisabled}
-                    hasLocal={hasLocalCheckout(project, localRepoNames)}
                     onDelete={onDelete}
                     onOpen={onOpen}
-                    onOpenTerminal={onOpenTerminal}
                     people={peopleByProject.get(project.id) ?? EMPTY_PEOPLE}
                     profiles={profiles}
                     project={project}

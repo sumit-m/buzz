@@ -102,7 +102,6 @@ import {
   EMPTY_ITEMS,
   useContextWorkItems,
   useDeleteProjectHandler,
-  useOpenProjectTerminalHandler,
 } from "./projectsViewWorkItems";
 
 const MANY_PROJECTS_THRESHOLD = 12;
@@ -520,10 +519,6 @@ export function ProjectsView() {
   );
 
   const openTerminal = useOpenProjectTerminal(activeCommunity?.reposDir);
-  const handleOpenTerminal = useOpenProjectTerminalHandler(
-    openTerminal,
-    localRepoNames,
-  );
   const handleOpenRepositoryTerminal = React.useCallback(
     (repository: Repository) =>
       openTerminal(repository, {
@@ -578,10 +573,8 @@ export function ProjectsView() {
     <ProjectsOverviewProjectItems
       currentPubkey={currentPubkey}
       deleteDisabled={deleteProjectMutation.isPending}
-      localRepoNames={localRepoNames}
       onDelete={handleDeleteProject}
       onOpen={handleOpenProject}
-      onOpenTerminal={handleOpenTerminal}
       profiles={profiles}
       repositoryUnavailableReasonFor={repositoryUnavailableReasonFor}
       summaries={activitySummariesQuery.data}

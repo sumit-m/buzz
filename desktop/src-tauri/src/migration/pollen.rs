@@ -214,6 +214,9 @@ fn unique_legacy_fizz_name(occupied_names: &std::collections::HashSet<String>) -
     unreachable!()
 }
 
+/// Index Pollen occupied in upstream's stock `builtin:fizz` name pool.
+const LEGACY_FIZZ_POLLEN_SLOT: usize = 4;
+
 fn stock_version_updates(now: &str) -> std::collections::HashMap<String, (String, String)> {
     let mut updates = std::collections::HashMap::new();
 
@@ -237,9 +240,17 @@ fn stock_version_updates(now: &str) -> std::collections::HashMap<String, (String
         crate::managed_agents::built_in_persona_definition("builtin:fizz", now)
     {
         let current_fizz = persona_version(&legacy_fizz);
-        legacy_fizz
-            .name_pool
-            .insert(4, crate::managed_agents::POLLEN_DISPLAY_NAME.to_string());
+        // Upstream's stock fizz pool holds 17 names and carried Pollen at index
+        // 4. This build seeds a Claude-named trio whose pools hold a single
+        // name, so a bare `insert(4, ..)` panics at startup. Clamp to the end:
+        // the reconstruction only exists to recognise stock records, and a
+        // record seeded by this build is not one, so no match is the right
+        // answer either way.
+        let legacy_pollen_slot = LEGACY_FIZZ_POLLEN_SLOT.min(legacy_fizz.name_pool.len());
+        legacy_fizz.name_pool.insert(
+            legacy_pollen_slot,
+            crate::managed_agents::POLLEN_DISPLAY_NAME.to_string(),
+        );
         updates.insert(
             "builtin:fizz".to_string(),
             (persona_version(&legacy_fizz), current_fizz),
@@ -494,13 +505,6 @@ mod tests {
     use crate::migration::test_support::{read_agents_json, write_agents_json};
 
     #[test]
-    // Ignored on this branch: the fixture builds itself from
-    // `built_in_persona_definition("builtin:fizz")` and indexes into its
-    // `name_pool`, but this build seeds a Claude-named trio whose pools hold a
-    // single entry. The migration itself still ships — it repairs records
-    // seeded by older builds, where Bumble did exist — only these upstream
-    // fixtures cannot be constructed here.
-    #[ignore = "fixture depends on upstream's bee built-ins"]
     fn pollen_name_migration_updates_seeded_fields_and_preserves_customizations() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agents/managed-agents.json");
@@ -628,13 +632,6 @@ mod tests {
     }
 
     #[test]
-    // Ignored on this branch: the fixture builds itself from
-    // `built_in_persona_definition("builtin:fizz")` and indexes into its
-    // `name_pool`, but this build seeds a Claude-named trio whose pools hold a
-    // single entry. The migration itself still ships — it repairs records
-    // seeded by older builds, where Bumble did exist — only these upstream
-    // fixtures cannot be constructed here.
-    #[ignore = "fixture depends on upstream's bee built-ins"]
     fn pollen_name_migration_advances_stock_versions_without_definition_rows() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agents/managed-agents.json");
@@ -754,13 +751,6 @@ mod tests {
     }
 
     #[test]
-    // Ignored on this branch: the fixture builds itself from
-    // `built_in_persona_definition("builtin:fizz")` and indexes into its
-    // `name_pool`, but this build seeds a Claude-named trio whose pools hold a
-    // single entry. The migration itself still ships — it repairs records
-    // seeded by older builds, where Bumble did exist — only these upstream
-    // fixtures cannot be constructed here.
-    #[ignore = "fixture depends on upstream's bee built-ins"]
     fn pollen_name_migration_repairs_stock_fizz_collision_and_profiles() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agents/managed-agents.json");
@@ -837,21 +827,22 @@ mod tests {
     }
 
     #[test]
-    // Ignored on this branch: the fixture builds itself from
-    // `built_in_persona_definition("builtin:fizz")` and indexes into its
-    // `name_pool`, but this build seeds a Claude-named trio whose pools hold a
-    // single entry. The migration itself still ships — it repairs records
-    // seeded by older builds, where Bumble did exist — only these upstream
-    // fixtures cannot be constructed here.
-    #[ignore = "fixture depends on upstream's bee built-ins"]
     fn pollen_name_migration_removes_the_new_name_from_the_legacy_fizz_pool() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agents/managed-agents.json");
         let mut legacy_fizz =
             crate::managed_agents::built_in_persona_definition("builtin:fizz", "before").unwrap();
-        legacy_fizz
-            .name_pool
-            .insert(4, crate::managed_agents::POLLEN_DISPLAY_NAME.to_string());
+        // The pool the record must carry for the cleaner to act: upstream's
+        // stock bee pool, Pollen at index 4. Spelled out rather than derived
+        // from this build's built-in, whose pool is a single Claude name — the
+        // record being migrated was written by an older build, not by this one.
+        legacy_fizz.name_pool = [
+            "Nectar", "Comet", "Bramble", "Clover", "Pollen", "Amber", "Daisy", "Mason", "Thistle",
+            "Waxwing", "Hive", "Meadow", "Juniper", "Aster", "Sage", "Willow", "Orchard", "Buzz",
+        ]
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
         let old_version = crate::managed_agents::persona_events::persona_content_hash(
             &crate::managed_agents::persona_events::persona_event_content(&legacy_fizz),
         );
@@ -886,5 +877,14 @@ mod tests {
         assert_eq!(records[0]["updated_at"], "after");
         assert_eq!(records[1]["persona_source_version"], new_version);
         assert_eq!(records[1]["updated_at"], "after");
+    }
+
+    #[test]
+    fn stock_version_updates_survive_a_short_built_in_name_pool() {
+        // Regression: this runs on every launch. With this build's one-name
+        // Claude pools, the unclamped `insert(4, ..)` panicked before the
+        // window ever appeared.
+        let updates = stock_version_updates("now");
+        assert!(updates.contains_key("builtin:fizz"));
     }
 }

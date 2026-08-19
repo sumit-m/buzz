@@ -204,6 +204,21 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   const [repoSource, setRepoSource] = React.useState<"remote" | "local">(
     "remote",
   );
+  const repoAddress = repository?.repoAddress ?? null;
+  // The repository whose source the viewer picked themselves. The preference
+  // below runs on every render, so without this it undoes a deliberate switch
+  // to Remote before it paints whenever the remote has nothing to show — an
+  // empty repository reads as a dropdown that ignores the click. Holding the
+  // address rather than a flag lets the preference apply again on the next
+  // repository the viewer opens.
+  const pinnedSourceRepo = React.useRef<string | null>(null);
+  const chooseRepoSource = React.useCallback(
+    (source: "remote" | "local") => {
+      pinnedSourceRepo.current = repoAddress;
+      setRepoSource(source);
+    },
+    [repoAddress],
+  );
   const repositoryPanel = useProjectRepositoryPanel(
     `${repository?.id ?? ""}:${activeTab}:${selectedPullRequestId ?? ""}:${selectedIssueId ?? ""}:${selectedCommitHash ?? ""}`,
   );
@@ -369,7 +384,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
       branchActions.deletePending || Boolean(deleteBranchReason),
     deleteBranchTitle: deleteBranchReason ?? "Delete this remote branch",
     source: selectedTag ? "remote" : repoSource,
-    onSourceChange: setRepoSource,
+    onSourceChange: chooseRepoSource,
     localDisabled:
       Boolean(selectedTag) ||
       (!repoSyncStatusQuery.data?.localPath &&
@@ -461,17 +476,21 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
       setRepoSource("remote");
       return;
     }
+    // A preference, not a constraint: a readable remote stays selectable, so
+    // this only picks the opening view and yields once the viewer chooses.
     if (
       !selectedPullRequestId &&
       repoSource === "remote" &&
       !snapshotHasContent(displayedRepoSnapshot) &&
-      hasLocalCheckout
+      hasLocalCheckout &&
+      pinnedSourceRepo.current !== repoAddress
     ) {
       setRepoSource("local");
     }
   }, [
     displayedRepoSnapshot,
     hasLocalCheckout,
+    repoAddress,
     repoSource,
     selectedPullRequestId,
     selectedTag,

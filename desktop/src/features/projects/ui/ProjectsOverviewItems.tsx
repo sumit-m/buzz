@@ -8,9 +8,7 @@ import type {
   ProjectActivitySummary,
   Repository,
 } from "@/features/projects/hooks";
-import {
-  hasLocalRepositoryCheckout,
-} from "@/features/projects/lib/projectLocalRepos";
+import { hasLocalRepositoryCheckout } from "@/features/projects/lib/projectLocalRepos";
 import type { ProjectRepoUnavailableReason } from "@/features/projects/lib/projectRepoAvailability";
 import {
   projectShareLink,
@@ -18,6 +16,7 @@ import {
 } from "@/features/projects/lib/projectShareLinks";
 import {
   isProjectMine,
+  isRepositoryOwnedByCurrentUser,
   projectPeople,
   type ProjectsViewMode,
 } from "@/features/projects/lib/projectsViewHelpers";
@@ -295,7 +294,9 @@ export function ProjectsOverviewProjectItems({
 
 export function ProjectsOverviewRepositoryItems({
   currentPubkey,
+  deleteDisabled,
   localRepoNames,
+  onDelete,
   onOpen,
   onOpenTerminal,
   profiles,
@@ -304,7 +305,9 @@ export function ProjectsOverviewRepositoryItems({
   visibleRepositories,
 }: {
   currentPubkey: string | undefined;
+  deleteDisabled: boolean;
   localRepoNames: Set<string>;
+  onDelete: (project: Project, repository: Repository) => void;
   onOpen: (project: Project, repository: Repository) => void;
   onOpenTerminal: (repository: Repository) => void;
   profiles?: UserProfileLookup;
@@ -384,12 +387,18 @@ export function ProjectsOverviewRepositoryItems({
                     key={repository.repoAddress}
                   >
                     <RepositoryGridCard
+                      canDelete={isRepositoryOwnedByCurrentUser(
+                        repository,
+                        currentPubkey,
+                      )}
+                      deleteDisabled={deleteDisabled}
                       hasLocal={hasLocalRepositoryCheckout(
                         repository,
                         localRepoNames,
                       )}
                       onOpen={onOpen}
                       onOpenTerminal={onOpenTerminal}
+                      onDelete={onDelete}
                       profiles={profiles}
                       project={project}
                       repository={repository}
@@ -419,12 +428,18 @@ export function ProjectsOverviewRepositoryItems({
                 key={repository.repoAddress}
               >
                 <RepositoryListRow
+                  canDelete={isRepositoryOwnedByCurrentUser(
+                    repository,
+                    currentPubkey,
+                  )}
+                  deleteDisabled={deleteDisabled}
                   hasLocal={hasLocalRepositoryCheckout(
                     repository,
                     localRepoNames,
                   )}
                   onOpen={onOpen}
                   onOpenTerminal={onOpenTerminal}
+                  onDelete={onDelete}
                   profiles={profiles}
                   project={project}
                   repository={repository}

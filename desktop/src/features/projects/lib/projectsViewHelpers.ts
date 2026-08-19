@@ -417,6 +417,15 @@ export function isProjectOwnedByCurrentUser(
     : false;
 }
 
+export function isRepositoryOwnedByCurrentUser(
+  repository: Repository,
+  currentPubkey: string | undefined,
+) {
+  return currentPubkey
+    ? normalizePubkey(repository.owner) === normalizePubkey(currentPubkey)
+    : false;
+}
+
 export type RepositoryAccessInput = {
   currentPubkey: string | undefined;
   localRepoNames: Set<string>;

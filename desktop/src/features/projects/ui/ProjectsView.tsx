@@ -18,6 +18,7 @@ import {
 import { useRepositoryActivitySummariesQuery } from "@/features/projects/repositoryActivityHooks";
 import { isExplicitProject } from "@/features/projects/projectModels";
 import { projectsWithWorkItemRepositories } from "@/features/projects/projectWorkItems";
+import { useDeleteRepositoryMutation } from "@/features/projects/useDeleteRepository";
 import { useProjectsRepoSnapshotsQuery } from "@/features/projects/useProjectsRepoSnapshots";
 import { buildProjectSelectionAgentContext } from "@/features/projects/lib/projectDetailAgentContext";
 import { buildProjectsActivityDigest } from "@/features/projects/lib/projectsActivityDigest";
@@ -239,6 +240,7 @@ export function ProjectsView() {
     ],
   );
   const deleteProjectMutation = useDeleteProjectMutation();
+  const deleteRepositoryMutation = useDeleteRepositoryMutation();
   const currentPubkey = identityQuery.data?.pubkey;
   const managedAgentPubkeys = React.useMemo(
     () =>
@@ -530,6 +532,22 @@ export function ProjectsView() {
     [localRepoNames, openTerminal],
   );
 
+  const handleDeleteRepository = React.useCallback(
+    async (project: Project, repository: Repository) => {
+      try {
+        await deleteRepositoryMutation.mutateAsync({ project, repository });
+        toast.success(`Repository "${repository.name}" deleted.`);
+      } catch (error) {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to delete repository",
+        );
+      }
+    },
+    [deleteRepositoryMutation],
+  );
+
   const handleDeleteProject = useDeleteProjectHandler(
     deleteProjectMutation.mutateAsync,
   );
@@ -586,7 +604,9 @@ export function ProjectsView() {
   const repositoryItems = (
     <ProjectsOverviewRepositoryItems
       currentPubkey={currentPubkey}
+      deleteDisabled={deleteRepositoryMutation.isPending}
       localRepoNames={localRepoNames}
+      onDelete={handleDeleteRepository}
       onOpen={handleOpenRepository}
       onOpenTerminal={handleOpenRepositoryTerminal}
       profiles={profiles}

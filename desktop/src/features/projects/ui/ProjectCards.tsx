@@ -532,6 +532,8 @@ export const ProjectGridCard = React.memo(function ProjectGridCard({
           </div>
         </div>
 
+        {/* Blank when there is none: the placeholder said nothing and read
+            as content. Height is still reserved so the grid stays aligned. */}
         <p
           className={cn(
             PROJECT_GRID_CARD_BODY_CLASS,
@@ -539,7 +541,7 @@ export const ProjectGridCard = React.memo(function ProjectGridCard({
           )}
           data-testid="projects-grid-card-body"
         >
-          {project.description || "A shared space for internal git work."}
+          {project.description}
         </p>
 
         <div className="relative z-10 flex items-center px-4 pb-1">

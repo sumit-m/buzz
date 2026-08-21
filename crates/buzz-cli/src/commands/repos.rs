@@ -305,29 +305,128 @@ pub async fn cmd_get_repo(
 pub async fn cmd_list_repos(
     client: &BuzzClient,
     owner: Option<&str>,
+    channel: Option<&str>,
     limit: Option<u32>,
+    repos_dir: Option<&str>,
+    format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
-    // Default to self if no owner specified.
-    let pubkey = match owner {
+    let filter = build_repo_list_filter(
+        owner,
+        channel,
+        limit,
+        &client.public_key().to_hex(),
+    )?;
+
+    let resp = client.query(&filter).await?;
+    let output = match format {
+        crate::OutputFormat::Compact => {
+            let events: Vec<serde_json::Value> =
+                serde_json::from_str(&resp).unwrap_or_default();
+            let root = crate::repos_root::resolve_repos_root(repos_dir);
+            let compact: Vec<serde_json::Value> = events
+                .iter()
+                .filter_map(|event| compact_repo(event, root.as_deref()))
+                .collect();
+            serde_json::to_string(&compact).unwrap_or_default()
+        }
+        crate::OutputFormat::Json => resp,
+    };
+    println!("{output}");
+    Ok(())
+}
+
+/// Build the relay filter for `repos list`.
+///
+/// `channel` becomes the `buzz_channel` bridge extension — the relay pushes it
+/// down to a JSONB containment on the announcement's `buzz-channel` tag, which
+/// is the same tag the git ACL reads. Scoping by it means every result is a
+/// repository the caller can actually clone.
+///
+/// With no `channel` the owner default stands (self, unless `--owner` names
+/// someone). With a channel and no owner the listing is channel-wide, which is
+/// the point: an agent asking what it can work on does not know who owns what.
+fn build_repo_list_filter(
+    owner: Option<&str>,
+    channel: Option<&str>,
+    limit: Option<u32>,
+    self_pubkey: &str,
+) -> Result<serde_json::Value, CliError> {
+    let mut filter = serde_json::json!({ "kinds": [30617] });
+
+    if let Some(channel_id) = channel {
+        crate::validate::validate_uuid(channel_id)?;
+        filter["buzz_channel"] = serde_json::json!(channel_id);
+    }
+
+    match owner {
         Some(pk) => {
             crate::validate::validate_hex64(pk)?;
-            pk.to_string()
+            filter["authors"] = serde_json::json!([pk]);
         }
-        None => client.public_key().to_hex(),
-    };
-
-    let mut filter = serde_json::json!({
-        "kinds": [30617],
-        "authors": [pubkey]
-    });
+        // Only default to self when nothing else narrows the query — a
+        // channel-scoped listing that silently added `authors:[self]` would
+        // return nothing for the common case of a repository someone else owns.
+        None if channel.is_none() => {
+            filter["authors"] = serde_json::json!([self_pubkey]);
+        }
+        None => {}
+    }
 
     if let Some(n) = limit {
         filter["limit"] = serde_json::json!(n);
     }
+    Ok(filter)
+}
 
-    let resp = client.query(&filter).await?;
-    println!("{resp}");
-    Ok(())
+/// Project one kind:30617 announcement to the fields an agent needs to act:
+/// what to call it, how to address it, where to clone it from, and which branch.
+///
+/// `checkout` is filesystem state rather than relay state: the local path when
+/// a checkout exists, `null` otherwise. It is what tells an agent whether to
+/// clone or to read what is already on disk.
+fn compact_repo(
+    event: &serde_json::Value,
+    repos_root: Option<&std::path::Path>,
+) -> Option<serde_json::Value> {
+    let tags = event.get("tags")?.as_array()?;
+    let tag_value = |name: &str| -> Option<String> {
+        tags.iter().find_map(|tag| {
+            let parts = tag.as_array()?;
+            (parts.first()?.as_str()? == name)
+                .then(|| parts.get(1)?.as_str().map(String::from))
+                .flatten()
+        })
+    };
+    let tag_values = |name: &str| -> Vec<String> {
+        tags.iter()
+            .filter_map(|tag| {
+                let parts = tag.as_array()?;
+                (parts.first()?.as_str()? == name)
+                    .then(|| parts.get(1)?.as_str().map(String::from))
+                    .flatten()
+            })
+            .collect()
+    };
+
+    let id = tag_value("d")?;
+    let owner = event.get("pubkey")?.as_str()?.to_string();
+    let clone_url = tag_values("clone").first().cloned();
+    let checkout = repos_root.and_then(|root| {
+        crate::repos_root::find_checkout(root, &id, clone_url.as_deref())
+            .map(|path| path.display().to_string())
+    });
+    Some(serde_json::json!({
+        "id": id,
+        "name": tag_value("name"),
+        "coordinate": format!("30617:{owner}:{id}"),
+        "owner": owner,
+        "clone": clone_url,
+        // NIP-34 leaves the default branch out of the announcement; Buzz mirrors
+        // Desktop's read model, which falls back to `main`.
+        "branch": tag_value("default-branch").unwrap_or_else(|| "main".to_string()),
+        "channel": tag_value("buzz-channel"),
+        "checkout": checkout,
+    }))
 }
 
 async fn current_repo(client: &BuzzClient, repo_id: &str) -> Result<Event, CliError> {
@@ -415,7 +514,11 @@ async fn cmd_bind_repo(client: &BuzzClient, repo_id: &str, channel: &str) -> Res
     submit_repo_update(client, builder).await
 }
 
-pub async fn dispatch(cmd: crate::ReposCmd, client: &BuzzClient) -> Result<(), CliError> {
+pub async fn dispatch(
+    cmd: crate::ReposCmd,
+    client: &BuzzClient,
+    format: &crate::OutputFormat,
+) -> Result<(), CliError> {
     use crate::{ReposCmd, ReposProtectCmd};
     match cmd {
         ReposCmd::Create {
@@ -440,7 +543,22 @@ pub async fn dispatch(cmd: crate::ReposCmd, client: &BuzzClient) -> Result<(), C
             .await
         }
         ReposCmd::Get { id, owner } => cmd_get_repo(client, &id, owner.as_deref()).await,
-        ReposCmd::List { owner, limit } => cmd_list_repos(client, owner.as_deref(), limit).await,
+        ReposCmd::List {
+            owner,
+            channel,
+            limit,
+            repos_dir,
+        } => {
+            cmd_list_repos(
+                client,
+                owner.as_deref(),
+                channel.as_deref(),
+                limit,
+                repos_dir.as_deref(),
+                format,
+            )
+            .await
+        }
         ReposCmd::Bind { id, channel } => cmd_bind_repo(client, &id, &channel).await,
         ReposCmd::DefaultBranch(command) => {
             super::repo_default_branch::dispatch(command, client).await
@@ -478,8 +596,9 @@ mod tests {
     use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
 
     use super::{
-        build_create_announcement, build_protection_tag, build_updated_repo_announcement,
-        protection_rules_json, validate_write_response, RepoChange,
+        build_create_announcement, build_protection_tag, build_repo_list_filter,
+        build_updated_repo_announcement, compact_repo, protection_rules_json,
+        validate_write_response, RepoChange,
     };
 
     fn signed_repo(tags: Vec<Tag>, content: &str, created_at: u64) -> nostr::Event {
@@ -855,4 +974,122 @@ mod tests {
             })
         );
     }
+    // ── repos list --channel ──────────────────────────────────────────────────
+
+    const SELF_PK: &str = "aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44";
+    const OTHER_PK: &str = "11aa22bb33cc44dd55ee66ff11aa22bb33cc44dd55ee66ff11aa22bb33cc44dd";
+    const CHANNEL: &str = "0b3a4bd2-4d4a-4a0e-9c3f-1f2d3e4a5b6c";
+
+    #[test]
+    fn list_without_channel_still_defaults_to_self() {
+        let filter = build_repo_list_filter(None, None, None, SELF_PK).unwrap();
+        assert_eq!(filter["authors"], serde_json::json!([SELF_PK]));
+        assert!(filter.get("buzz_channel").is_none());
+    }
+
+    /// The load-bearing case: an agent asking what it can work on does not know
+    /// who owns what, so a channel listing must not silently narrow to self.
+    #[test]
+    fn channel_listing_is_not_scoped_to_the_caller() {
+        let filter = build_repo_list_filter(None, Some(CHANNEL), None, SELF_PK).unwrap();
+        assert_eq!(filter["buzz_channel"], serde_json::json!(CHANNEL));
+        assert!(
+            filter.get("authors").is_none(),
+            "a channel-scoped listing must not add authors:[self]"
+        );
+    }
+
+    #[test]
+    fn owner_and_channel_intersect() {
+        let filter = build_repo_list_filter(Some(OTHER_PK), Some(CHANNEL), Some(5), SELF_PK)
+            .unwrap();
+        assert_eq!(filter["authors"], serde_json::json!([OTHER_PK]));
+        assert_eq!(filter["buzz_channel"], serde_json::json!(CHANNEL));
+        assert_eq!(filter["limit"], serde_json::json!(5));
+    }
+
+    #[test]
+    fn malformed_channel_is_rejected_before_the_relay_sees_it() {
+        assert!(build_repo_list_filter(None, Some("not-a-uuid"), None, SELF_PK).is_err());
+    }
+
+    #[test]
+    fn compact_projection_carries_what_an_agent_needs() {
+        let event = serde_json::json!({
+            "pubkey": OTHER_PK,
+            "tags": [
+                ["d", "bee-garden"],
+                ["name", "Bee Garden"],
+                ["clone", "http://127.0.0.1:3000/git/owner/bee-garden"],
+                ["buzz-channel", CHANNEL],
+            ],
+        });
+        let compact = compact_repo(&event, None).expect("projection");
+        assert_eq!(compact["id"], serde_json::json!("bee-garden"));
+        assert_eq!(
+            compact["coordinate"],
+            serde_json::json!(format!("30617:{OTHER_PK}:bee-garden"))
+        );
+        assert_eq!(
+            compact["clone"],
+            serde_json::json!("http://127.0.0.1:3000/git/owner/bee-garden")
+        );
+        assert_eq!(compact["channel"], serde_json::json!(CHANNEL));
+        // NIP-34 announcements carry no default branch; Desktop's read model
+        // falls back to main and so does this.
+        assert_eq!(compact["branch"], serde_json::json!("main"));
+    }
+
+    #[test]
+    fn compact_projection_prefers_a_declared_default_branch() {
+        let event = serde_json::json!({
+            "pubkey": OTHER_PK,
+            "tags": [["d", "repo"], ["default-branch", "trunk"]],
+        });
+        let compact = compact_repo(&event, None).expect("projection");
+        assert_eq!(compact["branch"], serde_json::json!("trunk"));
+    }
+
+    /// An announcement with no `d` tag is malformed; skip it rather than
+    /// emitting a row with no way to address the repository.
+    #[test]
+    fn compact_projection_skips_an_unaddressable_announcement() {
+        let event = serde_json::json!({ "pubkey": OTHER_PK, "tags": [["name", "no d tag"]] });
+        assert!(compact_repo(&event, None).is_none());
+    }
+
+    /// `checkout` is what tells an agent whether to clone or read what is
+    /// already on disk, so it must reflect the filesystem, not the relay.
+    #[test]
+    fn compact_projection_reports_an_existing_checkout() {
+        let root = tempfile::tempdir().expect("temp root");
+        std::fs::create_dir_all(root.path().join("bee-garden").join(".git"))
+            .expect("fake checkout");
+        let event = serde_json::json!({
+            "pubkey": OTHER_PK,
+            "tags": [
+                ["d", "bee-garden"],
+                ["clone", "http://127.0.0.1:3000/git/owner/bee-garden"],
+            ],
+        });
+
+        let cloned = compact_repo(&event, Some(root.path())).expect("projection");
+        assert!(
+            cloned["checkout"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("bee-garden")),
+            "an existing checkout must be reported: {cloned}"
+        );
+
+        let absent = serde_json::json!({
+            "pubkey": OTHER_PK,
+            "tags": [["d", "not-cloned"]],
+        });
+        let absent = compact_repo(&absent, Some(root.path())).expect("projection");
+        assert!(
+            absent["checkout"].is_null(),
+            "a repository with no checkout must report null"
+        );
+    }
+
 }

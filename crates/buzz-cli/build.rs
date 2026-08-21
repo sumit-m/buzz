@@ -42,7 +42,13 @@ fn main() {
     println!("cargo:rustc-env=BUZZ_CLI_GIT_SHA={sha}");
     println!("cargo:rustc-env=BUZZ_CLI_BUILT_AT={built}");
 
-    for path in ["src", "Cargo.toml", "build.rs", "../../.git/HEAD", "../../.git/index"] {
+    for path in [
+        "src",
+        "Cargo.toml",
+        "build.rs",
+        "../../.git/HEAD",
+        "../../.git/index",
+    ] {
         println!("cargo:rerun-if-changed={path}");
     }
 }

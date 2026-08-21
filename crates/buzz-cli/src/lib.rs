@@ -2440,7 +2440,8 @@ pub enum IssuesCmd {
         #[arg(long)]
         repo_id: Option<String>,
         /// Project home channel. Infers the repository, creating one bound to
-        /// this project when none exists. Defaults to `BUZZ_GIT_ORIGIN_CHANNEL_ID`.
+        /// this project when none exists, and is stamped on the issue as its
+        /// NIP-29 `h` tag. Defaults to `BUZZ_GIT_ORIGIN_CHANNEL_ID`.
         #[arg(long)]
         channel: Option<String>,
         /// Issue title

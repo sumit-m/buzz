@@ -1453,6 +1453,10 @@ pub struct GitIssueMeta {
     pub labels: Vec<String>,
     /// Additional pubkeys to `p`-tag besides the repo owner.
     pub recipients: Vec<String>,
+    /// Channel the issue originated in, as a NIP-29 `h` tag. Mirrors
+    /// `GitPullRequestMeta::channel_id`: a task assigned in a channel should
+    /// record where it came from, exactly as a pull request does.
+    pub channel_id: Option<String>,
 }
 
 /// Build a git issue event (kind:1621, NIP-34). `content` is the markdown body.
@@ -1483,6 +1487,11 @@ pub fn build_git_issue(
     tags.push(tag(&["subject", subject])?);
     for label in &meta.labels {
         tags.push(tag(&["t", label])?);
+    }
+    if let Some(ref channel_id) = meta.channel_id {
+        let channel_id = Uuid::parse_str(channel_id)
+            .map_err(|e| SdkError::InvalidInput(format!("channel_id must be a valid UUID: {e}")))?;
+        tags.push(tag(&["h", &channel_id.to_string()])?);
     }
 
     Ok(EventBuilder::new(Kind::Custom(KIND_GIT_ISSUE as u16), content).tags(tags))
@@ -4850,6 +4859,7 @@ mod tests {
         let meta = GitIssueMeta {
             labels: vec!["bug".to_string(), "p1".to_string()],
             recipients: vec![],
+            channel_id: None,
         };
         let ev =
             sign(build_git_issue(&repo, "Crashes on startup", "steps to repro", &meta).unwrap());
@@ -4859,6 +4869,58 @@ mod tests {
         assert!(has_tag(&ev, "subject", "Crashes on startup"));
         assert!(has_tag(&ev, "t", "bug"));
         assert!(has_tag(&ev, "t", "p1"));
+    }
+
+    /// A task assigned in a channel has to record where it came from, the way
+    /// a pull request already does — without it the provenance has nowhere to
+    /// live but the markdown body.
+    #[test]
+    fn git_issue_records_its_originating_channel() {
+        let repo = GitRepoCoord {
+            owner: "a".repeat(64),
+            id: "repo".to_string(),
+        };
+        let channel = "0b3a4bd2-4d4a-4a0e-9c3f-1f2d3e4a5b6c";
+        let meta = GitIssueMeta {
+            channel_id: Some(channel.to_string()),
+            ..GitIssueMeta::default()
+        };
+        let ev = sign(build_git_issue(&repo, "subject", "body", &meta).unwrap());
+        assert!(has_tag(&ev, "h", channel));
+        assert_eq!(
+            ev.tags
+                .iter()
+                .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("h"))
+                .count(),
+            1,
+            "exactly one h tag, as the relay routes on the first"
+        );
+
+        let without =
+            sign(build_git_issue(&repo, "subject", "body", &GitIssueMeta::default()).unwrap());
+        assert!(
+            !without
+                .tags
+                .iter()
+                .any(|tag| tag.as_slice().first().map(String::as_str) == Some("h")),
+            "no channel means no h tag at all"
+        );
+    }
+
+    /// The relay routes on this value; a malformed one must fail at build time
+    /// rather than producing an issue nothing can find.
+    #[test]
+    fn git_issue_rejects_a_malformed_channel() {
+        let repo = GitRepoCoord {
+            owner: "a".repeat(64),
+            id: "repo".to_string(),
+        };
+        let meta = GitIssueMeta {
+            channel_id: Some("not-a-uuid".to_string()),
+            ..GitIssueMeta::default()
+        };
+        let err = build_git_issue(&repo, "subject", "body", &meta).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
     }
 
     #[test]

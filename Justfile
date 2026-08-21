@@ -872,6 +872,23 @@ dev *ARGS: bootstrap _ensure-sidecar-stubs _ensure-migrations
         done
     fi
     cargo build -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-dev-mcp -p buzz-cli -p git-credential-nostr -p buzz-relay
+    # Stage the freshly built sidecars. Without this the app keeps spawning
+    # whatever binary was last copied here, so a rebuilt CLI or harness never
+    # reaches an agent — it took a full debugging round to notice that an agent
+    # was running a `buzz` from an earlier session and failing on a flag that
+    # had existed for hours. `_ensure-sidecar-stubs` only creates placeholders;
+    # it never refreshes a real one.
+    TARGET=$(rustc -vV | sed -n 's|host: ||p')
+    TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+    EXT=""
+    [[ "$TARGET" == *windows* ]] && EXT=".exe"
+    SIDECARS=(buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz)
+    # buzz-backend-kubernetes is not built on Windows — mirror _ensure-sidecar-stubs.
+    [[ "$TARGET" != *windows* ]] && SIDECARS+=(buzz-backend-kubernetes)
+    for bin in "${SIDECARS[@]}"; do
+        cp "${TARGET_DIR}/debug/${bin}${EXT}" "desktop/src-tauri/binaries/${bin}-${TARGET}${EXT}"
+        chmod +x "desktop/src-tauri/binaries/${bin}-${TARGET}${EXT}"
+    done
     # Docker Desktop's forwarded MinIO port can stall under the deployment
     # probe's 32 concurrent writers. Keep the gate enabled in local dev, using
     # the bounded profile already used by the relay test launcher.

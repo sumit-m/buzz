@@ -1889,6 +1889,34 @@ pub enum ReposCmd {
         #[arg(long, env = "BUZZ_REPOS_DIR")]
         repos_dir: Option<String>,
     },
+    /// Read the relay's ref state for a repository (kind:30618).
+    ///
+    /// The cheap "has the remote moved?" probe: one relay query, no git
+    /// request and no checkout. Compare the OIDs against what you last saw.
+    State {
+        /// Repository identifier (d-tag)
+        #[arg(long)]
+        id: String,
+        /// Owner pubkey (64-char hex). Defaults to the current identity.
+        #[arg(long)]
+        owner: Option<String>,
+    },
+    /// Clone a repository into the local checkout root, ready to commit from.
+    ///
+    /// Sets the repository-local git identity so a fresh clone is immediately
+    /// usable — an agent told to stop when identity is empty would otherwise
+    /// clone and then refuse to commit.
+    Clone {
+        /// Repository identifier (d-tag)
+        id: String,
+        /// Owner pubkey (64-char hex). Defaults to the current identity.
+        #[arg(long)]
+        owner: Option<String>,
+        /// Where local checkouts live. Defaults to BUZZ_REPOS_DIR, then
+        /// <cwd>/REPOS when it exists, then ~/.buzz/REPOS.
+        #[arg(long, env = "BUZZ_REPOS_DIR")]
+        repos_dir: Option<String>,
+    },
     /// Bind (or rebind) one of your repositories to a channel.
     ///
     /// The `buzz-channel` tag on the announcement is the git ACL: the relay
@@ -3264,7 +3292,7 @@ mod tests {
         );
         assert_eq!(
             names(&cmd, "repos"),
-            vec!["bind", "create", "default-branch", "get", "list", "protect"]
+            vec!["bind", "clone", "create", "default-branch", "get", "list", "protect", "state"]
         );
         let repos = cmd
             .get_subcommands()
@@ -3345,7 +3373,7 @@ mod tests {
             ("projects", 8),
             ("raw", 2),
             ("reactions", 3),
-            ("repos", 6),
+            ("repos", 8),
             ("social", 7),
             ("upload", 1),
             ("users", 6),

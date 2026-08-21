@@ -1,6 +1,6 @@
 use buzz_core::{
     git_perms::{parse_protection_tag, parse_protection_tags, RefPattern},
-    kind::KIND_GIT_REPO_ANNOUNCEMENT,
+    kind::{KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE},
 };
 use nostr::{Event, EventBuilder, Tag, Timestamp};
 
@@ -553,6 +553,12 @@ pub async fn dispatch(
             )
             .await
         }
+        ReposCmd::State { id, owner } => cmd_repo_state(client, &id, owner.as_deref()).await,
+        ReposCmd::Clone {
+            id,
+            owner,
+            repos_dir,
+        } => cmd_clone_repo(client, &id, owner.as_deref(), repos_dir.as_deref()).await,
         ReposCmd::Bind { id, channel } => cmd_bind_repo(client, &id, &channel).await,
         ReposCmd::DefaultBranch(command) => {
             super::repo_default_branch::dispatch(command, client).await
@@ -583,6 +589,225 @@ pub async fn dispatch(
             }
         },
     }
+}
+
+/// Fetch the newest announcement for a repository coordinate.
+///
+/// `owner` defaults to the caller, matching `repos get`. An agent working in a
+/// channel usually passes the owner it read from `repos list --channel`.
+async fn fetch_repo_announcement(
+    client: &BuzzClient,
+    repo_id: &str,
+    owner: Option<&str>,
+) -> Result<Event, CliError> {
+    validate_repo_id(repo_id)?;
+    let author = match owner {
+        Some(pk) => {
+            crate::validate::validate_hex64(pk)?;
+            pk.to_string()
+        }
+        None => client.keys().public_key().to_hex(),
+    };
+    let filter = serde_json::json!({
+        "kinds": [KIND_GIT_REPO_ANNOUNCEMENT],
+        "authors": [author],
+        "#d": [repo_id],
+        "limit": 1,
+    });
+    let raw = client.query(&filter).await?;
+    let mut events = parse_events(&raw)?;
+    events.sort_by_key(|event| std::cmp::Reverse(event.created_at));
+    events.into_iter().next().ok_or_else(|| {
+        CliError::NotFound(format!(
+            "repository {repo_id:?} was not found. If someone told you it exists, \
+             you are probably not a member of the channel it is bound to — ask to \
+             be added rather than retrying."
+        ))
+    })
+}
+
+fn first_tag_value<'a>(event: &'a Event, name: &str) -> Option<&'a str> {
+    event.tags.iter().find_map(|tag| {
+        let parts = tag.as_slice();
+        (parts.len() >= 2 && parts[0] == name).then(|| parts[1].as_str())
+    })
+}
+
+/// `buzz repos state` — the relay's own view of a repository's refs.
+///
+/// The relay signs a kind:30618 after every push, so this answers "has the
+/// remote moved?" with one query: no git request, no repository hydration, and
+/// no checkout required.
+pub async fn cmd_repo_state(
+    client: &BuzzClient,
+    repo_id: &str,
+    owner: Option<&str>,
+) -> Result<(), CliError> {
+    validate_repo_id(repo_id)?;
+    let author = match owner {
+        Some(pk) => {
+            crate::validate::validate_hex64(pk)?;
+            pk.to_string()
+        }
+        None => client.keys().public_key().to_hex(),
+    };
+    let filter = serde_json::json!({
+        "kinds": [KIND_GIT_REPO_STATE],
+        "authors": [author],
+        "#d": [repo_id],
+        "limit": 1,
+    });
+    let raw = client.query(&filter).await?;
+    let mut events = parse_events(&raw)?;
+    events.sort_by_key(|event| std::cmp::Reverse(event.created_at));
+    let Some(event) = events.into_iter().next() else {
+        return Err(CliError::NotFound(format!(
+            "no ref state published for repository {repo_id:?} — it may have no commits yet"
+        )));
+    };
+    println!("{}", repo_state_json(&event));
+    Ok(())
+}
+
+/// Project a kind:30618 to `{ ref: oid }` plus HEAD.
+///
+/// NIP-34 puts each ref in its own tag; a flat map is what a caller actually
+/// compares against what it saw last.
+fn repo_state_json(event: &Event) -> serde_json::Value {
+    let mut refs = serde_json::Map::new();
+    let mut head = None;
+    for tag in event.tags.iter() {
+        let parts = tag.as_slice();
+        if parts.len() < 2 {
+            continue;
+        }
+        match parts[0].as_str() {
+            "HEAD" => head = Some(parts[1].clone()),
+            name if name.starts_with("refs/") => {
+                refs.insert(name.to_string(), serde_json::json!(parts[1]));
+            }
+            _ => {}
+        }
+    }
+    serde_json::json!({
+        "head": head,
+        "refs": refs,
+        "created_at": event.created_at.as_secs(),
+    })
+}
+
+/// `buzz repos clone` — clone a repository into the local checkout root, ready
+/// to commit from.
+///
+/// Exists as a command rather than prompt prose because of step 4: an agent is
+/// told to stop and ask when a repository's git identity is empty, which is
+/// exactly a fresh clone's state. Cloning by hand therefore produces an agent
+/// that clones and then refuses to commit. Setting identity here removes the
+/// stall structurally.
+pub async fn cmd_clone_repo(
+    client: &BuzzClient,
+    repo_id: &str,
+    owner: Option<&str>,
+    repos_dir: Option<&str>,
+) -> Result<(), CliError> {
+    let event = fetch_repo_announcement(client, repo_id, owner).await?;
+    let clone_url = first_tag_value(&event, "clone").ok_or_else(|| {
+        CliError::Other(format!(
+            "repository {repo_id:?} publishes no clone URL, so there is nothing to clone"
+        ))
+    })?;
+
+    let root = crate::repos_root::resolve_repos_root(repos_dir)
+        .ok_or_else(|| CliError::Other("could not resolve a repository root".to_string()))?;
+    let name = crate::repos_root::local_repo_candidates(repo_id, Some(clone_url))
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            CliError::Usage(format!("repository id {repo_id:?} is not a directory name"))
+        })?;
+    let destination = root.join(&name);
+
+    if destination.exists() {
+        return Err(CliError::Other(format!(
+            "{} already exists — work in it rather than cloning again",
+            destination.display()
+        )));
+    }
+    std::fs::create_dir_all(&root).map_err(|error| {
+        CliError::Other(format!("could not create {}: {error}", root.display()))
+    })?;
+
+    run_git(&[
+        "clone",
+        clone_url,
+        destination
+            .to_str()
+            .ok_or_else(|| CliError::Other("destination path is not valid UTF-8".to_string()))?,
+    ])?;
+
+    // Repo-local, never global: every local agent shares one working directory,
+    // so a global write would attribute the other agents' commits to this one.
+    let pubkey = client.keys().public_key().to_hex();
+    let destination_str = destination.to_string_lossy().to_string();
+    // Derived, never configured: an agent's commits must be attributable to the
+    // agent, or the git trail disagrees with the pubkey trail.
+    let identity_name = format!("buzz-{}", &pubkey[..8]);
+    run_git(&[
+        "-C",
+        &destination_str,
+        "config",
+        "user.name",
+        &identity_name,
+    ])?;
+    run_git(&[
+        "-C",
+        &destination_str,
+        "config",
+        "user.email",
+        &format!("{pubkey}@users.noreply.buzz"),
+    ])?;
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "id": repo_id,
+            "path": destination_str,
+            "clone": clone_url,
+        })
+    );
+    Ok(())
+}
+
+/// Run git, mapping a failure to the CLI's error vocabulary.
+///
+/// Auth is inherited from the environment: Buzz Desktop already sets
+/// `GIT_CONFIG_*` for `git-credential-nostr` plus `NOSTR_PRIVATE_KEY` when it
+/// spawns an agent, so a clone of a relay-hosted repository authenticates with
+/// no work here.
+fn run_git(args: &[&str]) -> Result<String, CliError> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .output()
+        .map_err(|error| CliError::Other(format!("could not run git: {error}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // A relay 404 is not "no such repository" — it is "you are not in the
+        // channel this repository is bound to". Say so, because the difference
+        // decides whether retrying is pointless.
+        if stderr.contains("404") || stderr.to_lowercase().contains("not found") {
+            return Err(CliError::NotFound(
+                "the relay returned 404. For a Buzz-hosted repository that means you are \
+                 not a member of the channel it is bound to — ask to be added rather than \
+                 retrying."
+                    .to_string(),
+            ));
+        }
+        return Err(CliError::Other(format!(
+            "git {:?} failed: {stderr}",
+            args[0]
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 #[cfg(test)]
@@ -1084,5 +1309,47 @@ mod tests {
             absent["checkout"].is_null(),
             "a repository with no checkout must report null"
         );
+    }
+    // ── repos state ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn repo_state_flattens_refs_and_head() {
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(30618), "")
+            .tags(vec![
+                Tag::parse(["d", "bee-garden"]).unwrap(),
+                Tag::parse(["HEAD", "ref: refs/heads/main"]).unwrap(),
+                Tag::parse(["refs/heads/main", "a".repeat(40).as_str()]).unwrap(),
+                Tag::parse(["refs/tags/v1", "b".repeat(40).as_str()]).unwrap(),
+            ])
+            .sign_with_keys(&keys)
+            .expect("sign state");
+
+        let json = super::repo_state_json(&event);
+        assert_eq!(json["head"], serde_json::json!("ref: refs/heads/main"));
+        assert_eq!(
+            json["refs"]["refs/heads/main"],
+            serde_json::json!("a".repeat(40))
+        );
+        assert_eq!(
+            json["refs"]["refs/tags/v1"],
+            serde_json::json!("b".repeat(40))
+        );
+        // The d tag identifies the repository; it is not a ref.
+        assert!(json["refs"].get("d").is_none());
+    }
+
+    /// A repository with no pushes yet publishes a state event with no refs.
+    /// That is "nothing to compare", not an error.
+    #[test]
+    fn repo_state_survives_an_empty_repository() {
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(30618), "")
+            .tags(vec![Tag::parse(["d", "empty"]).unwrap()])
+            .sign_with_keys(&keys)
+            .expect("sign state");
+        let json = super::repo_state_json(&event);
+        assert!(json["head"].is_null());
+        assert_eq!(json["refs"], serde_json::json!({}));
     }
 }

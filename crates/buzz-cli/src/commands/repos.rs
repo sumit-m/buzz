@@ -326,7 +326,31 @@ pub async fn cmd_list_repos(
         crate::OutputFormat::Json => resp,
     };
     println!("{output}");
+    if let Some(note) = empty_listing_note(owner, channel, &output) {
+        eprintln!("{note}");
+    }
     Ok(())
+}
+
+/// The one-line warning that turns a misleading empty listing into a
+/// self-correcting one, or `None` when the result is unambiguous.
+///
+/// With neither `--owner` nor `--channel`, the listing is scoped to the
+/// caller's own repositories — and an agent owns none, so it gets `[]`. That
+/// empty array reads as "this channel has no repositories" and has twice made
+/// an agent tell a human nothing was written down while a bound repository
+/// held the answer. The note goes to **stderr** so stdout stays exactly the
+/// JSON a caller parses.
+fn empty_listing_note(owner: Option<&str>, channel: Option<&str>, output: &str) -> Option<String> {
+    if owner.is_some() || channel.is_some() {
+        return None;
+    }
+    let empty = matches!(output.trim(), "[]" | "");
+    empty.then(|| {
+        "note: this listed only repositories you own, and you own none. It is not a \
+         channel's repositories — for that, pass `--channel <uuid>`."
+            .to_string()
+    })
 }
 
 /// Build the relay filter for `repos list`.
@@ -882,8 +906,8 @@ mod tests {
 
     use super::{
         build_create_announcement, build_protection_tag, build_repo_list_filter,
-        build_updated_repo_announcement, compact_repo, effective_clone_url, parse_repo_ref,
-        protection_rules_json, validate_write_response, RepoChange,
+        build_updated_repo_announcement, compact_repo, effective_clone_url, empty_listing_note,
+        parse_repo_ref, protection_rules_json, validate_write_response, RepoChange,
     };
 
     fn signed_repo(tags: Vec<Tag>, content: &str, created_at: u64) -> nostr::Event {
@@ -1342,6 +1366,25 @@ mod tests {
     fn compact_projection_skips_an_unaddressable_announcement() {
         let event = serde_json::json!({ "pubkey": OTHER_PK, "tags": [["name", "no d tag"]] });
         assert!(compact_repo(&event, None, RELAY).is_none());
+    }
+
+    /// An unscoped empty listing is the one result that lies: it means "you
+    /// own no repositories", and it has twice been read as "this channel has
+    /// none".
+    #[test]
+    fn an_unscoped_empty_listing_says_what_it_actually_searched() {
+        let note = empty_listing_note(None, None, "[]").expect("note");
+        assert!(note.contains("only repositories you own"));
+        assert!(note.contains("--channel"));
+    }
+
+    /// A scoped listing means what it says, and a listing with results needs
+    /// no explaining — neither may be second-guessed with a warning.
+    #[test]
+    fn a_scoped_or_non_empty_listing_gets_no_note() {
+        assert!(empty_listing_note(None, Some(CHANNEL), "[]").is_none());
+        assert!(empty_listing_note(Some(OTHER_PK), None, "[]").is_none());
+        assert!(empty_listing_note(None, None, r#"[{"id":"bee-garden"}]"#).is_none());
     }
 
     /// The failure this fixes: every announcement Buzz writes omits `clone`,

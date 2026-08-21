@@ -291,6 +291,18 @@ pub async fn dispatch(cmd: crate::PrCmd, client: &BuzzClient) -> Result<(), CliE
             .await
         }
         PrCmd::Get { event } => cmd_get_pr(client, &event).await,
+        PrCmd::Comments { event, limit } => {
+            let thread = crate::commands::git_thread::fetch_thread(
+                client,
+                1618,
+                &event,
+                crate::commands::git_thread::RootKind::PullRequest,
+                limit,
+            )
+            .await?;
+            println!("{thread}");
+            Ok(())
+        }
         PrCmd::List {
             repo_owner,
             repo_id,

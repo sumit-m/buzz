@@ -8,6 +8,7 @@ pub(crate) mod event_output;
 pub mod facts;
 pub mod feed;
 pub mod gifs;
+pub mod git_thread;
 mod huddle_tracker;
 pub mod huddles;
 pub mod issues;

@@ -310,18 +310,12 @@ pub async fn cmd_list_repos(
     repos_dir: Option<&str>,
     format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
-    let filter = build_repo_list_filter(
-        owner,
-        channel,
-        limit,
-        &client.public_key().to_hex(),
-    )?;
+    let filter = build_repo_list_filter(owner, channel, limit, &client.public_key().to_hex())?;
 
     let resp = client.query(&filter).await?;
     let output = match format {
         crate::OutputFormat::Compact => {
-            let events: Vec<serde_json::Value> =
-                serde_json::from_str(&resp).unwrap_or_default();
+            let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
             let root = crate::repos_root::resolve_repos_root(repos_dir);
             let compact: Vec<serde_json::Value> = events
                 .iter()
@@ -1001,8 +995,8 @@ mod tests {
 
     #[test]
     fn owner_and_channel_intersect() {
-        let filter = build_repo_list_filter(Some(OTHER_PK), Some(CHANNEL), Some(5), SELF_PK)
-            .unwrap();
+        let filter =
+            build_repo_list_filter(Some(OTHER_PK), Some(CHANNEL), Some(5), SELF_PK).unwrap();
         assert_eq!(filter["authors"], serde_json::json!([OTHER_PK]));
         assert_eq!(filter["buzz_channel"], serde_json::json!(CHANNEL));
         assert_eq!(filter["limit"], serde_json::json!(5));
@@ -1091,5 +1085,4 @@ mod tests {
             "a repository with no checkout must report null"
         );
     }
-
 }

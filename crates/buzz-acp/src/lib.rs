@@ -20,6 +20,7 @@ mod queue;
 mod recovery_wake;
 mod relay;
 mod run_task;
+mod repos_probe;
 mod runtime;
 use runtime::{AgentRuntime, PoolStartup, SessionMode};
 mod scope;

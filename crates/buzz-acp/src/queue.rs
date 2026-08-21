@@ -1979,6 +1979,7 @@ fn format_context_hints(
     conversation_context_status: ConversationContextStatus,
     had_delivered_events: bool,
     reply_anchor: Option<&str>,
+    requested_by: &str,
 ) -> String {
     let channel_id = scope.channel_id();
     let channel_display = match channel_info {
@@ -2021,6 +2022,7 @@ fn format_context_hints(
             "Scope: dm\n\
              Session scope: dm conversation\n\
              Channel: {channel_display}\n\
+             Requested by: {requested_by}\n\
              {ctx_hint}"
         );
         // If this is a DM reply, include thread structural info as supplementary.
@@ -2099,10 +2101,15 @@ fn format_context_hints(
         } else {
             "Hint: Use `buzz messages get --channel <UUID>` for recent messages if needed."
         };
+        // Who asked. The conversation renders display names, so without
+        // this an agent that wants to name the requester — adding them as
+        // a reviewer on a pull request, say — has to guess a pubkey from a
+        // name, and a wrong guess tags a stranger.
         let mut s = format!(
             "Scope: channel\n\
              Session scope: channel\n\
-             Channel: {channel_display}"
+             Channel: {channel_display}\n\
+             Requested by: {requested_by}"
         );
         // Description first, so it reads as part of the channel identity; the
         // hint that follows is about this turn's context, not the channel.
@@ -2511,6 +2518,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
         ),
         args.conversation_context_had_delivered_events,
         reply_anchor.as_deref(),
+        &sender_pubkey,
     ));
 
     // 3. Conversation context (thread or DM).
@@ -3936,6 +3944,49 @@ mod tests {
         }
     }
 
+    const REQUESTER: &str = "ab11cd22ef33ab11cd22ef33ab11cd22ef33ab11cd22ef33ab11cd22ef33ab11";
+
+    /// An agent that wants to name the person who asked — adding them as a
+    /// reviewer, say — needs their pubkey. The conversation only renders
+    /// display names, so guessing one is how a stranger gets tagged.
+    #[test]
+    fn context_names_who_asked() {
+        let tags = ThreadTags::default();
+        let channel = format_context_hints(
+            &SessionScope::Conversation {
+                channel_id: Uuid::new_v4(),
+            },
+            None,
+            &tags,
+            false,
+            ConversationContextStatus::Included,
+            false,
+            None,
+            REQUESTER,
+        );
+        assert!(
+            channel.contains(&format!("Requested by: {REQUESTER}")),
+            "got: {channel}"
+        );
+
+        let dm = format_context_hints(
+            &SessionScope::Conversation {
+                channel_id: Uuid::new_v4(),
+            },
+            None,
+            &tags,
+            true,
+            ConversationContextStatus::Included,
+            false,
+            None,
+            REQUESTER,
+        );
+        assert!(
+            dm.contains(&format!("Requested by: {REQUESTER}")),
+            "a DM has a requester too: {dm}"
+        );
+    }
+
     #[test]
     fn test_channel_hint_says_earlier_context_already_went_out() {
         let channel_id = Uuid::new_v4();
@@ -3949,6 +4000,7 @@ mod tests {
             ConversationContextStatus::Included,
             false,
             None,
+            REQUESTER,
         );
         assert!(first.contains("the newest messages only"), "got: {first}");
 
@@ -3960,6 +4012,7 @@ mod tests {
             ConversationContextStatus::Included,
             true,
             None,
+            REQUESTER,
         );
         assert!(
             later.contains("only what is new since the last turn"),
@@ -3976,6 +4029,7 @@ mod tests {
             ConversationContextStatus::PreviouslyDelivered,
             true,
             None,
+            REQUESTER,
         );
         assert!(
             nothing_new.contains("nothing has arrived since"),

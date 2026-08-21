@@ -99,6 +99,8 @@ async function writeProjectIssueAssignment({
       ? issue.assigneeOperationHeads[normalizedSigner]
       : undefined;
   const event = await signRelayEvent({
+    // "Assign to me" names the signer; without this the signer strips the p tag.
+    allowSelfTagging: true,
     kind: KIND_TEXT_NOTE,
     content,
     createdAt,

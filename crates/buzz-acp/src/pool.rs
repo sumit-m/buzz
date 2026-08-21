@@ -1538,12 +1538,17 @@ impl AgentPool {
         let mut count = 0;
         for slot in &mut self.agents {
             if let Some(agent) = slot.as_mut() {
-                if agent.state.sessions.contains_key(&channel_id) {
-                    agent.state.mark_channel_delivery_success(
-                        channel_id,
-                        false,
-                        [event_id.clone()],
-                    );
+                let scopes: Vec<SessionScope> = agent
+                    .state
+                    .sessions
+                    .keys()
+                    .filter(|scope| scope.channel_id() == channel_id)
+                    .cloned()
+                    .collect();
+                for scope in scopes {
+                    agent
+                        .state
+                        .mark_scope_delivery_success(scope, false, [event_id.clone()]);
                     count += 1;
                 }
             }
@@ -9186,12 +9191,17 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
     fn recording_an_own_message_suppresses_it_from_the_next_delta() {
         let channel = Uuid::new_v4();
         let mut state = SessionState::default();
-        state.sessions.insert(channel, "session-1".to_string());
+        let scope = SessionScope::Conversation {
+            channel_id: channel,
+        };
+        state
+            .sessions
+            .insert(scope.clone(), "session-1".to_string());
 
-        state.mark_channel_delivery_success(channel, false, ["mine".to_string()]);
+        state.mark_scope_delivery_success(scope.clone(), false, ["mine".to_string()]);
         let delivered = state
             .deliveries
-            .get(&channel)
+            .get(&scope)
             .map(|d| d.delivered_event_ids.clone())
             .unwrap_or_default();
 
@@ -9227,13 +9237,18 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
     fn invalidating_a_channel_forgets_what_was_delivered() {
         let channel = Uuid::new_v4();
         let mut state = SessionState::default();
-        state.sessions.insert(channel, "session-1".to_string());
-        state.mark_channel_delivery_success(channel, false, ["mine".to_string()]);
-        assert!(state.deliveries.contains_key(&channel));
+        let scope = SessionScope::Conversation {
+            channel_id: channel,
+        };
+        state
+            .sessions
+            .insert(scope.clone(), "session-1".to_string());
+        state.mark_scope_delivery_success(scope.clone(), false, ["mine".to_string()]);
+        assert!(state.deliveries.contains_key(&scope));
 
         state.invalidate_channel(&channel);
         assert!(
-            !state.deliveries.contains_key(&channel),
+            !state.deliveries.contains_key(&scope),
             "a rebuilt session must not inherit the old delivery record"
         );
     }

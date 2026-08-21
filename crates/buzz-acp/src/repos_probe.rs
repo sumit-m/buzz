@@ -128,7 +128,14 @@ pub(crate) fn repositories_section(channel_id: Uuid) -> String {
         "`buzz issues` files and assigns tasks; `buzz pr` opens pull requests, and ",
         "`buzz pr comments` reads what a reviewer said and whether yours was merged. ",
         "Whether a repository wants a task filed or a review opened is stated in its own ",
-        "AGENTS.md — if it says nothing, do neither and just report what you did.",
+        "AGENTS.md — if it says nothing, do neither and just report what you did.\n\n",
+    ));
+    // The requester is a pubkey in `[Context]`, not a display name, so this
+    // is unambiguous. Whoever asked for the work should be able to see what
+    // came back without going looking for it.
+    section.push_str(concat!(
+        "Opening a pull request: add whoever asked as a reviewer, with the ",
+        "`Requested by` pubkey from [Context] as `pr open --to`.",
     ));
     crate::prompt_framing::semantic_section("repositories", &section)
 }
@@ -192,6 +199,19 @@ mod tests {
         assert!(
             section.contains("if it says nothing, do neither"),
             "silence must mean no, or a reference repo collects tasks: {section}"
+        );
+    }
+
+    /// An agent that guesses a pubkey from a display name tags a stranger as
+    /// the reviewer of someone else's work. `[Context]` carries the pubkey, so
+    /// the section points at it rather than at the name.
+    #[test]
+    fn the_section_says_where_to_find_the_requester() {
+        let section = repositories_section(Uuid::new_v4());
+        assert!(section.contains("add whoever asked as a reviewer"));
+        assert!(
+            section.contains("`Requested by` pubkey from [Context]"),
+            "must name the field, not the person: {section}"
         );
     }
 

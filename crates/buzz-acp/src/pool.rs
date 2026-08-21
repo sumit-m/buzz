@@ -2864,12 +2864,12 @@ pub async fn run_prompt_task(
                     pending_facts = Some((scope.clone(), section));
                 }
             }
-            if needs_repos && !is_dm {
-                if let Some(section) =
-                    crate::repos_probe::fetch_repositories_section(cid, &ctx.rest_client).await
-                {
-                    pending_repos = Some((scope.clone(), section));
-                }
+            if needs_repos
+                && !is_dm
+                && crate::repos_probe::channel_has_repositories(cid, &ctx.rest_client).await
+            {
+                pending_repos =
+                    Some((scope.clone(), crate::repos_probe::repositories_section(cid)));
             }
         }
     }

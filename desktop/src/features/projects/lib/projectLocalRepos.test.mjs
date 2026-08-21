@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { hasLocalRepositoryCheckout, localRepoCandidates } from "./projectLocalRepos.ts";
+import {
+  hasLocalRepositoryCheckout,
+  localRepoCandidates,
+} from "./projectLocalRepos.ts";
 
 const OWNER =
   "9857acd558b3115a773b1bb51e4de8d38c26751ff4ad679114158a8b28a56b35";
@@ -15,17 +18,21 @@ function project(overrides = {}) {
 }
 
 test("the bare repo name comes first, matching where a clone lands", () => {
-  assert.deepEqual(localRepoCandidates(project()), [
-    "bee-game",
-  ]);
+  assert.deepEqual(localRepoCandidates(project()), ["bee-game"]);
 });
 
 test("a checkout under the bare repo name is detected", () => {
-  assert.equal(hasLocalRepositoryCheckout(project(), new Set(["bee-game"])), true);
+  assert.equal(
+    hasLocalRepositoryCheckout(project(), new Set(["bee-game"])),
+    true,
+  );
 });
 
 test("an unrelated directory is not a checkout", () => {
-  assert.equal(hasLocalRepositoryCheckout(project(), new Set(["other-repo"])), false);
+  assert.equal(
+    hasLocalRepositoryCheckout(project(), new Set(["other-repo"])),
+    false,
+  );
 });
 
 test("an empty repos directory has no checkout", () => {
@@ -36,9 +43,7 @@ test("a .git suffix on the clone URL is trimmed", () => {
   const withSuffix = project({
     cloneUrls: [`https://relay.example/git/${OWNER}/bee-game.git`],
   });
-  assert.deepEqual(localRepoCandidates(withSuffix), [
-    "bee-game",
-  ]);
+  assert.deepEqual(localRepoCandidates(withSuffix), ["bee-game"]);
 });
 
 test("a project with no clone URL falls back to its dtag", () => {

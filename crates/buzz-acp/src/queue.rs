@@ -2287,6 +2287,10 @@ pub struct FormatPromptArgs<'a> {
     /// Rendered `[Channel Facts]` section for legacy agents. Same delivery
     /// semantics as the canvas: absent for DMs and heartbeats.
     pub agent_facts: Option<&'a str>,
+    /// Rendered `[Repositories]` section for legacy agents. Same delivery
+    /// semantics again — absent for DMs, heartbeats, and channels with no
+    /// repositories bound to them.
+    pub agent_repos: Option<&'a str>,
     /// Set once this session's standing context has already been delivered —
     /// see [`StandingContext`]. Only meaningful for legacy agents; modern
     /// agents are gated by `has_system_prompt_support` regardless.
@@ -2327,6 +2331,7 @@ pub(crate) struct StandingContext<'a> {
     pub huddle_instructions: Option<&'a str>,
     pub agent_canvas: Option<&'a str>,
     pub agent_facts: Option<&'a str>,
+    pub agent_repos: Option<&'a str>,
 }
 
 impl StandingContext<'_> {
@@ -2368,6 +2373,12 @@ impl StandingContext<'_> {
                 "huddle-instructions",
                 instructions,
             ));
+        }
+        // Before the canvas and facts: those two carry relay-authored content,
+        // and channel-scoped untrusted material stays last. This section is a
+        // constant, so it belongs on the trusted side of that line.
+        if let Some(repos) = self.agent_repos {
+            sections.push(repos.to_string());
         }
         if let Some(canvas) = self.agent_canvas {
             sections.push(crate::prompt_framing::normalize_semantic_section(
@@ -2449,6 +2460,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
                 huddle_instructions: args.huddle_instructions,
                 agent_canvas: args.agent_canvas,
                 agent_facts: args.agent_facts,
+                agent_repos: args.agent_repos,
             }
             .sections(),
         );
@@ -3866,9 +3878,9 @@ mod tests {
 
     #[test]
     fn test_channel_context_header_counts_the_delta_as_new() {
-        // After the delivery delta, `messages` is what is new while `total` is
-        // still the whole channel. "1 of 812" would read as a one-message
-        // window to an agent already holding fifty.
+        // After the delivery delta, `included` is what is new while `total` is
+        // still the whole channel. Without the marker that reads as a
+        // one-message window to an agent already holding fifty.
         let ctx = ConversationContext::Channel {
             messages: vec![ContextMessage {
                 event_id: "a".repeat(64),
@@ -3881,7 +3893,9 @@ mod tests {
         };
         let rendered = format_conversation_context(&ctx, None, true);
         assert!(
-            rendered.starts_with("[Channel Context (1 new, 812 in the channel, truncated)]"),
+            rendered.starts_with(
+                "<channel-context included=\"1\" total=\"812\" truncated=\"true\" window=\"new-since-last-turn\">"
+            ),
             "got: {rendered}"
         );
     }
@@ -3900,6 +3914,7 @@ mod tests {
                 }],
                 total: 9,
                 truncated: false,
+                root_present: true,
             },
             ConversationContext::Dm {
                 messages: vec![ContextMessage {
@@ -3913,7 +3928,11 @@ mod tests {
             },
         ] {
             let rendered = format_conversation_context(&ctx, None, true);
-            assert!(rendered.contains("(1 of 9 messages)"), "got: {rendered}");
+            assert!(
+                rendered.contains("included=\"1\" total=\"9\""),
+                "got: {rendered}"
+            );
+            assert!(!rendered.contains("window="), "got: {rendered}");
         }
     }
 
@@ -3923,7 +3942,7 @@ mod tests {
         let tags = ThreadTags::default();
 
         let first = format_context_hints(
-            channel_id,
+            &SessionScope::Conversation { channel_id },
             None,
             &tags,
             false,
@@ -3934,7 +3953,7 @@ mod tests {
         assert!(first.contains("the newest messages only"), "got: {first}");
 
         let later = format_context_hints(
-            channel_id,
+            &SessionScope::Conversation { channel_id },
             None,
             &tags,
             false,
@@ -3950,7 +3969,7 @@ mod tests {
         // Delta emptied the window: say so rather than falling back to the
         // hint that implies nothing has ever been delivered.
         let nothing_new = format_context_hints(
-            channel_id,
+            &SessionScope::Conversation { channel_id },
             None,
             &tags,
             false,

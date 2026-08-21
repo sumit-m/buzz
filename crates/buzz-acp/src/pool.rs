@@ -164,6 +164,13 @@ pub struct SessionState {
     /// fail open), cleared on session invalidation so the next session picks up
     /// any curation that happened since.
     pub facts_sections: HashMap<SessionScope, String>,
+    /// Rendered `<repositories>` section per session scope.
+    ///
+    /// Same lifecycle as `facts_sections`, but the content is a constant: the
+    /// probe behind it answers only "are there any", so nothing here can go
+    /// stale except in the one direction that matters least (a repository bound
+    /// mid-session is not announced until the next session). See `repos_probe`.
+    pub repos_sections: HashMap<SessionScope, String>,
     /// Channels whose facts changed since this session last saw them.
     ///
     /// Set when a kind:40101 event arrives for a channel with a live session;
@@ -209,6 +216,7 @@ impl SessionState {
         self.deliveries.remove(scope);
         self.scope_owner_generations.remove(scope);
         self.facts_sections.remove(scope);
+        self.repos_sections.remove(scope);
         self.facts_refresh_pending.remove(&scope.channel_id());
         self.canvas_refresh_pending.remove(&scope.channel_id());
         self.sessions.remove(scope).is_some()
@@ -227,6 +235,7 @@ impl SessionState {
             .chain(self.deliveries.keys())
             .chain(self.scope_owner_generations.keys())
             .chain(self.facts_sections.keys())
+            .chain(self.repos_sections.keys())
             .filter(|s| s.channel_id() == *channel_id)
             .cloned()
             .collect::<HashSet<_>>()
@@ -253,6 +262,7 @@ impl SessionState {
         self.deliveries.clear();
         self.scope_owner_generations.clear();
         self.facts_sections.clear();
+        self.repos_sections.clear();
         self.facts_refresh_pending.clear();
         self.canvas_refresh_pending.clear();
     }
@@ -1707,6 +1717,7 @@ struct NewSessionChannelContext<'a> {
     huddle_instructions: Option<&'a str>,
     canvas: Option<&'a str>,
     facts: Option<&'a str>,
+    repositories: Option<&'a str>,
     name: Option<&'a str>,
     scope: Option<&'a SessionScope>,
     channel_type: Option<&'a str>,
@@ -1727,19 +1738,22 @@ async fn create_session_and_apply_model(
     let is_goose = agent.agent_name == "goose";
     let combined_system_prompt = with_facts(
         with_canvas(
-            with_huddle_instructions(
-                with_core(
-                    with_team(
-                        framed_system_prompt(
-                            &ctx.cwd,
-                            ctx.base_prompt.as_deref(),
-                            ctx.system_prompt.as_deref(),
+            with_repos(
+                with_huddle_instructions(
+                    with_core(
+                        with_team(
+                            framed_system_prompt(
+                                &ctx.cwd,
+                                ctx.base_prompt.as_deref(),
+                                ctx.system_prompt.as_deref(),
+                            ),
+                            ctx.team_instructions.as_deref(),
                         ),
-                        ctx.team_instructions.as_deref(),
+                        agent_core,
                     ),
-                    agent_core,
+                    channel.huddle_instructions,
                 ),
-                channel.huddle_instructions,
+                channel.repositories,
             ),
             channel.canvas,
         ),
@@ -2506,6 +2520,25 @@ fn with_facts(prompt: Option<String>, facts: Option<&str>) -> Option<String> {
     }
 }
 
+/// Append the `<repositories>` section to the accumulated system prompt.
+///
+/// Sits between the huddle instructions and the canvas: everything from here
+/// out is relay-authored and untrusted, and this section is a constant. Nil-safe
+/// in the same way as its neighbours — a channel with no repositories bound
+/// contributes nothing, so channels without them pay no prompt weight.
+fn with_repos(prompt: Option<String>, repositories: Option<&str>) -> Option<String> {
+    match (prompt, repositories) {
+        (Some(prompt), Some(repositories)) => Some(format!(
+            "{prompt}
+
+{repositories}"
+        )),
+        (Some(prompt), None) => Some(prompt),
+        (None, Some(repositories)) => Some(repositories.to_string()),
+        (None, None) => None,
+    }
+}
+
 fn with_canvas(prompt: Option<String>, canvas: Option<&str>) -> Option<String> {
     let canvas = canvas.map(|canvas| {
         crate::prompt_framing::normalize_semantic_section(
@@ -2788,6 +2821,10 @@ pub async fn run_prompt_task(
     // one. `PromptSource::Heartbeat` has no channel at all and never reaches
     // here, so it is excluded by construction.
     let mut pending_facts: Option<(SessionScope, String)> = None;
+    // The `<repositories>` section rides the same lifecycle and the same DM
+    // gate: a DM has no channel binding, so there is no set of repositories to
+    // name — the one the human is pointing at arrives in the message instead.
+    let mut pending_repos: Option<(SessionScope, String)> = None;
     // Channel name for the session title, from the same single resolve the
     // canvas DM check uses — see `resolve_new_session_channel_context`.
     let mut title_channel: Option<String> = None;
@@ -2798,6 +2835,7 @@ pub async fn run_prompt_task(
         let needs_canvas =
             is_new_channel_session && !agent.state.canvas_sections.contains_key(scope);
         let needs_facts = is_new_channel_session && !agent.state.facts_sections.contains_key(scope);
+        let needs_repos = is_new_channel_session && !agent.state.repos_sections.contains_key(scope);
         if is_new_channel_session {
             let (is_dm, resolved_channel, resolved_channel_type) =
                 resolve_new_session_channel_context(resolved_channel_info.as_ref()).await;
@@ -2825,6 +2863,13 @@ pub async fn run_prompt_task(
                 {
                     pending_facts = Some((scope.clone(), section));
                 }
+            }
+            if needs_repos
+                && !is_dm
+                && crate::repos_probe::channel_has_repositories(cid, &ctx.rest_client).await
+            {
+                pending_repos =
+                    Some((scope.clone(), crate::repos_probe::repositories_section(cid)));
             }
         }
     }
@@ -2856,6 +2901,17 @@ pub async fn run_prompt_task(
             .get(cid)
             .cloned()
             .or_else(|| pending_facts.as_ref().map(|(_, s)| s.clone())),
+        PromptSource::Heartbeat => None,
+    };
+
+    // The `<repositories>` section — same sourcing rule again.
+    let agent_repos: Option<String> = match &source {
+        PromptSource::Channel(cid) => agent
+            .state
+            .repos_sections
+            .get(cid)
+            .cloned()
+            .or_else(|| pending_repos.as_ref().map(|(_, s)| s.clone())),
         PromptSource::Heartbeat => None,
     };
 
@@ -2940,6 +2996,7 @@ pub async fn run_prompt_task(
                         huddle_instructions: huddle_instructions.as_deref(),
                         canvas: agent_canvas.as_deref(),
                         facts: agent_facts.as_deref(),
+                        repositories: agent_repos.as_deref(),
                         name: title_channel.as_deref(),
                         scope: Some(scope),
                         channel_type: origin_channel_type.as_deref(),
@@ -2969,6 +3026,9 @@ pub async fn run_prompt_task(
                         }
                         if let Some((pending_scope, section)) = pending_facts.take() {
                             agent.state.facts_sections.insert(pending_scope, section);
+                        }
+                        if let Some((pending_cid, section)) = pending_repos.take() {
+                            agent.state.repos_sections.insert(pending_cid, section);
                         }
                         (sid, true)
                     }
@@ -3012,6 +3072,7 @@ pub async fn run_prompt_task(
                         huddle_instructions: None,
                         canvas: None,
                         facts: None,
+                        repositories: None,
                         name: None,
                         scope: None,
                         channel_type: None,
@@ -3089,6 +3150,7 @@ pub async fn run_prompt_task(
         huddle_instructions: huddle_instructions.as_deref(),
         agent_canvas: agent_canvas.as_deref(),
         agent_facts: agent_facts.as_deref(),
+        agent_repos: agent_repos.as_deref(),
     };
     // Delivery state is committed only after ACP confirms success. Existing
     // sessions created before this field existed fail safe by behaving as
@@ -3397,6 +3459,7 @@ pub async fn run_prompt_task(
                 team_instructions: standing.team_instructions,
                 agent_canvas: standing.agent_canvas,
                 agent_facts: standing.agent_facts,
+                agent_repos: standing.agent_repos,
                 standing_context_sent,
             },
         )
@@ -6553,6 +6616,7 @@ revision A"
             huddle_instructions: Some("reply immediately"),
             agent_canvas: Some("[Channel Canvas]\ncanvas content"),
             agent_facts: Some("[Channel Facts]\nfacts content"),
+            agent_repos: Some("<repositories>\nrepos content"),
         }
     }
 
@@ -6568,6 +6632,7 @@ revision A"
             "<team-instructions>",
             "<core-memory>",
             "<huddle-instructions>",
+            "<repositories>",
             "<channel-canvas>",
             "do the thing",
         ]
@@ -6704,6 +6769,106 @@ revision A"
     #[test]
     fn test_with_core_neither_is_none() {
         assert!(with_core(None, None).is_none());
+    }
+
+    // ── with_repos ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn with_repos_appends_below_the_prompt() {
+        let composed = with_repos(
+            Some(
+                "[System]
+persona"
+                    .to_string(),
+            ),
+            Some(
+                "<repositories>
+x",
+            ),
+        )
+        .expect("composed");
+        assert_eq!(
+            composed,
+            "[System]
+persona
+
+<repositories>
+x"
+        );
+    }
+
+    /// A channel with no repositories bound contributes nothing — the whole
+    /// point of gating the section on the probe.
+    #[test]
+    fn with_repos_is_nil_safe() {
+        assert_eq!(
+            with_repos(
+                Some(
+                    "[System]
+persona"
+                        .to_string()
+                ),
+                None
+            )
+            .as_deref(),
+            Some(
+                "[System]
+persona"
+            )
+        );
+        assert_eq!(
+            with_repos(
+                None,
+                Some(
+                    "<repositories>
+x"
+                )
+            )
+            .as_deref(),
+            Some(
+                "<repositories>
+x"
+            )
+        );
+        assert!(with_repos(None, None).is_none());
+    }
+
+    /// Ordering is load-bearing: the canvas and facts carry relay-authored
+    /// content, so untrusted material stays last. `<repositories>` is a
+    /// constant and belongs on the trusted side of that line.
+    #[test]
+    fn repositories_precede_the_untrusted_sections() {
+        let composed = with_facts(
+            with_canvas(
+                with_repos(
+                    Some(
+                        "[System]
+persona"
+                            .to_string(),
+                    ),
+                    Some(
+                        "<repositories>
+r",
+                    ),
+                ),
+                Some(
+                    "[Channel Canvas]
+c",
+                ),
+            ),
+            Some(
+                "[Channel Facts]
+f",
+            ),
+        )
+        .expect("composed");
+        let repos = composed
+            .find("<repositories>")
+            .expect("repositories present");
+        let canvas = composed.find("<channel-canvas>").expect("canvas present");
+        let facts = composed.find("[Channel Facts]").expect("facts present");
+        assert!(repos < canvas, "repositories must precede the canvas");
+        assert!(canvas < facts, "canvas ordering must not change");
     }
 
     #[test]
@@ -12573,6 +12738,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12611,6 +12777,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12646,6 +12813,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12680,6 +12848,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12721,6 +12890,7 @@ exit 0"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -12886,6 +13056,7 @@ done"#
                         huddle_instructions: None,
                         canvas: None,
                         facts: None,
+                        repositories: None,
                         name,
                         scope,
                         channel_type,
@@ -13004,6 +13175,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -13076,6 +13248,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -13132,6 +13305,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -13175,6 +13349,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -13217,6 +13392,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -13284,6 +13460,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -13322,6 +13499,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -13396,6 +13574,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,
@@ -13438,6 +13617,7 @@ done"#
                 huddle_instructions: None,
                 canvas: None,
                 facts: None,
+                repositories: None,
                 name: None,
                 scope: None,
                 channel_type: None,

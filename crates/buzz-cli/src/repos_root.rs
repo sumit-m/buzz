@@ -91,7 +91,9 @@ fn sanitize_component(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{clone_url_repo_name, local_repo_candidates, resolve_repos_root, sanitize_component};
+    use super::{
+        clone_url_repo_name, local_repo_candidates, resolve_repos_root, sanitize_component,
+    };
 
     #[test]
     fn an_explicit_path_wins() {

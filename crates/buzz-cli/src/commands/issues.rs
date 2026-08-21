@@ -237,14 +237,19 @@ pub async fn cmd_create_issue(
     content: &str,
     labels: &[String],
     to: &[String],
+    channel: Option<&str>,
 ) -> Result<(), CliError> {
     validate_hex64(repo_owner)?;
     validate_repo_id(repo_id)?;
+    if let Some(channel_id) = channel {
+        crate::validate::validate_uuid(channel_id)?;
+    }
     let body = read_or_stdin(content)?;
 
     let meta = GitIssueMeta {
         labels: labels.to_vec(),
         recipients: to.to_vec(),
+        channel_id: channel.map(str::to_string),
     };
 
     let repo = GitRepoCoord {
@@ -608,7 +613,17 @@ pub async fn dispatch(cmd: crate::IssuesCmd, client: &BuzzClient) -> Result<(), 
                 channel.as_deref(),
             )
             .await?;
-            cmd_create_issue(client, &repo_owner, &repo_id, &title, &content, &label, &to).await
+            cmd_create_issue(
+                client,
+                &repo_owner,
+                &repo_id,
+                &title,
+                &content,
+                &label,
+                &to,
+                channel.as_deref(),
+            )
+            .await
         }
         IssuesCmd::Get { event } => cmd_get_issue(client, &event).await,
         IssuesCmd::List {

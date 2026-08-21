@@ -117,7 +117,18 @@ pub(crate) fn repositories_section(channel_id: Uuid) -> String {
     section.push_str(concat!(
         "A repository someone names that is not listed by that command is one you have no ",
         "access to: ask to be added to the channel it is bound to. A clone that returns 404 ",
-        "means the same thing. Projects are a human-side label and grant no access.",
+        "means the same thing. Projects are a human-side label and grant no access.\n\n",
+    ));
+    // Deliberately two sentences. Whether to file is the repository's call, and
+    // the mechanics are enforced by the commands themselves — `pr open` refuses
+    // a tip that was never pushed and computes the merge base — so there is
+    // nothing more to teach here. Every extra line dilutes the trigger above,
+    // which is what the first live test showed gets a section ignored.
+    section.push_str(concat!(
+        "`buzz issues` files and assigns tasks; `buzz pr` opens pull requests, and ",
+        "`buzz pr comments` reads what a reviewer said and whether yours was merged. ",
+        "Whether a repository wants a task filed or a review opened is stated in its own ",
+        "AGENTS.md — if it says nothing, do neither and just report what you did.",
     ));
     crate::prompt_framing::semantic_section("repositories", &section)
 }
@@ -170,6 +181,38 @@ mod tests {
 
     /// No list means no staleness and no untrusted content: two channels'
     /// sections differ only by their id.
+    /// Filing is the repository's call, not the agent's. If the section were
+    /// read as "open a pull request when you finish", every reference
+    /// repository would accumulate them.
+    #[test]
+    fn the_section_defers_the_decision_to_the_repository() {
+        let section = repositories_section(Uuid::new_v4());
+        assert!(section.contains("buzz pr comments"));
+        assert!(section.contains("stated in its own AGENTS.md"));
+        assert!(
+            section.contains("if it says nothing, do neither"),
+            "silence must mean no, or a reference repo collects tasks: {section}"
+        );
+    }
+
+    /// The trigger only works if it is still near the top. Guarding the length
+    /// keeps later additions honest — the first live test failed because a
+    /// section read as background.
+    #[test]
+    fn the_section_stays_short_enough_to_read() {
+        let section = repositories_section(Uuid::new_v4());
+        let trigger = section.find("Before concluding").expect("trigger present");
+        assert!(
+            trigger < 120,
+            "the trigger must stay in the first lines, found at {trigger}"
+        );
+        assert!(
+            section.len() < 1_800,
+            "section is {} bytes; every channel with a repository pays for this",
+            section.len()
+        );
+    }
+
     #[test]
     fn the_section_interpolates_only_the_channel_id() {
         let channel = Uuid::new_v4();

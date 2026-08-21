@@ -2369,6 +2369,20 @@ pub enum PrCmd {
         #[arg(long = "to")]
         to: Vec<String>,
     },
+    /// Read everything that happened to a pull request: review comments,
+    /// approvals, change requests, and its current status.
+    ///
+    /// `get` returns only the pull request itself. This returns the thread
+    /// hanging off it, so you can see whether it was merged and what a
+    /// reviewer asked for.
+    Comments {
+        /// Pull request event id (64-char hex)
+        #[arg(long)]
+        event: String,
+        /// Maximum number of comments to return (default 500)
+        #[arg(long)]
+        limit: Option<u32>,
+    },
     /// Get a PR by event id
     Get {
         /// PR event id (64-char hex)
@@ -2462,6 +2476,19 @@ pub enum IssuesCmd {
         /// Issue event id (64-char hex)
         #[arg(long)]
         event: String,
+    },
+    /// Read everything that happened to an issue: comments, assignment
+    /// operations, and its current status.
+    ///
+    /// `get` returns only the issue itself. This returns the thread hanging
+    /// off it, so you can see whether it was resolved and what was said.
+    Comments {
+        /// Issue event id (64-char hex)
+        #[arg(long)]
+        event: String,
+        /// Maximum number of comments to return (default 500)
+        #[arg(long)]
+        limit: Option<u32>,
     },
     /// List issues for a repo
     List {
@@ -3331,7 +3358,7 @@ mod tests {
         assert_eq!(protect_names, vec!["list", "remove", "set"]);
         assert_eq!(
             names(&cmd, "pr"),
-            vec!["get", "list", "open", "status", "update"]
+            vec!["comments", "get", "list", "open", "status", "update"]
         );
         assert_eq!(
             names(&cmd, "patches"),
@@ -3352,7 +3379,7 @@ mod tests {
         );
         assert_eq!(
             names(&cmd, "issues"),
-            vec!["assign", "create", "get", "list", "status", "unassign"]
+            vec!["assign", "comments", "create", "get", "list", "status", "unassign"]
         );
         assert_eq!(names(&cmd, "media"), vec!["get"]);
         assert_eq!(names(&cmd, "upload"), vec!["file"]);
@@ -3383,12 +3410,12 @@ mod tests {
             ("emoji", 5),
             ("feed", 1),
             ("huddles", 2),
-            ("issues", 6),
+            ("issues", 7),
             ("media", 1),
             ("messages", 9),
             ("pack", 2),
             ("patches", 4),
-            ("pr", 5),
+            ("pr", 6),
             ("projects", 8),
             ("raw", 2),
             ("reactions", 3),

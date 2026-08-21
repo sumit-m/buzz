@@ -626,6 +626,18 @@ pub async fn dispatch(cmd: crate::IssuesCmd, client: &BuzzClient) -> Result<(), 
             .await
         }
         IssuesCmd::Get { event } => cmd_get_issue(client, &event).await,
+        IssuesCmd::Comments { event, limit } => {
+            let thread = crate::commands::git_thread::fetch_thread(
+                client,
+                1621,
+                &event,
+                crate::commands::git_thread::RootKind::Issue,
+                limit,
+            )
+            .await?;
+            println!("{thread}");
+            Ok(())
+        }
         IssuesCmd::List {
             repo_owner,
             repo_id,

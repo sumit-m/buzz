@@ -108,3 +108,6 @@ tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 # `test-util` enables paused-time control for deterministic timeout tests
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+
+[build-dependencies]
+chrono = { workspace = true }

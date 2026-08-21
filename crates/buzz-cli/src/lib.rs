@@ -121,9 +121,25 @@ fn env_output_format(value: Option<&std::ffi::OsStr>) -> OutputFormat {
         })
 }
 
+/// What `--version` prints.
+///
+/// The crate version alone is useless here: every build in this workspace is
+/// `0.1.0`, so a stale binary reports the same string as a fresh one. The
+/// build time is what actually distinguishes them, and the commit hash says
+/// which source it came from.
+const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("BUZZ_CLI_GIT_SHA"),
+    ", built ",
+    env!("BUZZ_CLI_BUILT_AT"),
+    ")"
+);
+
 #[derive(Parser)]
 #[command(
     name = "buzz",
+    version = VERSION,
     about = "Buzz CLI — interact with a Buzz relay",
     long_about = "\
 Buzz CLI — interact with a Buzz relay

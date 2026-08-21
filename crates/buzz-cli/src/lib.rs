@@ -1894,10 +1894,10 @@ pub enum ReposCmd {
     /// The cheap "has the remote moved?" probe: one relay query, no git
     /// request and no checkout. Compare the OIDs against what you last saw.
     State {
-        /// Repository identifier (d-tag)
+        /// Repository identifier (d-tag), or the coordinate `repos list` printed.
         #[arg(long)]
         id: String,
-        /// Owner pubkey (64-char hex). Defaults to the current identity.
+        /// Owner pubkey (64-char hex). Taken from the coordinate when given.
         #[arg(long)]
         owner: Option<String>,
     },
@@ -1907,9 +1907,11 @@ pub enum ReposCmd {
     /// usable — an agent told to stop when identity is empty would otherwise
     /// clone and then refuse to commit.
     Clone {
-        /// Repository identifier (d-tag)
+        /// Repository identifier (d-tag), or the coordinate `repos list`
+        /// printed. Pass the coordinate to clone someone else's repository:
+        /// a bare id resolves against your own pubkey only.
         id: String,
-        /// Owner pubkey (64-char hex). Defaults to the current identity.
+        /// Owner pubkey (64-char hex). Taken from the coordinate when given.
         #[arg(long)]
         owner: Option<String>,
         /// Where local checkouts live. Defaults to BUZZ_REPOS_DIR, then

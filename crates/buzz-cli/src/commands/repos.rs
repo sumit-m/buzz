@@ -319,7 +319,7 @@ pub async fn cmd_list_repos(
             let root = crate::repos_root::resolve_repos_root(repos_dir);
             let compact: Vec<serde_json::Value> = events
                 .iter()
-                .filter_map(|event| compact_repo(event, root.as_deref()))
+                .filter_map(|event| compact_repo(event, root.as_deref(), client.relay_url()))
                 .collect();
             serde_json::to_string(&compact).unwrap_or_default()
         }
@@ -381,6 +381,7 @@ fn build_repo_list_filter(
 fn compact_repo(
     event: &serde_json::Value,
     repos_root: Option<&std::path::Path>,
+    relay_url: &str,
 ) -> Option<serde_json::Value> {
     let tags = event.get("tags")?.as_array()?;
     let tag_value = |name: &str| -> Option<String> {
@@ -404,7 +405,8 @@ fn compact_repo(
 
     let id = tag_value("d")?;
     let owner = event.get("pubkey")?.as_str()?.to_string();
-    let clone_url = tag_values("clone").first().cloned();
+    let clone_url =
+        effective_clone_url(tag_values("clone").first().cloned(), relay_url, &owner, &id);
     let checkout = repos_root.and_then(|root| {
         crate::repos_root::find_checkout(root, &id, clone_url.as_deref())
             .map(|path| path.display().to_string())
@@ -595,6 +597,56 @@ pub async fn dispatch(
 ///
 /// `owner` defaults to the caller, matching `repos get`. An agent working in a
 /// channel usually passes the owner it read from `repos list --channel`.
+/// Split `30617:<owner>:<id>` into its parts, or pass a bare id through.
+///
+/// `repos list` prints a `coordinate` for every repository, and it is the only
+/// output that carries the owner. Accepting it wherever an id is accepted means
+/// an agent can hand back exactly what the listing gave it. Without this, the
+/// id alone defaults the lookup to the caller's own pubkey, so a channel
+/// repository owned by anyone else reports "not found" — which reads as an
+/// access problem and is not one.
+fn parse_repo_ref(input: &str) -> (String, Option<String>) {
+    let mut parts = input.splitn(3, ':');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some("30617"), Some(owner), Some(id)) if !owner.is_empty() && !id.is_empty() => {
+            (id.to_string(), Some(owner.to_string()))
+        }
+        _ => (input.to_string(), None),
+    }
+}
+
+/// The URL to clone from: the announced one when there is one, else the
+/// relay-hosted default.
+///
+/// Buzz relays serve their own repositories at `<relay>/git/<owner>/<id>`, and
+/// `buzz repos create` publishes no `clone` tag, so an announcement without one
+/// is the normal case rather than a broken repository. Desktop already derives
+/// the same URL for the same reason — see
+/// `desktop/src/features/projects/lib/projectCloneUrl.ts`.
+///
+/// An explicit tag always wins: NIP-34 allows pointing `clone` at another host,
+/// and overriding that would silently clone the wrong repository.
+fn effective_clone_url(
+    announced: Option<String>,
+    relay_url: &str,
+    owner: &str,
+    repo_id: &str,
+) -> Option<String> {
+    if announced.is_some() {
+        return announced;
+    }
+    // Only a 64-hex owner addresses a relay-hosted repository; anything else is
+    // not ours to guess at.
+    if crate::validate::validate_hex64(owner).is_err() {
+        return None;
+    }
+    let origin = crate::client::normalize_relay_url(relay_url);
+    Some(format!(
+        "{origin}/git/{}/{repo_id}",
+        owner.to_ascii_lowercase()
+    ))
+}
+
 async fn fetch_repo_announcement(
     client: &BuzzClient,
     repo_id: &str,
@@ -643,19 +695,22 @@ pub async fn cmd_repo_state(
     repo_id: &str,
     owner: Option<&str>,
 ) -> Result<(), CliError> {
+    let (repo_id, coordinate_owner) = parse_repo_ref(repo_id);
+    let repo_id = repo_id.as_str();
     validate_repo_id(repo_id)?;
-    let author = match owner {
-        Some(pk) => {
-            crate::validate::validate_hex64(pk)?;
-            pk.to_string()
-        }
-        None => client.keys().public_key().to_hex(),
-    };
+    if let Some(pk) = owner.or(coordinate_owner.as_deref()) {
+        crate::validate::validate_hex64(pk)?;
+    }
+    // No `authors`: the **relay** signs kind:30618, not the repository's owner,
+    // so filtering by any user pubkey matches nothing and the command reports
+    // "no ref state published" for every repository that has one. The `p` tag
+    // is no better a filter — it carries the *pusher*, so scoping to the owner
+    // would hide a member's push, which is the change this command exists to
+    // notice. `d` plus newest-wins is what identifies the state.
     let filter = serde_json::json!({
         "kinds": [KIND_GIT_REPO_STATE],
-        "authors": [author],
         "#d": [repo_id],
-        "limit": 1,
+        "limit": 8,
     });
     let raw = client.query(&filter).await?;
     let mut events = parse_events(&raw)?;
@@ -710,12 +765,23 @@ pub async fn cmd_clone_repo(
     owner: Option<&str>,
     repos_dir: Option<&str>,
 ) -> Result<(), CliError> {
+    let (repo_id, coordinate_owner) = parse_repo_ref(repo_id);
+    let repo_id = repo_id.as_str();
+    let owner = owner.or(coordinate_owner.as_deref());
     let event = fetch_repo_announcement(client, repo_id, owner).await?;
-    let clone_url = first_tag_value(&event, "clone").ok_or_else(|| {
+    let announced = first_tag_value(&event, "clone").map(String::from);
+    let clone_url = effective_clone_url(
+        announced,
+        client.relay_url(),
+        &event.pubkey.to_hex(),
+        repo_id,
+    )
+    .ok_or_else(|| {
         CliError::Other(format!(
             "repository {repo_id:?} publishes no clone URL, so there is nothing to clone"
         ))
     })?;
+    let clone_url = clone_url.as_str();
 
     let root = crate::repos_root::resolve_repos_root(repos_dir)
         .ok_or_else(|| CliError::Other("could not resolve a repository root".to_string()))?;
@@ -816,8 +882,8 @@ mod tests {
 
     use super::{
         build_create_announcement, build_protection_tag, build_repo_list_filter,
-        build_updated_repo_announcement, compact_repo, protection_rules_json,
-        validate_write_response, RepoChange,
+        build_updated_repo_announcement, compact_repo, effective_clone_url, parse_repo_ref,
+        protection_rules_json, validate_write_response, RepoChange,
     };
 
     fn signed_repo(tags: Vec<Tag>, content: &str, created_at: u64) -> nostr::Event {
@@ -1198,6 +1264,7 @@ mod tests {
     const SELF_PK: &str = "aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44";
     const OTHER_PK: &str = "11aa22bb33cc44dd55ee66ff11aa22bb33cc44dd55ee66ff11aa22bb33cc44dd";
     const CHANNEL: &str = "0b3a4bd2-4d4a-4a0e-9c3f-1f2d3e4a5b6c";
+    const RELAY: &str = "http://127.0.0.1:3000";
 
     #[test]
     fn list_without_channel_still_defaults_to_self() {
@@ -1243,7 +1310,7 @@ mod tests {
                 ["buzz-channel", CHANNEL],
             ],
         });
-        let compact = compact_repo(&event, None).expect("projection");
+        let compact = compact_repo(&event, None, RELAY).expect("projection");
         assert_eq!(compact["id"], serde_json::json!("bee-garden"));
         assert_eq!(
             compact["coordinate"],
@@ -1265,7 +1332,7 @@ mod tests {
             "pubkey": OTHER_PK,
             "tags": [["d", "repo"], ["default-branch", "trunk"]],
         });
-        let compact = compact_repo(&event, None).expect("projection");
+        let compact = compact_repo(&event, None, RELAY).expect("projection");
         assert_eq!(compact["branch"], serde_json::json!("trunk"));
     }
 
@@ -1274,7 +1341,60 @@ mod tests {
     #[test]
     fn compact_projection_skips_an_unaddressable_announcement() {
         let event = serde_json::json!({ "pubkey": OTHER_PK, "tags": [["name", "no d tag"]] });
-        assert!(compact_repo(&event, None).is_none());
+        assert!(compact_repo(&event, None, RELAY).is_none());
+    }
+
+    /// The failure this fixes: every announcement Buzz writes omits `clone`,
+    /// so an agent asked to clone a channel's repository was told there was
+    /// nothing to clone — of a repository that had commits.
+    #[test]
+    fn a_repository_with_no_clone_tag_still_reports_where_to_clone_from() {
+        let event = serde_json::json!({
+            "pubkey": OTHER_PK,
+            "tags": [["d", "bee-garden"], ["buzz-channel", CHANNEL]],
+        });
+        let compact = compact_repo(&event, None, RELAY).expect("projection");
+        assert_eq!(
+            compact["clone"],
+            serde_json::json!(format!("{RELAY}/git/{OTHER_PK}/bee-garden"))
+        );
+    }
+
+    /// NIP-34 permits pointing `clone` at another host, so an announced URL
+    /// must never be replaced by the relay-hosted guess.
+    #[test]
+    fn an_announced_clone_url_wins_over_the_derived_one() {
+        let announced = Some("https://github.com/someone/mirror.git".to_string());
+        assert_eq!(
+            effective_clone_url(announced.clone(), RELAY, OTHER_PK, "mirror"),
+            announced
+        );
+    }
+
+    /// A pubkey that cannot address a relay-hosted repository yields no guess.
+    #[test]
+    fn a_malformed_owner_produces_no_derived_url() {
+        assert!(effective_clone_url(None, RELAY, "not-a-pubkey", "repo").is_none());
+    }
+
+    /// `repos list` prints the coordinate and nothing else carries the owner,
+    /// so handing it straight back to `clone` or `state` has to work — a bare
+    /// id defaults the lookup to the caller and misses everyone else's repos.
+    #[test]
+    fn a_coordinate_supplies_the_owner_a_bare_id_lacks() {
+        assert_eq!(
+            parse_repo_ref(&format!("30617:{OTHER_PK}:bee-garden")),
+            ("bee-garden".to_string(), Some(OTHER_PK.to_string()))
+        );
+        assert_eq!(
+            parse_repo_ref("bee-garden"),
+            ("bee-garden".to_string(), None)
+        );
+        // Not a repository coordinate: leave it alone rather than shredding it.
+        assert_eq!(
+            parse_repo_ref("30023:pubkey:article"),
+            ("30023:pubkey:article".to_string(), None)
+        );
     }
 
     /// `checkout` is what tells an agent whether to clone or read what is
@@ -1292,7 +1412,7 @@ mod tests {
             ],
         });
 
-        let cloned = compact_repo(&event, Some(root.path())).expect("projection");
+        let cloned = compact_repo(&event, Some(root.path()), RELAY).expect("projection");
         assert!(
             cloned["checkout"]
                 .as_str()
@@ -1304,7 +1424,7 @@ mod tests {
             "pubkey": OTHER_PK,
             "tags": [["d", "not-cloned"]],
         });
-        let absent = compact_repo(&absent, Some(root.path())).expect("projection");
+        let absent = compact_repo(&absent, Some(root.path()), RELAY).expect("projection");
         assert!(
             absent["checkout"].is_null(),
             "a repository with no checkout must report null"

@@ -98,8 +98,9 @@ pub(crate) fn repositories_section(channel_id: Uuid) -> String {
         concat!(
             "`buzz --format compact repos list --channel {channel_id}` names them and gives ",
             "each one's coordinate, clone URL, default branch, and whether a local checkout ",
-            "already exists. `buzz repos clone <id>` clones one into REPOS/ ready to work ",
-            "in.\n\n"
+            "already exists. When `checkout` is null, `buzz repos clone <coordinate>` clones ",
+            "it into REPOS/ ready to work in — pass the coordinate the listing printed, not ",
+            "the bare name, or the lookup only sees repositories you own yourself.\n\n"
         ),
         channel_id = channel_id
     ));

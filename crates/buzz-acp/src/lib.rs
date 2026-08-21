@@ -5990,8 +5990,13 @@ mod agent_draft_prompt_tests {
     #[test]
     fn shared_base_prompt_teaches_repo_context_and_learning_loop() {
         let prompt = include_str!("base_prompt.md");
-        assert!(prompt.contains("read its root `AGENTS.md`"));
+        assert!(prompt.contains("its root `AGENTS.md`"));
         assert!(prompt.contains("path-local `AGENTS.md`"));
+        // First touch, not first edit: a read-only question about a repository
+        // never reaches an edit, and `AGENTS.md` is where a repository indexes
+        // its own procedures.
+        assert!(prompt.contains("The first time you touch a repository"));
+        assert!(prompt.contains("read its `README`"));
         assert!(
             prompt.contains("product, architecture, and vision documents as design constraints")
         );

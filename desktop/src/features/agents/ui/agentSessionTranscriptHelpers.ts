@@ -109,7 +109,7 @@ export function parsePromptText(text: string): {
  * the same subject to a reader, and splitting them sat a one-line canvas
  * pointer beside a block many times its size.
  *
- * Six extraction passes:
+ * Seven extraction passes:
  *
  * 1. **Facts** (`[Channel Facts]`): appended last by `with_facts()`.
  *    - Start-of-string: facts-only input.
@@ -187,6 +187,39 @@ export function parseSystemPromptSections(
         .slice(lastCanvas + CANVAS_MARKER_INLINE.length)
         .trim();
       remainder = remainder.slice(0, lastCanvas);
+    }
+  }
+
+  // ── 2b. Extract [Repositories] ────────────────────────────────────────────
+  // Appended by with_repos() between core and canvas, so it is pulled off after
+  // canvas and before core. Its own section rather than part of Channel: it is
+  // the block you check first when an agent fails to find a repository, and it
+  // rendered under "Core Memory" until it was extracted here.
+  const REPOS_HEADER = "[Repositories]";
+  const REPOS_MARKER_INLINE = `
+
+${REPOS_HEADER}
+`;
+  let reposBody: string | null = null;
+
+  if (
+    remainder.startsWith(`${REPOS_HEADER}
+`)
+  ) {
+    reposBody = remainder
+      .slice(
+        `${REPOS_HEADER}
+`.length,
+      )
+      .trim();
+    remainder = "";
+  } else {
+    const lastRepos = remainder.lastIndexOf(REPOS_MARKER_INLINE);
+    if (lastRepos !== -1) {
+      reposBody = remainder
+        .slice(lastRepos + REPOS_MARKER_INLINE.length)
+        .trim();
+      remainder = remainder.slice(0, lastRepos);
     }
   }
 
@@ -342,6 +375,7 @@ export function parseSystemPromptSections(
   if (modernTeamBody)
     sections.push({ title: "Team Instructions", body: modernTeamBody });
   if (coreBody) sections.push({ title: "Core Memory", body: coreBody });
+  if (reposBody) sections.push({ title: "Repositories", body: reposBody });
 
   // Canvas and facts share one section. Their headers are re-added inside it:
   // the section title alone cannot say which block a reader is looking at, and

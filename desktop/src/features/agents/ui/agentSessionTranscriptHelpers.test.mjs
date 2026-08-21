@@ -1142,3 +1142,36 @@ test("parseSystemPromptSections keeps an embedded facts-like line literal when a
     },
   ]);
 });
+
+test("parseSystemPromptSections gives Repositories its own section", () => {
+  const framed = [
+    "[Base]\nbase text",
+    "[System]\npersona",
+    "[Agent Memory — core]\nno core memory found",
+    "[Repositories]\nThese repositories are bound to this channel: bee-garden.",
+    "[Channel Canvas]\nno canvas",
+  ].join("\n\n");
+
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(
+    sections.map((section) => section.title),
+    ["Base", "System", "Core Memory", "Repositories", "Channel"],
+  );
+
+  // The failure this fixes: the block rendered inside Core Memory, which is
+  // where nobody would think to look when an agent cannot find a repository.
+  const core = sections.find((section) => section.title === "Core Memory");
+  assert.equal(core.body, "no core memory found");
+  const repos = sections.find((section) => section.title === "Repositories");
+  assert.match(repos.body, /bee-garden/);
+});
+
+test("parseSystemPromptSections omits Repositories when a channel has none", () => {
+  const framed = ["[Base]\nbase text", "[Channel Canvas]\nno canvas"].join(
+    "\n\n",
+  );
+  assert.deepEqual(
+    parseSystemPromptSections(framed).map((section) => section.title),
+    ["Base", "Channel"],
+  );
+});

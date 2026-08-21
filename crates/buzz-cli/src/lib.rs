@@ -9,6 +9,7 @@ mod error;
 mod federated_identity;
 mod help_tree;
 mod links;
+mod repos_root;
 mod validate;
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
@@ -1870,9 +1871,19 @@ pub enum ReposCmd {
         /// Owner pubkey (64-char hex). Omit for your repos.
         #[arg(long)]
         owner: Option<String>,
+        /// Channel UUID. Lists the repositories bound to that channel — the
+        /// same binding the relay authorizes clone/fetch/push by, so every
+        /// result is a repository you can actually reach. Combines with
+        /// --owner; with neither, lists your own repositories.
+        #[arg(long)]
+        channel: Option<String>,
         /// Maximum number of results
         #[arg(long)]
         limit: Option<u32>,
+        /// Where local checkouts live. Defaults to BUZZ_REPOS_DIR, then
+        /// <cwd>/REPOS when it exists, then ~/.buzz/REPOS.
+        #[arg(long, env = "BUZZ_REPOS_DIR")]
+        repos_dir: Option<String>,
     },
     /// Bind (or rebind) one of your repositories to a channel.
     ///
@@ -2813,7 +2824,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Feed(sub) => commands::feed::dispatch(sub, &client, &cli.format).await,
         Cmd::Social(sub) => commands::social::dispatch(sub, &client).await,
         Cmd::Notes(sub) => commands::notes::dispatch(sub, &client).await,
-        Cmd::Repos(sub) => commands::repos::dispatch(sub, &client).await,
+        Cmd::Repos(sub) => commands::repos::dispatch(sub, &client, &cli.format).await,
         Cmd::Projects(sub) => commands::projects::dispatch(sub, &client).await,
         Cmd::Patches(sub) => commands::patches::dispatch(sub, &client).await,
         Cmd::Issues(sub) => commands::issues::dispatch(sub, &client).await,

@@ -20,6 +20,7 @@ pub mod notes;
 pub mod pack;
 pub mod patches;
 pub mod pr;
+pub mod pr_guardrails;
 pub mod project_channel;
 pub mod projects;
 pub mod raw;

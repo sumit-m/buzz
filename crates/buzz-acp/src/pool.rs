@@ -1521,41 +1521,6 @@ impl AgentPool {
         count
     }
 
-    /// Record an event as already delivered to every agent holding a live
-    /// session for this channel.
-    ///
-    /// LOCAL DIVERGENCE. Used for the agent's *own* channel messages, which
-    /// reach the relay through `buzz messages send` rather than through the
-    /// harness, so their ids are never recorded and the per-turn delta hands an
-    /// agent its own last reply back as new context.
-    ///
-    /// Only agents with a live session for the channel are touched: an agent
-    /// that has no session has nothing to deduplicate against, and marking the
-    /// event delivered would withhold it from the session that gets built next.
-    ///
-    /// Returns the number of sessions that recorded it.
-    pub fn record_delivered_event(&mut self, channel_id: Uuid, event_id: String) -> usize {
-        let mut count = 0;
-        for slot in &mut self.agents {
-            if let Some(agent) = slot.as_mut() {
-                let scopes: Vec<SessionScope> = agent
-                    .state
-                    .sessions
-                    .keys()
-                    .filter(|scope| scope.channel_id() == channel_id)
-                    .cloned()
-                    .collect();
-                for scope in scopes {
-                    agent
-                        .state
-                        .mark_scope_delivery_success(scope, false, [event_id.clone()]);
-                    count += 1;
-                }
-            }
-        }
-        count
-    }
-
     /// Mark a channel's canvas as changed on every agent holding a live session
     /// for it, so each carries the notice into its next turn.
     ///
@@ -3446,8 +3411,13 @@ pub async fn run_prompt_task(
                     .iter()
                     .any(|event_id| delivered_ids.contains(event_id))
             });
-        let conversation_context =
-            conversation_context_delta(conversation_context, &delivered_ids, &rendered_batch_ids);
+        let own_pubkey_hex = ctx.agent_keys.public_key().to_hex();
+        let conversation_context = conversation_context_delta(
+            conversation_context,
+            &delivered_ids,
+            &rendered_batch_ids,
+            conversation_context_had_delivered_events.then_some(own_pubkey_hex.as_str()),
+        );
         pending_delivered_event_ids.extend(rendered_batch_ids);
         pending_delivered_event_ids.extend(conversation_context_event_ids(
             conversation_context.as_ref(),
@@ -4512,10 +4482,14 @@ fn conversation_context_event_ids(context: Option<&ConversationContext>) -> Hash
 /// IDs are compared in Buzz's canonical 64-character lowercase hex form: relay
 /// context JSON supplies the same form emitted by `EventId::to_hex()`. A
 /// non-canonical or missing ID deliberately fails open and may be re-sent.
+/// `own_pubkey` is `Some` only once a session has been established — see
+/// [`conversation_context_delta`]'s note on why the agent's own messages are
+/// dropped then and not at session birth.
 fn conversation_context_delta(
     context: Option<ConversationContext>,
     delivered: &HashSet<String>,
     triggering: &HashSet<String>,
+    own_pubkey: Option<&str>,
 ) -> Option<ConversationContext> {
     let filter = |messages: Vec<ContextMessage>| {
         let omitted_from_prior_session = messages
@@ -4524,6 +4498,21 @@ fn conversation_context_delta(
         let messages = messages
             .into_iter()
             .filter(|message| {
+                // The agent's own reply. It reaches the relay through
+                // `buzz messages send`, so the harness never handles the event
+                // and never records it as delivered — and it comes back next
+                // turn as new context, quoting the agent to itself in full.
+                //
+                // Keyed on the session having been established rather than on
+                // authorship alone: at session birth the agent has no history
+                // and its last message is worth seeing (upstream deliberately
+                // preserves it when truncating). Once a session exists, it
+                // wrote the message and already has it.
+                if let Some(own) = own_pubkey {
+                    if message.pubkey.eq_ignore_ascii_case(own) {
+                        return false;
+                    }
+                }
                 message.event_id.is_empty()
                     || (!delivered.contains(&message.event_id)
                         && !triggering.contains(&message.event_id))
@@ -9184,38 +9173,23 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
     }
 
     /// The failure this fixes: an agent posts through `buzz messages send`, so
-    /// the harness never sees the event id and never records it. Next turn the
-    /// delta counts it as new and quotes the agent's own reply back at it —
-    /// command output and all.
+    /// the harness never handles the event and never records it as delivered.
+    /// Next turn the delta counts it as new and quotes the agent's own reply
+    /// back at it — command output and all.
     #[test]
-    fn recording_an_own_message_suppresses_it_from_the_next_delta() {
-        let channel = Uuid::new_v4();
-        let mut state = SessionState::default();
-        let scope = SessionScope::Conversation {
-            channel_id: channel,
-        };
-        state
-            .sessions
-            .insert(scope.clone(), "session-1".to_string());
-
-        state.mark_scope_delivery_success(scope.clone(), false, ["mine".to_string()]);
-        let delivered = state
-            .deliveries
-            .get(&scope)
-            .map(|d| d.delivered_event_ids.clone())
-            .unwrap_or_default();
-
+    fn an_established_session_does_not_get_its_own_messages_back() {
+        let own = "aa".repeat(32);
         let context = ConversationContext::Channel {
             messages: vec![
                 ContextMessage {
                     event_id: "mine".to_string(),
-                    pubkey: "agent".to_string(),
+                    pubkey: own.to_uppercase(),
                     timestamp: "t".to_string(),
                     content: "my own reply".to_string(),
                 },
                 ContextMessage {
                     event_id: "theirs".to_string(),
-                    pubkey: "human".to_string(),
+                    pubkey: "bb".repeat(32),
                     timestamp: "t".to_string(),
                     content: "a question".to_string(),
                 },
@@ -9223,34 +9197,38 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             total: 2,
             truncated: false,
         };
-        let delta = conversation_context_delta(Some(context), &delivered, &HashSet::new())
-            .expect("something survives");
+        let delta = conversation_context_delta(
+            Some(context),
+            &HashSet::new(),
+            &HashSet::new(),
+            Some(own.as_str()),
+        )
+        .expect("something survives");
         let ids = conversation_context_event_ids(Some(&delta));
         assert!(!ids.contains(&"mine".to_string()), "own message suppressed");
         assert!(ids.contains(&"theirs".to_string()), "others still arrive");
     }
 
-    /// Delivery state dies with the session, so a rebuilt session shows the
-    /// message again rather than withholding it from an agent that no longer
-    /// remembers writing it.
+    /// At session birth the agent has no history, so its last message is worth
+    /// seeing — upstream deliberately preserves it when truncating. The filter
+    /// is keyed on the session being established, not on authorship alone.
     #[test]
-    fn invalidating_a_channel_forgets_what_was_delivered() {
-        let channel = Uuid::new_v4();
-        let mut state = SessionState::default();
-        let scope = SessionScope::Conversation {
-            channel_id: channel,
+    fn a_new_session_still_sees_the_agents_last_message() {
+        let own = "aa".repeat(32);
+        let context = ConversationContext::Channel {
+            messages: vec![ContextMessage {
+                event_id: "mine".to_string(),
+                pubkey: own.clone(),
+                timestamp: "t".to_string(),
+                content: "what I said last time".to_string(),
+            }],
+            total: 1,
+            truncated: false,
         };
-        state
-            .sessions
-            .insert(scope.clone(), "session-1".to_string());
-        state.mark_scope_delivery_success(scope.clone(), false, ["mine".to_string()]);
-        assert!(state.deliveries.contains_key(&scope));
-
-        state.invalidate_channel(&channel);
-        assert!(
-            !state.deliveries.contains_key(&scope),
-            "a rebuilt session must not inherit the old delivery record"
-        );
+        let delta =
+            conversation_context_delta(Some(context), &HashSet::new(), &HashSet::new(), None)
+                .expect("birth keeps it");
+        assert!(conversation_context_event_ids(Some(&delta)).contains(&"mine".to_string()));
     }
 
     #[test]
@@ -9268,7 +9246,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             truncated: false,
         };
 
-        let delta = conversation_context_delta(Some(context), &delivered, &triggering)
+        let delta = conversation_context_delta(Some(context), &delivered, &triggering, None)
             .expect("new context remains");
         match delta {
             ConversationContext::Thread {
@@ -9429,7 +9407,9 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             truncated: false,
         };
 
-        assert!(conversation_context_delta(Some(context), &delivered, &HashSet::new()).is_none());
+        assert!(
+            conversation_context_delta(Some(context), &delivered, &HashSet::new(), None).is_none()
+        );
     }
 
     #[test]
@@ -9441,7 +9421,8 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         };
 
         assert!(
-            conversation_context_delta(Some(context), &HashSet::new(), &HashSet::new()).is_some()
+            conversation_context_delta(Some(context), &HashSet::new(), &HashSet::new(), None)
+                .is_some()
         );
     }
 

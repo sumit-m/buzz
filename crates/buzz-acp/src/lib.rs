@@ -3533,6 +3533,31 @@ async fn run_harness(
                                 continue;
                             }
 
+                            // Our own channel message. The agent wrote it, so it
+                            // is already in the session's own history — but it was
+                            // never *delivered* to the session, so the per-turn
+                            // delta counts it as new and hands the agent its own
+                            // last reply back, quoted in full. Recording it here
+                            // closes that: same reasoning as the facts and canvas
+                            // branches above, which messages missed because they
+                            // take the queue path instead of being consumed here.
+                            //
+                            // Recorded rather than dropped, and deliberately no
+                            // `continue`: delivery state is cleared together with
+                            // the session (`invalidate_channel`), so a rebuilt
+                            // session shows the message again rather than
+                            // withholding it from an agent that no longer
+                            // remembers writing it. Everything downstream — rules,
+                            // dedup, the queue — behaves exactly as before.
+                            if kind_u32 == KIND_STREAM_MESSAGE
+                                && buzz_event.event.pubkey == config.keys.public_key()
+                            {
+                                pool.record_delivered_event(
+                                    buzz_event.channel_id,
+                                    buzz_event.event.id.to_hex(),
+                                );
+                            }
+
                             if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION
                                 || kind_u32 == KIND_MEMBER_REMOVED_NOTIFICATION
                             {

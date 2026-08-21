@@ -39,6 +39,25 @@ pub async fn cmd_open_pr(
     validate_repo_id(repo_id)?;
     let content = read_optional_body(body, body_file)?;
 
+    // A pull request whose tip was never pushed renders with no diff, and says
+    // nothing about it. Both checks are best-effort and need a checkout — see
+    // `pr_guardrails` for why an ambiguous answer must never block.
+    let checkout = std::env::current_dir().ok();
+    let merge_base = merge_base.map(str::to_string).or_else(|| {
+        checkout.as_deref().and_then(|dir| {
+            // The default branch, not `--branch-name`: the base is taken
+            // against what this would merge *into*.
+            let target = crate::commands::pr_guardrails::default_branch(dir);
+            crate::commands::pr_guardrails::merge_base(dir, commit, &target)
+        })
+    });
+    if let Some(dir) = checkout.as_deref() {
+        crate::commands::pr_guardrails::verdict(
+            crate::commands::pr_guardrails::tip_reachability(dir, commit),
+            commit,
+        )?;
+    }
+
     let repo = GitRepoCoord {
         owner: repo_owner.to_string(),
         id: repo_id.to_string(),
@@ -52,7 +71,7 @@ pub async fn cmd_open_pr(
         commit: commit.to_string(),
         clone_urls: clone_urls.to_vec(),
         branch_name: branch_name.map(str::to_string),
-        merge_base: merge_base.map(str::to_string),
+        merge_base,
         revision_of: revision_of.map(str::to_string),
     };
 

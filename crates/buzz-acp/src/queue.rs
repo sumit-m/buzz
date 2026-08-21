@@ -4054,6 +4054,24 @@ push to main";
         assert!(rendered.trim_end().ends_with("</channel-context>"));
     }
 
+    /// The desktop prompt viewer splits sections on their opening tag, so the
+    /// tag has to stay on a line of its own. Gluing the framing to it folded
+    /// the whole window into `<context>` and hid the message counts.
+    #[test]
+    fn the_header_keeps_its_own_line() {
+        let rendered = format_conversation_context(&channel_ctx(&["hello"]), None, true);
+        let first = rendered.lines().next().expect("a first line");
+        assert!(first.starts_with("<channel-context "), "got: {first}");
+        assert!(
+            first.ends_with('>'),
+            "the opening tag must not carry the framing: {first}"
+        );
+        assert!(
+            first.contains("included=\"1\"") && first.contains("window=\"new-since-last-turn\""),
+            "the counts belong in the opening tag: {first}"
+        );
+    }
+
     /// Everything of ours sits above the messages. Anything after them is
     /// forgeable by the last message.
     #[test]

@@ -1521,6 +1521,36 @@ impl AgentPool {
         count
     }
 
+    /// Record an event as already delivered to every agent holding a live
+    /// session for this channel.
+    ///
+    /// LOCAL DIVERGENCE. Used for the agent's *own* channel messages, which
+    /// reach the relay through `buzz messages send` rather than through the
+    /// harness, so their ids are never recorded and the per-turn delta hands an
+    /// agent its own last reply back as new context.
+    ///
+    /// Only agents with a live session for the channel are touched: an agent
+    /// that has no session has nothing to deduplicate against, and marking the
+    /// event delivered would withhold it from the session that gets built next.
+    ///
+    /// Returns the number of sessions that recorded it.
+    pub fn record_delivered_event(&mut self, channel_id: Uuid, event_id: String) -> usize {
+        let mut count = 0;
+        for slot in &mut self.agents {
+            if let Some(agent) = slot.as_mut() {
+                if agent.state.sessions.contains_key(&channel_id) {
+                    agent.state.mark_channel_delivery_success(
+                        channel_id,
+                        false,
+                        [event_id.clone()],
+                    );
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
     /// Mark a channel's canvas as changed on every agent holding a live session
     /// for it, so each carries the notice into its next turn.
     ///
@@ -9146,6 +9176,66 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         assert!(!delivery.standing_context_sent);
         assert!(delivery.delivered_event_ids.is_empty());
         assert!(delivery.hydrated_thread_roots.is_empty());
+    }
+
+    /// The failure this fixes: an agent posts through `buzz messages send`, so
+    /// the harness never sees the event id and never records it. Next turn the
+    /// delta counts it as new and quotes the agent's own reply back at it —
+    /// command output and all.
+    #[test]
+    fn recording_an_own_message_suppresses_it_from_the_next_delta() {
+        let channel = Uuid::new_v4();
+        let mut state = SessionState::default();
+        state.sessions.insert(channel, "session-1".to_string());
+
+        state.mark_channel_delivery_success(channel, false, ["mine".to_string()]);
+        let delivered = state
+            .deliveries
+            .get(&channel)
+            .map(|d| d.delivered_event_ids.clone())
+            .unwrap_or_default();
+
+        let context = ConversationContext::Channel {
+            messages: vec![
+                ContextMessage {
+                    event_id: "mine".to_string(),
+                    pubkey: "agent".to_string(),
+                    timestamp: "t".to_string(),
+                    content: "my own reply".to_string(),
+                },
+                ContextMessage {
+                    event_id: "theirs".to_string(),
+                    pubkey: "human".to_string(),
+                    timestamp: "t".to_string(),
+                    content: "a question".to_string(),
+                },
+            ],
+            total: 2,
+            truncated: false,
+        };
+        let delta = conversation_context_delta(Some(context), &delivered, &HashSet::new())
+            .expect("something survives");
+        let ids = conversation_context_event_ids(Some(&delta));
+        assert!(!ids.contains(&"mine".to_string()), "own message suppressed");
+        assert!(ids.contains(&"theirs".to_string()), "others still arrive");
+    }
+
+    /// Delivery state dies with the session, so a rebuilt session shows the
+    /// message again rather than withholding it from an agent that no longer
+    /// remembers writing it.
+    #[test]
+    fn invalidating_a_channel_forgets_what_was_delivered() {
+        let channel = Uuid::new_v4();
+        let mut state = SessionState::default();
+        state.sessions.insert(channel, "session-1".to_string());
+        state.mark_channel_delivery_success(channel, false, ["mine".to_string()]);
+        assert!(state.deliveries.contains_key(&channel));
+
+        state.invalidate_channel(&channel);
+        assert!(
+            !state.deliveries.contains_key(&channel),
+            "a rebuilt session must not inherit the old delivery record"
+        );
     }
 
     #[test]

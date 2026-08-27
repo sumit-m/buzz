@@ -42,9 +42,9 @@ const REPOS_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 
 /// True when at least one repository announcement is bound to this channel.
 ///
-/// `buzz-channel` is a multi-character tag, so this cannot be a NIP-01 filter —
-/// it rides the relay's `buzz_channel` bridge extension, which pushes down to a
-/// JSONB containment covered by the tags GIN index. `limit: 1` because the
+/// `buzz-channel` is a multi-character tag, so `nostr::Filter` cannot model it —
+/// it rides the relay's `#buzz-channel` raw-filter extension, which pushes down
+/// to a JSONB containment covered by the tags GIN index. `limit: 1` because the
 /// answer is a yes/no: the section names a command rather than a list.
 ///
 /// Fails closed to `false`: a probe that cannot answer renders no section, and
@@ -54,7 +54,7 @@ const REPOS_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 pub(crate) async fn channel_has_repositories(channel_id: Uuid, rest: &RestClient) -> bool {
     let filter = serde_json::json!({
         "kinds": [buzz_core::kind::KIND_GIT_REPO_ANNOUNCEMENT],
-        "buzz_channel": channel_id.to_string(),
+        "#buzz-channel": [channel_id.to_string()],
         "limit": 1,
     });
 

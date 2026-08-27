@@ -355,8 +355,8 @@ fn empty_listing_note(owner: Option<&str>, channel: Option<&str>, output: &str) 
 
 /// Build the relay filter for `repos list`.
 ///
-/// `channel` becomes the `buzz_channel` bridge extension — the relay pushes it
-/// down to a JSONB containment on the announcement's `buzz-channel` tag, which
+/// `channel` becomes the `#buzz-channel` raw-filter extension — the relay pushes
+/// it down to a JSONB containment on the announcement's `buzz-channel` tag, which
 /// is the same tag the git ACL reads. Scoping by it means every result is a
 /// repository the caller can actually clone.
 ///
@@ -373,7 +373,7 @@ fn build_repo_list_filter(
 
     if let Some(channel_id) = channel {
         crate::validate::validate_uuid(channel_id)?;
-        filter["buzz_channel"] = serde_json::json!(channel_id);
+        filter["#buzz-channel"] = serde_json::json!([channel_id]);
     }
 
     match owner {
@@ -1294,7 +1294,7 @@ mod tests {
     fn list_without_channel_still_defaults_to_self() {
         let filter = build_repo_list_filter(None, None, None, SELF_PK).unwrap();
         assert_eq!(filter["authors"], serde_json::json!([SELF_PK]));
-        assert!(filter.get("buzz_channel").is_none());
+        assert!(filter.get("#buzz-channel").is_none());
     }
 
     /// The load-bearing case: an agent asking what it can work on does not know
@@ -1302,7 +1302,7 @@ mod tests {
     #[test]
     fn channel_listing_is_not_scoped_to_the_caller() {
         let filter = build_repo_list_filter(None, Some(CHANNEL), None, SELF_PK).unwrap();
-        assert_eq!(filter["buzz_channel"], serde_json::json!(CHANNEL));
+        assert_eq!(filter["#buzz-channel"], serde_json::json!([CHANNEL]));
         assert!(
             filter.get("authors").is_none(),
             "a channel-scoped listing must not add authors:[self]"
@@ -1314,7 +1314,7 @@ mod tests {
         let filter =
             build_repo_list_filter(Some(OTHER_PK), Some(CHANNEL), Some(5), SELF_PK).unwrap();
         assert_eq!(filter["authors"], serde_json::json!([OTHER_PK]));
-        assert_eq!(filter["buzz_channel"], serde_json::json!(CHANNEL));
+        assert_eq!(filter["#buzz-channel"], serde_json::json!([CHANNEL]));
         assert_eq!(filter["limit"], serde_json::json!(5));
     }
 

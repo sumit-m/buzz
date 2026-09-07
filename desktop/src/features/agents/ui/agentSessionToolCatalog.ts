@@ -209,6 +209,16 @@ export function normalizeToolName(title: string): string {
   const knownName = findBuzzToolName(title, true);
   if (knownName) return knownName;
 
+  // Normalizing a whole command turns its punctuation into underscores, and
+  // the match below is greedy across `_`, so the derived "name" is the entire
+  // command as one token. Feeding that back through here — which is what
+  // `getBuzzToolInfo` does — hands the scan a punctuation-free string the
+  // shell guard can no longer recognise, and `... buzz issues create
+  // --channel ...` reads as `create_channel`. Name the program instead.
+  if (looksLikeShellCommand(title)) {
+    return normalizeToolNameText(title.trim().split(/\s+/)[0] ?? "");
+  }
+
   const normalized = normalizeToolNameText(title).replace(/^buzz_/, "");
   return normalized.match(/[a-z][a-z0-9_]+/)?.[0] ?? normalized;
 }

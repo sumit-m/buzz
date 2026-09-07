@@ -6,7 +6,11 @@ import {
   parseBuzzCliCommand,
   tokenizeShellCommand,
 } from "./agentSessionToolClassifier.ts";
-import { findBuzzToolName } from "./agentSessionToolCatalog.ts";
+import {
+  findBuzzToolName,
+  getBuzzToolInfo,
+  normalizeToolName,
+} from "./agentSessionToolCatalog.ts";
 
 test("findBuzzToolName does not read a tool name out of a shell command", () => {
   // `buzz issues create --channel <id>` normalizes to a string containing
@@ -22,6 +26,18 @@ test("findBuzzToolName does not read a tool name out of a shell command", () => 
     findBuzzToolName("printf '%s' body | buzz messages send --channel x", true),
     null,
   );
+});
+
+test("a command does not survive normalization as a tool name", () => {
+  // normalizeToolName turns punctuation into underscores, so a second pass
+  // over its own output sees a clean string the shell guard cannot catch:
+  // `... buzz issues create --channel ...` came back as `create_channel`.
+  const command =
+    "printf 'body' | buzz issues create --channel 12343c6f --repo-id bee-garden";
+  const derived = normalizeToolName(command);
+  assert.equal(derived, "printf");
+  assert.equal(getBuzzToolInfo(derived), null);
+  assert.equal(getBuzzToolInfo(command), null);
 });
 
 test("findBuzzToolName still resolves real tool identifiers", () => {

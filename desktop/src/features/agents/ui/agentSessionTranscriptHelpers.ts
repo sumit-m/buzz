@@ -473,11 +473,29 @@ function splitSemanticStandingPrefix(text: string): {
   return { sections, remainder };
 }
 
+/**
+ * Count only tags that open a line.
+ *
+ * Every section this parser splits is emitted as `<tag>` on its own line, so a
+ * tag mentioned mid-sentence is prose, not structure. The channel window's own
+ * framing says "the request you are answering is in the `<buzz-event>` block
+ * below", which counted as a second opening `<buzz-event>`, made the boundary
+ * look ambiguous, and cost the whole turn its parse — the user's prompt with
+ * it. A channel message quoting a tag would have done the same.
+ */
+function countLineAnchored(value: string, pattern: string): number {
+  return Array.from(
+    value.matchAll(new RegExp(`(?:^|\\n)[ \\t]*${pattern}`, "g")),
+  ).length;
+}
+
 function hasAmbiguousSemanticBoundary(value: string, tags: string[]): boolean {
   return tags.some((tag) => {
-    const openingCount = Array.from(
-      value.matchAll(new RegExp(`<${tag}(?:\\s[^>]*)?>`, "g")),
-    ).length;
+    // Openings are counted only where they open a line, so a tag named in
+    // prose is not mistaken for structure. Closings stay counted anywhere: a
+    // body carrying a literal `</tag>` really can end its section early, and
+    // that ambiguity should still make the parser show the raw prompt.
+    const openingCount = countLineAnchored(value, `<${tag}(?:\\s[^>]*)?>`);
     const closingCount = value.split(`</${tag}>`).length - 1;
     return openingCount !== closingCount || openingCount > 1;
   });

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   extractPromptText,
   extractToolIdentity,
+  parsePromptBlocks,
   parsePromptText,
   parseSystemPromptSections,
 } from "./agentSessionTranscriptHelpers.ts";
@@ -1193,4 +1194,32 @@ test("a mid-session refresh does not swallow the turn's user text", () => {
     assert.equal(parsed.userText, "file a task please");
     assert.ok(parsed.sections[0].title.endsWith("— updated"));
   }
+});
+
+test("a channel window does not swallow the turn's user text", () => {
+  // The three blocks a first-turn channel mention actually sends. The turn
+  // splitter is leading-anchored, so an unlisted <channel-context> aborted
+  // the parse and the prompt never reached the activity log.
+  const parsed = parsePromptBlocks([
+    '<context>\nScope: channel\n</context>',
+    '<channel-context included="12" total="13" truncated="false">\n[1] a (t): hi\n</channel-context>',
+    '<buzz-event type="@mention">\nContent: ping\n</buzz-event>',
+  ]);
+
+  assert.equal(parsed.userText, "ping");
+  assert.deepEqual(parsed.sections.map((s) => s.title), [
+    "Context",
+    "Channel Context (12 of 13 messages)",
+    "Buzz event: @mention",
+  ]);
+});
+
+test("a delta channel window is labelled as new since the last turn", () => {
+  const parsed = parsePromptBlocks([
+    '<channel-context included="2" total="813" truncated="false" window="new-since-last-turn">\n[1] a (t): hi\n</channel-context>',
+    '<buzz-event type="@mention">\nContent: ping\n</buzz-event>',
+  ]);
+
+  assert.equal(parsed.userText, "ping");
+  assert.equal(parsed.sections[0].title, "Channel Context (2 new, 813 in the channel)");
 });

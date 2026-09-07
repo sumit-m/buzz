@@ -2342,7 +2342,7 @@ pub struct FormatPromptArgs<'a> {
     /// For modern agents (protocol_version >= 2) the section is delivered via
     /// the system role in session/new; omit here to avoid duplication.
     pub agent_canvas: Option<&'a str>,
-    /// Rendered `[Channel Facts]` section for legacy agents. Same delivery
+    /// Rendered `<channel-facts>` section for legacy agents. Same delivery
     /// semantics as the canvas: absent for DMs and heartbeats.
     pub agent_facts: Option<&'a str>,
     /// Rendered `[Repositories]` section for legacy agents. Same delivery
@@ -2356,7 +2356,7 @@ pub struct FormatPromptArgs<'a> {
     /// Defaults to `false` so a caller that never sets it behaves as if this
     /// were the session's first message.
     pub standing_context_sent: bool,
-    /// A replacement `[Channel Facts]` section, when the list changed since
+    /// A replacement `<channel-facts>` section, when the list changed since
     /// this session's last turn. Delivered here rather than in the system
     /// prompt, which is fixed for the session's life. `None` on the common
     /// turn, where nothing changed.
@@ -4299,14 +4299,14 @@ push to main";
             &batch,
             &FormatPromptArgs {
                 has_system_prompt_support: true,
-                facts_refresh: Some("[Channel Facts — updated]\nreplacement"),
+                facts_refresh: Some("<channel-facts state=\"updated\">\nreplacement"),
                 ..Default::default()
             },
         )
         .join("\n\n");
 
         let facts_at = out
-            .find("[Channel Facts — updated]")
+            .find("<channel-facts state=\"updated\">")
             .expect("refresh section");
         let context_at = out.find("<context>").expect("context section");
         assert!(
@@ -4337,7 +4337,7 @@ push to main";
             &FormatPromptArgs {
                 has_system_prompt_support: true,
                 facts_refresh: Some(
-                    "[Channel Facts — updated]
+                    "<channel-facts state=\"updated\">
 replacement",
                 ),
                 canvas_refresh: Some(
@@ -4354,7 +4354,7 @@ revision b",
         );
 
         let facts_at = out
-            .find("[Channel Facts — updated]")
+            .find("<channel-facts state=\"updated\">")
             .expect("facts refresh section");
         let canvas_at = out
             .find("[Channel Canvas — updated]")

@@ -2504,7 +2504,7 @@ fn with_huddle_instructions(prompt: Option<String>, instructions: Option<&str>) 
 /// The canvas section already carries its `<channel-canvas>` boundary (from
 /// `render_canvas_section`), so it is joined with a blank-line separator.
 /// Either side may be absent.
-/// Append the rendered `[Channel Facts]` section, which carries both the
+/// Append the rendered `<channel-facts>` section, which carries both the
 /// statements and their curation rules. Absent for DMs and heartbeats, so a
 /// session outside a channel sees neither.
 fn with_facts(prompt: Option<String>, facts: Option<&str>) -> Option<String> {
@@ -6372,7 +6372,7 @@ pub(crate) mod tests {
         state.sessions.insert(scope.clone(), "sess-1".to_string());
         state
             .facts_sections
-            .insert(scope.clone(), "[Channel Facts]".into());
+            .insert(scope.clone(), "<channel-facts>".into());
         state
             .canvas_sections
             .insert(scope.clone(), "[Channel Canvas]".into());
@@ -6639,7 +6639,7 @@ revision A"
             agent_core: Some("[Agent Memory — core]\nremember this"),
             huddle_instructions: Some("reply immediately"),
             agent_canvas: Some("[Channel Canvas]\ncanvas content"),
-            agent_facts: Some("[Channel Facts]\nfacts content"),
+            agent_facts: Some("<channel-facts>\nfacts content"),
             agent_repos: Some("<repositories>\nrepos content"),
         }
     }
@@ -6881,7 +6881,7 @@ c",
                 ),
             ),
             Some(
-                "[Channel Facts]
+                "<channel-facts>
 f",
             ),
         )
@@ -6890,7 +6890,7 @@ f",
             .find("<repositories>")
             .expect("repositories present");
         let canvas = composed.find("<channel-canvas>").expect("canvas present");
-        let facts = composed.find("[Channel Facts]").expect("facts present");
+        let facts = composed.find("<channel-facts>").expect("facts present");
         assert!(repos < canvas, "repositories must precede the canvas");
         assert!(canvas < facts, "canvas ordering must not change");
     }

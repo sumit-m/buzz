@@ -6,6 +6,29 @@ import {
   parseBuzzCliCommand,
   tokenizeShellCommand,
 } from "./agentSessionToolClassifier.ts";
+import { findBuzzToolName } from "./agentSessionToolCatalog.ts";
+
+test("findBuzzToolName does not read a tool name out of a shell command", () => {
+  // `buzz issues create --channel <id>` normalizes to a string containing
+  // `create_channel`, so filing an issue was reported as creating a channel.
+  assert.equal(
+    findBuzzToolName(
+      "buzz issues create --channel 12343c6f-19f1-452d-88e9-3b5511a3a568 --repo-id bee-garden",
+      true,
+    ),
+    null,
+  );
+  assert.equal(
+    findBuzzToolName("printf '%s' body | buzz messages send --channel x", true),
+    null,
+  );
+});
+
+test("findBuzzToolName still resolves real tool identifiers", () => {
+  assert.equal(findBuzzToolName("create_channel", true), "create_channel");
+  assert.equal(findBuzzToolName("mcp__buzz__send_message", true), "send_message");
+  assert.equal(findBuzzToolName("Sending message to channel", true), "send_message");
+});
 
 test("tokenizeShellCommand preserves quoted strings and command separators", () => {
   assert.deepEqual(

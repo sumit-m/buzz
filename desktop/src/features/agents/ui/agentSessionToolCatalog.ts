@@ -222,9 +222,24 @@ export function normalizeToolNameText(value: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
+/**
+ * A shell command is not a tool name.
+ *
+ * The name candidates include the ACP `title`, which for a shell call is the
+ * command itself. Scanning that for a tool name matches whatever the flags
+ * happen to spell: `buzz issues create --channel <id>` normalizes to
+ * `..._issues_create_channel_...`, which contains `create_channel`, so filing
+ * an issue was reported as "Created channel". Tool identifiers carry no shell
+ * punctuation, and `parseBuzzCliCommand` reads real commands properly.
+ */
+function looksLikeShellCommand(value: string): boolean {
+  return /[|;&`$"']|--[a-z]/i.test(value);
+}
+
 export function findBuzzToolName(value: string, includeShortNames: boolean) {
   const alias = findBuzzToolAlias(value);
   if (alias) return alias;
+  if (looksLikeShellCommand(value)) return null;
 
   const normalized = normalizeToolNameText(value);
   return (

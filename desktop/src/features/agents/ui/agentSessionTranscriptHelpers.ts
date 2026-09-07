@@ -20,7 +20,7 @@ export function extractPromptText(payload: Record<string, unknown>): string {
 }
 
 const SEMANTIC_PROMPT_SECTION_START =
-  /^\s*<(?:workspace|base|agent-instructions|system|team-instructions|core-memory|huddle-instructions|repositories|channel-canvas|channel-facts|context|thread-context|conversation-context|buzz-event|buzz-events|what-you-were-working-on|new-message-arrived-while-you-were-working|previous-request-interrupted-before-completion|new-request-supersedes-previous)(?:\s[^>]*)?>/;
+  /^\s*<(?:workspace|base|agent-instructions|system|team-instructions|core-memory|huddle-instructions|repositories|channel-canvas|channel-facts|context|thread-context|conversation-context|channel-context|buzz-event|buzz-events|what-you-were-working-on|new-message-arrived-while-you-were-working|previous-request-interrupted-before-completion|new-request-supersedes-previous)(?:\s[^>]*)?>/;
 
 /**
  * Parse ACP prompt blocks without losing the connector-facing slash-command
@@ -493,6 +493,7 @@ function splitSemanticTurnSections(text: string): {
     "context",
     "thread-context",
     "conversation-context",
+    "channel-context",
     // Mid-session canvas and facts refreshes ride the turn, ahead of
     // `<context>`. The split below is leading-anchored, so leaving them out
     // aborted the whole parse on those turns — no `<buzz-event>` section, so
@@ -550,11 +551,21 @@ function semanticTurnTitle(
     case "context":
       return "Context";
     case "thread-context":
-    case "conversation-context": {
+    case "conversation-context":
+    case "channel-context": {
       const label =
-        tag === "thread-context" ? "Thread Context" : "Conversation Context";
+        tag === "thread-context"
+          ? "Thread Context"
+          : tag === "channel-context"
+            ? "Channel Context"
+            : "Conversation Context";
       const truncated = attributes.truncated === "true" ? ", truncated" : "";
-      return `${label} (${attributes.included} of ${attributes.total} messages${truncated})`;
+      // A channel window on an established session is a delta, not a sample.
+      const counted =
+        attributes.window === "new-since-last-turn"
+          ? `${attributes.included} new, ${attributes.total} in the channel`
+          : `${attributes.included} of ${attributes.total} messages`;
+      return `${label} (${counted}${truncated})`;
     }
     case "channel-canvas":
     case "channel-facts": {

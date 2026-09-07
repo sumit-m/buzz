@@ -1175,3 +1175,22 @@ test("parseSystemPromptSections omits Repositories when a channel has none", () 
     ["Base", "Channel"],
   );
 });
+
+test("a mid-session refresh does not swallow the turn's user text", () => {
+  // The turn splitter is leading-anchored: an unrecognised first section
+  // aborted the whole parse, so the prompt disappeared from the activity log
+  // on exactly the turns that carried a canvas or facts refresh.
+  const turn = [
+    '<context>\nScope: channel\n</context>',
+    '<buzz-event type="@mention">\nContent: file a task please\n</buzz-event>',
+  ].join("\n\n");
+
+  for (const refresh of [
+    '<channel-facts state="updated">\nrecords\n</channel-facts>',
+    '<channel-canvas state="updated">\nrevision\n</channel-canvas>',
+  ]) {
+    const parsed = parsePromptText(`${refresh}\n\n${turn}`);
+    assert.equal(parsed.userText, "file a task please");
+    assert.ok(parsed.sections[0].title.endsWith("— updated"));
+  }
+});

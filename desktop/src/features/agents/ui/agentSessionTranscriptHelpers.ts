@@ -493,6 +493,12 @@ function splitSemanticTurnSections(text: string): {
     "context",
     "thread-context",
     "conversation-context",
+    // Mid-session canvas and facts refreshes ride the turn, ahead of
+    // `<context>`. The split below is leading-anchored, so leaving them out
+    // aborted the whole parse on those turns — no `<buzz-event>` section, so
+    // no user text, so the prompt vanished from the activity log.
+    "channel-canvas",
+    "channel-facts",
     "buzz-event",
     "buzz-events",
     "what-you-were-working-on",
@@ -549,6 +555,12 @@ function semanticTurnTitle(
         tag === "thread-context" ? "Thread Context" : "Conversation Context";
       const truncated = attributes.truncated === "true" ? ", truncated" : "";
       return `${label} (${attributes.included} of ${attributes.total} messages${truncated})`;
+    }
+    case "channel-canvas":
+    case "channel-facts": {
+      const label =
+        tag === "channel-canvas" ? "Channel Canvas" : "Channel Facts";
+      return attributes.state ? `${label} — ${attributes.state}` : label;
     }
     case "buzz-event":
       return attributes.type ? `Buzz event: ${attributes.type}` : "Buzz event";

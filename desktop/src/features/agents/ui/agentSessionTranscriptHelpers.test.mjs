@@ -1223,3 +1223,20 @@ test("a delta channel window is labelled as new since the last turn", () => {
   assert.equal(parsed.userText, "ping");
   assert.equal(parsed.sections[0].title, "Channel Context (2 new, 813 in the channel)");
 });
+
+test("a tag named in prose is not a section boundary", () => {
+  // The channel window's own framing names <buzz-event> mid-sentence. Counting
+  // that as structure made the boundary look ambiguous and cost the turn its
+  // whole parse, taking the user's prompt with it.
+  const parsed = parsePromptBlocks([
+    '<context>\nScope: channel\n</context>',
+    '<channel-context included="18" total="19" truncated="false">\nThe request you are answering is in the <buzz-event> block below.\n[1] someone (t): morning\n</channel-context>',
+    '<buzz-event type=\"@mention\">\nContent: ping\n</buzz-event>',
+  ]);
+
+  assert.equal(parsed.userText, "ping");
+  assert.deepEqual(
+    parsed.sections.map((x) => x.title),
+    ["Context", "Channel Context (18 of 19 messages)", "Buzz event: @mention"],
+  );
+});

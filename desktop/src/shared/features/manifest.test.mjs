@@ -10,10 +10,17 @@ const manifest = JSON.parse(
 );
 
 test("existing Projects and Workflows experiments remain unchanged", () => {
+  // LOCAL DIVERGENCE: `defaultEnabled` is compared separately in
+  // `manifestDefaults.test.mjs` — this build ships Projects and Pulse on so
+  // they survive a dev reset, which upstream does not. Everything else about
+  // these two entries is still pinned here.
   const existing = Object.fromEntries(
     manifest.features
       .filter(({ id }) => id === "projects" || id === "workflows")
-      .map((feature) => [feature.id, feature]),
+      .map(({ defaultEnabled: _defaultEnabled, ...feature }) => [
+        feature.id,
+        feature,
+      ]),
   );
 
   assert.deepEqual(existing, {

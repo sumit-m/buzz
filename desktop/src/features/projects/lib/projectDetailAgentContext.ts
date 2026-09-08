@@ -64,6 +64,13 @@ export const UNTRUSTED_CONTEXT_NOTICE =
 export type ProjectDetailAgentContext = {
   branch?: string | null;
   file?: { kind: "file" | "folder"; path: string } | null;
+  /**
+   * Where this repository is checked out on disk, when it is. Without it a
+   * `local` source tells an agent that a checkout exists but not where, leaving
+   * it to infer the folder from the repository name — a convention nothing
+   * states, so a rename makes the agent clone a second copy beside the first.
+   */
+  localPath?: string | null;
   projectName: string;
   repoAddress: string;
   repositoryName: string;
@@ -158,6 +165,7 @@ export function buildProjectDetailAgentContext({
   activeTab,
   branch,
   file,
+  localPath,
   project,
   repository,
   source,
@@ -166,6 +174,7 @@ export function buildProjectDetailAgentContext({
   activeTab: string;
   branch?: string | null;
   file?: ProjectDetailAgentContext["file"];
+  localPath?: string | null;
   project: { name: string };
   repository: { name: string; repoAddress: string };
   source: "local" | "remote";
@@ -209,6 +218,7 @@ export function buildProjectDetailAgentContext({
   return {
     branch,
     file: activeTab === "files" ? file : null,
+    localPath,
     projectName: project.name,
     repoAddress: repository.repoAddress,
     repositoryName: repository.name,
@@ -235,6 +245,9 @@ export function projectDetailAgentContextBlock(
     `- View: ${context.view}`,
     `- Source: ${context.source}`,
   ];
+  if (context.source === "local" && context.localPath) {
+    lines.push(`- Local checkout: ${untrustedPromptValue(context.localPath)}`);
+  }
   if (context.branch) {
     lines.push(`- Branch: ${untrustedPromptValue(context.branch)}`);
   }

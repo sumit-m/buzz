@@ -100,7 +100,9 @@ pub(crate) fn repositories_section(channel_id: Uuid) -> String {
             "each one's coordinate, clone URL, default branch, and whether a local checkout ",
             "already exists. When `checkout` is null, `buzz repos clone <coordinate>` clones ",
             "it into REPOS/ ready to work in — pass the coordinate the listing printed, not ",
-            "the bare name, or the lookup only sees repositories you own yourself.\n\n"
+            "the bare name, or the lookup only sees repositories you own yourself. Buzz ",
+            "Desktop calls this set a project's Codebase; a Default repository named ",
+            "in <context> is one of them, not all.\n\n"
         ),
         channel_id = channel_id
     ));
@@ -117,7 +119,16 @@ pub(crate) fn repositories_section(channel_id: Uuid) -> String {
     section.push_str(concat!(
         "A repository someone names that is not listed by that command is one you have no ",
         "access to: ask to be added to the channel it is bound to. A clone that returns 404 ",
-        "means the same thing. Projects are a human-side label and grant no access.\n\n",
+        "means the same thing. Project membership grants nothing; the relay authorizes ",
+        "by the channel binding.\n\n",
+    ));
+    section.push_str(&format!(
+        concat!(
+            "`buzz issues create --channel {channel_id}` files a task against the ",
+            "project's first repository; name another with `--repo-owner`/`--repo-id` ",
+            "from the listing. "
+        ),
+        channel_id = channel_id
     ));
     // Deliberately two sentences. Whether to file is the repository's call, and
     // the mechanics are enforced by the commands themselves — `pr open` refuses
@@ -125,7 +136,7 @@ pub(crate) fn repositories_section(channel_id: Uuid) -> String {
     // nothing more to teach here. Every extra line dilutes the trigger above,
     // which is what the first live test showed gets a section ignored.
     section.push_str(concat!(
-        "`buzz issues` files and assigns tasks; `buzz pr` opens pull requests, and ",
+        "`buzz pr` opens pull requests, and ",
         "`buzz pr comments` reads what a reviewer said and whether yours was merged. ",
         "Whether a repository wants a task filed or a review opened is stated in its own ",
         "AGENTS.md — if it says nothing, do neither and just report what you did.\n\n",
@@ -164,6 +175,19 @@ mod tests {
         );
     }
 
+    /// `--channel` alone files against the project's first `a` member, chosen by
+    /// sort order. A task about any other repository has to name its coordinate,
+    /// so both forms must survive together.
+    #[test]
+    fn filing_a_task_offers_the_coordinate_as_well_as_the_channel() {
+        let section = repositories_section(Uuid::new_v4());
+        assert!(section.contains("buzz issues create --channel"));
+        assert!(
+            section.contains("`--repo-owner`/`--repo-id`"),
+            "the per-repository form must stay next to the channel form: {section}"
+        );
+    }
+
     #[test]
     fn the_section_names_the_channel_and_the_command() {
         let channel = Uuid::new_v4();
@@ -183,7 +207,7 @@ mod tests {
         assert!(section.contains("read its README and its root AGENTS.md"));
         assert!(section.contains("Fetch; never pull."));
         assert!(section.contains("404"));
-        assert!(section.contains("Projects are a human-side label"));
+        assert!(section.contains("Project membership grants nothing"));
     }
 
     /// No list means no staleness and no untrusted content: two channels'
@@ -227,7 +251,10 @@ mod tests {
             "the trigger must stay in the first lines, found at {trigger}"
         );
         assert!(
-            section.len() < 1_800,
+            // Raised from 1_800 for the Codebase/Default-repository sentence and the
+            // per-repository issue form. Still a ceiling: the next addition has to
+            // argue for itself the same way.
+            section.len() < 2_100,
             "section is {} bytes; every channel with a repository pays for this",
             section.len()
         );

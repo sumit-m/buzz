@@ -3,7 +3,6 @@ import * as React from "react";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useCommunities } from "@/features/communities/useCommunities";
 import {
-  useProjectPullRequestsQuery,
   useProjectRepoSnapshotQuery,
   useProjectsWorkItemsQuery,
   useRepoStateQuery,
@@ -93,7 +92,6 @@ export function ProjectHomeWorkspaceSheet({
 
   const projectScope = React.useMemo(() => [project], [project]);
   const workItemsQuery = useProjectsWorkItemsQuery(projectScope);
-  const pullRequestsQuery = useProjectPullRequestsQuery(repository);
   const issueItems = React.useMemo(
     () =>
       (workItemsQuery.data?.issues.items ?? []).map(
@@ -108,7 +106,23 @@ export function ProjectHomeWorkspaceSheet({
     () => issueItems.map(({ issue }) => issue),
     [issueItems],
   );
-  const pullRequests = pullRequestsQuery.data ?? [];
+  // Reviews aggregate across the project's repositories, like tasks: the same
+  // work-items fetch already returns every repository's pull requests with the
+  // repository attached, so a two-repo project no longer shows only the first.
+  const pullRequestItems = React.useMemo(
+    () =>
+      (workItemsQuery.data?.pullRequests.items ?? []).map(
+        ({ pullRequest, repository: pullRequestRepository }) => ({
+          project: pullRequestRepository,
+          pullRequest,
+        }),
+      ),
+    [workItemsQuery.data?.pullRequests.items],
+  );
+  const pullRequests = React.useMemo(
+    () => pullRequestItems.map(({ pullRequest }) => pullRequest),
+    [pullRequestItems],
+  );
   const people = useProjectDetailPeople({
     issues,
     pullRequests,
@@ -162,13 +176,12 @@ export function ProjectHomeWorkspaceSheet({
     snapshot?.commits.find((commit) => commit.hash === selectedCommitHash) ??
     null;
   const selectedCommitPullRequest = selectedCommitHash
-    ? selectedCommitRepository.id === repository.id
-      ? pullRequests.find(
-          (pullRequest) =>
-            pullRequest.commit === selectedCommitHash ||
-            pullRequest.initialCommit === selectedCommitHash,
-        )
-      : null
+    ? (pullRequestItems.find(
+        ({ project: pullRequestRepository, pullRequest }) =>
+          pullRequestRepository.id === selectedCommitRepository.id &&
+          (pullRequest.commit === selectedCommitHash ||
+            pullRequest.initialCommit === selectedCommitHash),
+      )?.pullRequest ?? null)
     : null;
   const handleIssueCreated = React.useCallback(
     async (
@@ -198,19 +211,10 @@ export function ProjectHomeWorkspaceSheet({
         });
         return;
       }
-      if (createdRepository.id !== repository.id) {
-        onSelectRepository(createdRepository.id);
-      }
-      await pullRequestsQuery.refetch();
+      await workItemsQuery.refetch();
       setSelectedPullRequestId(pullRequestId);
     },
-    [
-      goProject,
-      onSelectRepository,
-      project.id,
-      pullRequestsQuery,
-      repository.id,
-    ],
+    [goProject, project.id, workItemsQuery],
   );
   const detail = React.useMemo<ProjectHomeWorkspaceDetail | null>(() => {
     if (tab === "issues" && selectedIssueId) {
@@ -321,11 +325,12 @@ export function ProjectHomeWorkspaceSheet({
     case "prs":
       body = (
         <PullRequestsPanel
-          error={pullRequestsQuery.error}
-          isLoading={pullRequestsQuery.isLoading}
+          error={workItemsQuery.error}
+          isLoading={workItemsQuery.isLoading}
           onSelectedPullRequestIdChange={setSelectedPullRequestId}
           profiles={people.profiles}
           project={repository}
+          pullRequestItems={pullRequestItems}
           pullRequests={pullRequests}
           selectedPullRequest={selectedPullRequest}
         />

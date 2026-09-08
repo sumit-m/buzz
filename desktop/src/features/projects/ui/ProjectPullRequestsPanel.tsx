@@ -253,6 +253,11 @@ function PullRequestCommitRow({
   );
 }
 
+export type ProjectPullRequestPanelItem = {
+  project: Project;
+  pullRequest: ProjectPullRequest;
+};
+
 function reviewSelectionItem(
   project: Project,
   pullRequest: ProjectPullRequest,
@@ -855,6 +860,7 @@ export function PullRequestsPanel({
   onSelectedPullRequestIdChange,
   profiles,
   project,
+  pullRequestItems,
   pullRequests,
   selectedPullRequest,
 }: {
@@ -870,16 +876,32 @@ export function PullRequestsPanel({
   onSelectedPullRequestIdChange: (id: string | null) => void;
   profiles?: UserProfileLookup;
   project: Project;
+  /**
+   * Aggregated rows, each carrying the repository it belongs to. When omitted
+   * the panel falls back to single-repository mode and attributes every row to
+   * `project` — the same shape `ProjectIssuesPanel` uses for tasks.
+   */
+  pullRequestItems?: ProjectPullRequestPanelItem[];
   pullRequests: ProjectPullRequest[];
   selectedPullRequest: ProjectPullRequest | null;
 }) {
+  const resolvedItems =
+    pullRequestItems ??
+    pullRequests.map((pullRequest) => ({ project, pullRequest }));
   const groups = PULL_REQUEST_STATUS_ORDER.map((status) => ({
-    items: pullRequests.filter((pullRequest) => pullRequest.status === status),
+    items: resolvedItems.filter(
+      ({ pullRequest }) => pullRequest.status === status,
+    ),
     status,
   })).filter((group) => group.items.length > 0);
-  const rangeItems = pullRequests.map((pullRequest) =>
-    reviewSelectionItem(project, pullRequest),
+  const rangeItems = resolvedItems.map(
+    ({ project: itemProject, pullRequest }) =>
+      reviewSelectionItem(itemProject, pullRequest),
   );
+  const selectedItem =
+    resolvedItems.find(
+      ({ pullRequest }) => pullRequest.id === selectedPullRequest?.id,
+    ) ?? null;
 
   return (
     <PullRequestsPanelSurface
@@ -894,7 +916,7 @@ export function PullRequestsPanel({
             onOpenCommit={onOpenCommit}
             onOpenTerminal={onOpenTerminal}
             profiles={profiles}
-            project={project}
+            project={selectedItem?.project ?? project}
             pullRequest={selectedPullRequest}
           />
         ) : null
@@ -913,18 +935,18 @@ export function PullRequestsPanel({
                     state={pullRequestProgressState(status)}
                   />
                 }
-                items={items.map((pullRequest) =>
-                  reviewSelectionItem(project, pullRequest),
+                items={items.map(({ project: itemProject, pullRequest }) =>
+                  reviewSelectionItem(itemProject, pullRequest),
                 )}
                 key={status}
                 label={status}
               >
-                {items.map((pullRequest) => (
+                {items.map(({ project: itemProject, pullRequest }) => (
                   <PullRequestRow
-                    key={pullRequest.id}
+                    key={`${itemProject.id}:${pullRequest.id}`}
                     onOpen={() => onSelectedPullRequestIdChange(pullRequest.id)}
                     profiles={profiles}
-                    project={project}
+                    project={itemProject}
                     pullRequest={pullRequest}
                     rangeItems={rangeItems}
                   />

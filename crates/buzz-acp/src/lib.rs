@@ -4039,7 +4039,7 @@ async fn run_harness(
                                     model_overridden: false,
                                     desired_model_request_id: None,
                                     desired_model_pending_ack: false,
-                                    startup_effort: config.effort_level.clone(),
+                                    startup_effort: config.startup_effort(),
                                     agent_name,
                                     goose_system_prompt_supported: None,
                                     protocol_version,

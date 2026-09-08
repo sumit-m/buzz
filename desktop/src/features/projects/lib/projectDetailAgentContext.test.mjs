@@ -257,3 +257,31 @@ test("splits workspace repository context for the shared conversation view", () 
     },
   );
 });
+
+test("a local source names the checkout so the folder is not guessed", () => {
+  const block = projectDetailAgentContextBlock(
+    buildProjectDetailAgentContext({
+      ...base,
+      localPath: "C:/Users/u/REPOS/bee-keeper",
+    }),
+  );
+  assert.match(block, /- Local checkout: "C:\/Users\/u\/REPOS\/bee-keeper"/);
+});
+
+test("a remote source names no checkout even when a path is known", () => {
+  const block = projectDetailAgentContextBlock(
+    buildProjectDetailAgentContext({
+      ...base,
+      localPath: "C:/Users/u/REPOS/bee-keeper",
+      source: "remote",
+    }),
+  );
+  assert.doesNotMatch(block, /Local checkout/);
+});
+
+test("a local source with no checkout on disk omits the line", () => {
+  const block = projectDetailAgentContextBlock(
+    buildProjectDetailAgentContext({ ...base, localPath: null }),
+  );
+  assert.doesNotMatch(block, /Local checkout/);
+});

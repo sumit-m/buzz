@@ -777,6 +777,8 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     activeTab,
     branch: activeBranch,
     file: filesContext,
+    localPath:
+      repoSyncStatusQuery.data?.localPath ?? localRepoSnapshotQuery.data?.path,
     project,
     repository,
     source: repoSource,

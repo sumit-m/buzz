@@ -22,6 +22,7 @@ import { ProjectHomeCommitsPanel } from "./ProjectHomeCommitsPanel";
 import { ProjectIssuesPanel } from "./ProjectIssuesPanel";
 import { PullRequestsPanel } from "./ProjectPullRequestsPanel";
 import { PROJECT_DETAIL_PANEL_CLASS } from "./projectPanelStyles";
+import { mergeRepoContributors } from "@/features/projects/lib/projectContributorAggregation";
 import { useProjectDetailPeople } from "./useProjectDetailPeople";
 
 export type ProjectHomeWorkspaceCreateAction = {
@@ -126,6 +127,7 @@ export function ProjectHomeWorkspaceSheet({
   const people = useProjectDetailPeople({
     issues,
     pullRequests,
+    repositories: project.repositories,
     repository,
   });
   const repoStateQuery = useRepoStateQuery(repository);
@@ -141,9 +143,26 @@ export function ProjectHomeWorkspaceSheet({
     true,
   );
   const snapshot = snapshotQuery.data ?? null;
+  // People aggregates the same way commits do: one snapshot per repository, so
+  // a contributor who only ever committed to the project's second repository is
+  // not dropped from the tab.
   const repositorySnapshots = useProjectRepositorySnapshots(
     project.repositories,
-    tab === "commits",
+    tab === "commits" || tab === "contributors",
+  );
+  const aggregatedRepoContributors = React.useMemo(
+    () =>
+      mergeRepoContributors(
+        repositorySnapshots.map(
+          (result) => result.snapshot?.contributors ?? [],
+        ),
+      ),
+    [repositorySnapshots],
+  );
+  const aggregatedCommits = React.useMemo(
+    () =>
+      repositorySnapshots.flatMap((result) => result.snapshot?.commits ?? []),
+    [repositorySnapshots],
   );
   const selectedCommitResult =
     repositorySnapshots.find(
@@ -160,8 +179,13 @@ export function ProjectHomeWorkspaceSheet({
   );
   const contributorPubkeysByGitIdentity = React.useMemo(
     () =>
-      gitContributorPubkeysFromCommits(snapshot?.commits ?? [], pullRequests),
-    [pullRequests, snapshot?.commits],
+      gitContributorPubkeysFromCommits(
+        aggregatedCommits.length > 0
+          ? aggregatedCommits
+          : (snapshot?.commits ?? []),
+        pullRequests,
+      ),
+    [aggregatedCommits, pullRequests, snapshot?.commits],
   );
   const selectedPullRequest =
     pullRequests.find(
@@ -383,7 +407,11 @@ export function ProjectHomeWorkspaceSheet({
           contributorPubkeys={people.contributorPubkeys}
           contributorPubkeysByGitIdentity={contributorPubkeysByGitIdentity}
           profiles={people.profiles}
-          repoContributors={snapshot?.contributors ?? []}
+          repoContributors={
+            aggregatedRepoContributors.length > 0
+              ? aggregatedRepoContributors
+              : (snapshot?.contributors ?? [])
+          }
         />
       );
       break;

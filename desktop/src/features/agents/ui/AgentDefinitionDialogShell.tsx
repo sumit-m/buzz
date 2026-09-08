@@ -46,7 +46,6 @@ export function AgentDefinitionDialogShell({
         data-testid="persona-dialog"
         description={description}
         footer={footer}
-        footerClassName="border-t-0 pt-0"
         headerClassName="pb-2"
         title={title}
       >

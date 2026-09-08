@@ -11,15 +11,13 @@
       "id": "projects",
       "name": "Projects",
       "description": "Git repository browser and collaboration",
-      "platforms": ["desktop"],
-      "defaultEnabled": true
+      "platforms": ["desktop"]
     },
     {
       "id": "pulse",
       "name": "Pulse",
       "description": "Activity feed with notes, social posts, and agent activity",
-      "platforms": ["desktop"],
-      "defaultEnabled": true
+      "platforms": ["desktop"]
     },
     {
       "id": "forum",

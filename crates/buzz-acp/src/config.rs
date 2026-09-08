@@ -545,6 +545,14 @@ pub struct CliArgs {
     /// Effort is **model-dependent**: the adapter rebuilds the option on every
     /// model switch and omits it for models with no effort control, so a value
     /// the selected model does not support is skipped rather than sent.
+    ///
+    /// This is the *definition*-level tier, set from the agent dialog and
+    /// carried in the record's env. It is the only tier a definition can
+    /// express: Desktop's launch projection treats
+    /// [`Self::effort_level`] as the sole authority for contract-less
+    /// runtimes and strips its own sentinel from the spawn env, so a
+    /// definition has no way to reach that column. [`Self::startup_effort`]
+    /// resolves the two.
     #[arg(long, env = "BUZZ_ACP_EFFORT")]
     pub effort: Option<String>,
 
@@ -1030,6 +1038,16 @@ pub fn propagate_legacy_env_vars() {
 }
 
 impl Config {
+    /// The effort value applied at the first session creation.
+    ///
+    /// [`Self::effort_level`] is Desktop's canonical record column and wins.
+    /// [`Self::effort`] is the definition-level tier, which exists because the
+    /// launch projection strips its own sentinel from the spawn env and reads
+    /// the column alone — leaving a definition no route to it.
+    pub fn startup_effort(&self) -> Option<String> {
+        self.effort_level.clone().or_else(|| self.effort.clone())
+    }
+
     pub fn from_cli() -> Result<Self, ConfigError> {
         // Legacy env-var propagation is intentionally NOT done here.
         // Call `propagate_legacy_env_vars()` before the tokio runtime starts

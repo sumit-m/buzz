@@ -22,7 +22,6 @@ import { ProjectHomeCodebasePanel } from "./ProjectHomeCodebasePanel";
 import { ProjectHomeCommitsPanel } from "./ProjectHomeCommitsPanel";
 import { ProjectIssuesPanel } from "./ProjectIssuesPanel";
 import { PullRequestsPanel } from "./ProjectPullRequestsPanel";
-import { ProjectRepositoryScopePicker } from "./ProjectRepositoryScopePicker";
 import { PROJECT_DETAIL_PANEL_CLASS } from "./projectPanelStyles";
 import { useProjectDetailPeople } from "./useProjectDetailPeople";
 
@@ -321,23 +320,15 @@ export function ProjectHomeWorkspaceSheet({
       break;
     case "prs":
       body = (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <ProjectRepositoryScopePicker
-            onSelectRepository={onSelectRepository}
-            project={project}
-            repository={repository}
-            testId="project-home-reviews-repo"
-          />
-          <PullRequestsPanel
-            error={pullRequestsQuery.error}
-            isLoading={pullRequestsQuery.isLoading}
-            onSelectedPullRequestIdChange={setSelectedPullRequestId}
-            profiles={people.profiles}
-            project={repository}
-            pullRequests={pullRequests}
-            selectedPullRequest={selectedPullRequest}
-          />
-        </div>
+        <PullRequestsPanel
+          error={pullRequestsQuery.error}
+          isLoading={pullRequestsQuery.isLoading}
+          onSelectedPullRequestIdChange={setSelectedPullRequestId}
+          profiles={people.profiles}
+          project={repository}
+          pullRequests={pullRequests}
+          selectedPullRequest={selectedPullRequest}
+        />
       );
       break;
     case "commits":

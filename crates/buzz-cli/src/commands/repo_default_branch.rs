@@ -287,6 +287,7 @@ mod tests {
                     expected_manifest: None,
                 }),
                 &client,
+                &crate::OutputFormat::Json,
             )
             .await;
             assert_eq!(gets.load(Ordering::SeqCst), 1);

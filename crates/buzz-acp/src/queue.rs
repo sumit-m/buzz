@@ -1706,7 +1706,9 @@ pub(crate) fn format_event_block(
 /// behind a "1 reply" affordance, which makes multi-agent discussion
 /// (consensus, orchestration) unreadable without expanding each one. Applies to
 /// top-level and DM turns, including agent-to-agent ones, which upstream leaves
-/// free to nest.
+/// free to nest — but only for an agent whose session spans the channel. One
+/// kept per thread answers in a new thread instead; see
+/// [`append_new_thread_reply_instruction`].
 ///
 /// A mention *inside* a thread is the other case entirely — see
 /// [`append_thread_reply_instruction`].
@@ -1736,6 +1738,26 @@ fn append_thread_reply_instruction(s: &mut String, event_id: &str) {
          which places your reply directly alongside the message you are \
          answering. Do NOT post at the channel top level, and do NOT jump to the \
          thread root, unless the human explicitly asks for a different level."
+    ));
+}
+
+/// Append the reply instruction for a top-level question to a thread-scoped
+/// agent.
+///
+/// Under "Each thread" a top-level mention opens a session rooted at that
+/// message, so the thread under it *is* the conversation. A flat answer lands
+/// outside it, and the human's natural follow-up — another top-level message —
+/// derives a fresh scope that has never seen the exchange. Answering in the new
+/// thread keeps the follow-up inside the session that holds the context.
+///
+/// `event_id` is the triggering message, which is also the scope's root.
+fn append_new_thread_reply_instruction(s: &mut String, event_id: &str) {
+    s.push_str(&format!(
+        "\nIMPORTANT: You were asked at the channel top level, and your \
+         conversation is kept per thread. Answer in a new thread under that \
+         message: use `--reply-to {event_id}` on `buzz messages send`. Do NOT \
+         post at the channel top level — a reply there falls outside this \
+         conversation, and a follow-up to it would start without it."
     ));
 }
 
@@ -1969,8 +1991,8 @@ fn append_project_home(s: &mut String, channel_info: Option<&PromptChannelInfo>,
 ///
 /// `reply_anchor` is the pre-resolved `--reply-to` target (see
 /// [`resolve_reply_anchor`]). It is honoured wherever the turn is threaded —
-/// in a channel thread or a DM thread alike. Top-level turns of either kind
-/// ignore it and post flat.
+/// in a channel thread or a DM thread alike. Top-level turns post flat, except
+/// a channel mention to a thread-scoped agent, which opens its own thread.
 fn format_context_hints(
     scope: &SessionScope,
     channel_info: Option<&PromptChannelInfo>,
@@ -2077,9 +2099,15 @@ fn format_context_hints(
             }
         }
         s.push_str(&format!("\n{ctx_hint}"));
-        // `resolve_reply_anchor` returns the triggering event's parent for every
-        // thread turn; the root is a safety net for a malformed tag set.
-        append_thread_reply_instruction(&mut s, reply_anchor.unwrap_or(root));
+        // No thread tags means the scope's root is the triggering message
+        // itself: a top-level mention to a thread-scoped agent.
+        if thread_tags.root_event_id.is_none() && scope.is_thread() {
+            append_new_thread_reply_instruction(&mut s, root);
+        } else {
+            // `resolve_reply_anchor` returns the triggering event's parent for
+            // every thread turn; the root is a safety net for a malformed tag set.
+            append_thread_reply_instruction(&mut s, reply_anchor.unwrap_or(root));
+        }
         crate::prompt_framing::semantic_section("context", &s)
     } else {
         // Three states, not two. From the second turn on the window below is a
@@ -6672,6 +6700,65 @@ revision b",
             prompt.contains("WITHOUT `--reply-to`"),
             "top-level human message should use the top-level instruction"
         );
+    }
+
+    #[test]
+    fn test_thread_scoped_top_level_message_opens_its_own_thread() {
+        let ch = Uuid::new_v4();
+        let event = make_event("compare the new Datadog order");
+        let event_id = event.id.to_hex();
+        let batch = FlushBatch {
+            channel_id: ch,
+            scope: thread(ch, &event_id),
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+
+        // A flat answer would sit outside the thread-scoped session, and the
+        // follow-up to it would open a new one without the exchange.
+        let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
+        assert!(
+            prompt.contains(&format!("use `--reply-to {event_id}`")),
+            "thread-scoped top-level message should thread under itself; prompt was:\n{prompt}"
+        );
+        assert!(prompt.contains("Answer in a new thread under that message"));
+        assert!(!prompt.contains("WITHOUT `--reply-to`"));
+        assert!(!prompt.contains("This turn is inside a thread"));
+    }
+
+    #[test]
+    fn test_thread_scoped_reply_keeps_the_same_level_instruction() {
+        let ch = Uuid::new_v4();
+        let root = "a".repeat(64);
+        let parent = "b".repeat(64);
+        let event = make_event_with_tags(
+            "and drop the 2023 deals",
+            vec![
+                vec!["e".into(), root.clone(), "".into(), "root".into()],
+                vec!["e".into(), parent.clone(), "".into(), "reply".into()],
+            ],
+        );
+        let batch = FlushBatch {
+            channel_id: ch,
+            scope: thread(ch, &root),
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+
+        let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
+        assert!(prompt.contains("This turn is inside a thread"));
+        assert!(prompt.contains(&format!("use `--reply-to {parent}`")));
+        assert!(!prompt.contains("Answer in a new thread"));
     }
 
     #[test]

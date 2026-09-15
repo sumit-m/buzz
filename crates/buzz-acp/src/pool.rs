@@ -3411,13 +3411,8 @@ pub async fn run_prompt_task(
                     .iter()
                     .any(|event_id| delivered_ids.contains(event_id))
             });
-        let own_pubkey_hex = ctx.agent_keys.public_key().to_hex();
-        let conversation_context = conversation_context_delta(
-            conversation_context,
-            &delivered_ids,
-            &rendered_batch_ids,
-            conversation_context_had_session_events.then_some(own_pubkey_hex.as_str()),
-        );
+        let conversation_context =
+            conversation_context_delta(conversation_context, &delivered_ids, &rendered_batch_ids);
         pending_delivered_event_ids.extend(rendered_batch_ids);
         pending_delivered_event_ids.extend(conversation_context_event_ids(
             conversation_context.as_ref(),
@@ -4482,14 +4477,10 @@ fn conversation_context_event_ids(context: Option<&ConversationContext>) -> Hash
 /// IDs are compared in Buzz's canonical 64-character lowercase hex form: relay
 /// context JSON supplies the same form emitted by `EventId::to_hex()`. A
 /// non-canonical or missing ID deliberately fails open and may be re-sent.
-/// `own_pubkey` is `Some` only once a session has been established — see
-/// [`conversation_context_delta`]'s note on why the agent's own messages are
-/// dropped then and not at session birth.
 fn conversation_context_delta(
     context: Option<ConversationContext>,
     delivered: &HashSet<String>,
     triggering: &HashSet<String>,
-    own_pubkey: Option<&str>,
 ) -> Option<ConversationContext> {
     let filter = |messages: Vec<ContextMessage>| {
         let omitted_from_prior_session = messages
@@ -4498,21 +4489,6 @@ fn conversation_context_delta(
         let messages = messages
             .into_iter()
             .filter(|message| {
-                // The agent's own reply. It reaches the relay through
-                // `buzz messages send`, so the harness never handles the event
-                // and never records it as delivered — and it comes back next
-                // turn as new context, quoting the agent to itself in full.
-                //
-                // Keyed on the session having been established rather than on
-                // authorship alone: at session birth the agent has no history
-                // and its last message is worth seeing (upstream deliberately
-                // preserves it when truncating). Once a session exists, it
-                // wrote the message and already has it.
-                if let Some(own) = own_pubkey {
-                    if message.pubkey.eq_ignore_ascii_case(own) {
-                        return false;
-                    }
-                }
                 message.event_id.is_empty()
                     || (!delivered.contains(&message.event_id)
                         && !triggering.contains(&message.event_id))
@@ -7668,7 +7644,7 @@ f",
         .await
         .expect("thread context");
 
-        let ctx = conversation_context_delta(Some(ctx), &delivered, &HashSet::new(), None)
+        let ctx = conversation_context_delta(Some(ctx), &delivered, &HashSet::new())
             .expect("human context remains after hydrated-session filtering");
 
         let ConversationContext::Thread {
@@ -9172,65 +9148,6 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         assert!(delivery.hydrated_thread_roots.is_empty());
     }
 
-    /// The failure this fixes: an agent posts through `buzz messages send`, so
-    /// the harness never handles the event and never records it as delivered.
-    /// Next turn the delta counts it as new and quotes the agent's own reply
-    /// back at it — command output and all.
-    #[test]
-    fn an_established_session_does_not_get_its_own_messages_back() {
-        let own = "aa".repeat(32);
-        let context = ConversationContext::Channel {
-            messages: vec![
-                ContextMessage {
-                    event_id: "mine".to_string(),
-                    pubkey: own.to_uppercase(),
-                    timestamp: "t".to_string(),
-                    content: "my own reply".to_string(),
-                },
-                ContextMessage {
-                    event_id: "theirs".to_string(),
-                    pubkey: "bb".repeat(32),
-                    timestamp: "t".to_string(),
-                    content: "a question".to_string(),
-                },
-            ],
-            total: 2,
-            truncated: false,
-        };
-        let delta = conversation_context_delta(
-            Some(context),
-            &HashSet::new(),
-            &HashSet::new(),
-            Some(own.as_str()),
-        )
-        .expect("something survives");
-        let ids = conversation_context_event_ids(Some(&delta));
-        assert!(!ids.contains(&"mine".to_string()), "own message suppressed");
-        assert!(ids.contains(&"theirs".to_string()), "others still arrive");
-    }
-
-    /// At session birth the agent has no history, so its last message is worth
-    /// seeing — upstream deliberately preserves it when truncating. The filter
-    /// is keyed on the session being established, not on authorship alone.
-    #[test]
-    fn a_new_session_still_sees_the_agents_last_message() {
-        let own = "aa".repeat(32);
-        let context = ConversationContext::Channel {
-            messages: vec![ContextMessage {
-                event_id: "mine".to_string(),
-                pubkey: own.clone(),
-                timestamp: "t".to_string(),
-                content: "what I said last time".to_string(),
-            }],
-            total: 1,
-            truncated: false,
-        };
-        let delta =
-            conversation_context_delta(Some(context), &HashSet::new(), &HashSet::new(), None)
-                .expect("birth keeps it");
-        assert!(conversation_context_event_ids(Some(&delta)).contains(&"mine".to_string()));
-    }
-
     #[test]
     fn conversation_context_delta_omits_delivered_and_triggering_events() {
         let delivered = HashSet::from(["old".to_string()]);
@@ -9246,7 +9163,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             truncated: false,
         };
 
-        let delta = conversation_context_delta(Some(context), &delivered, &triggering, None)
+        let delta = conversation_context_delta(Some(context), &delivered, &triggering)
             .expect("new context remains");
         match delta {
             ConversationContext::Thread {
@@ -9304,7 +9221,6 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             Some(context),
             &HashSet::new(),
             &HashSet::from([trigger_id]),
-            None,
         )
         .expect("root remains after trigger deduplication");
         let batch = FlushBatch {
@@ -9362,7 +9278,6 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             Some(context),
             &HashSet::new(),
             &HashSet::from([trigger_id]),
-            None,
         )
         .expect("earlier DM remains after trigger deduplication");
         let batch = FlushBatch {
@@ -9409,9 +9324,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             truncated: false,
         };
 
-        assert!(
-            conversation_context_delta(Some(context), &delivered, &HashSet::new(), None).is_none()
-        );
+        assert!(conversation_context_delta(Some(context), &delivered, &HashSet::new()).is_none());
     }
 
     #[test]
@@ -9423,8 +9336,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         };
 
         assert!(
-            conversation_context_delta(Some(context), &HashSet::new(), &HashSet::new(), None)
-                .is_some()
+            conversation_context_delta(Some(context), &HashSet::new(), &HashSet::new()).is_some()
         );
     }
 
@@ -9465,7 +9377,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         };
 
         let delivered = HashSet::from(["session-event".to_string()]);
-        let delta = conversation_context_delta(Some(context), &delivered, &HashSet::new(), None)
+        let delta = conversation_context_delta(Some(context), &delivered, &HashSet::new())
             .expect("human context remains");
         let ConversationContext::Thread { messages, .. } = delta else {
             panic!("expected thread context");

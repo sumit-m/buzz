@@ -2122,7 +2122,7 @@ fn format_context_hints(
         } else if has_conversation_context {
             "Channel context included below. It is the newest messages only — \
              use `buzz messages search --channel <UUID> --query \"...\"` for anything older."
-        } else if conversation_context_had_delivered_events {
+        } else if conversation_context_had_session_events {
             "Earlier channel context was already delivered in this session and \
              nothing has arrived since. Use `buzz messages get --channel <UUID>` \
              to re-read it."
@@ -2595,7 +2595,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
             args.conversation_context,
             args.conversation_context_had_session_events,
         ),
-        args.conversation_context_had_delivered_events,
+        args.conversation_context_had_session_events,
         reply_anchor.as_deref(),
         &sender_pubkey,
     ));
@@ -2605,7 +2605,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
         sections.push(format_conversation_context(
             ctx,
             args.profile_lookup,
-            args.conversation_context_had_delivered_events,
+            args.conversation_context_had_session_events,
         ));
     }
 
@@ -4217,7 +4217,7 @@ push to main";
             None,
             &tags,
             false,
-            ConversationContextStatus::PreviouslyDelivered,
+            ConversationContextStatus::PreviouslyAvailable,
             true,
             None,
             REQUESTER,

@@ -3416,7 +3416,7 @@ pub async fn run_prompt_task(
             conversation_context,
             &delivered_ids,
             &rendered_batch_ids,
-            conversation_context_had_delivered_events.then_some(own_pubkey_hex.as_str()),
+            conversation_context_had_session_events.then_some(own_pubkey_hex.as_str()),
         );
         pending_delivered_event_ids.extend(rendered_batch_ids);
         pending_delivered_event_ids.extend(conversation_context_event_ids(
@@ -7668,7 +7668,7 @@ f",
         .await
         .expect("thread context");
 
-        let ctx = conversation_context_delta(Some(ctx), &delivered, &HashSet::new())
+        let ctx = conversation_context_delta(Some(ctx), &delivered, &HashSet::new(), None)
             .expect("human context remains after hydrated-session filtering");
 
         let ConversationContext::Thread {
@@ -9304,6 +9304,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             Some(context),
             &HashSet::new(),
             &HashSet::from([trigger_id]),
+            None,
         )
         .expect("root remains after trigger deduplication");
         let batch = FlushBatch {
@@ -9361,6 +9362,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             Some(context),
             &HashSet::new(),
             &HashSet::from([trigger_id]),
+            None,
         )
         .expect("earlier DM remains after trigger deduplication");
         let batch = FlushBatch {
@@ -9463,7 +9465,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         };
 
         let delivered = HashSet::from(["session-event".to_string()]);
-        let delta = conversation_context_delta(Some(context), &delivered, &HashSet::new())
+        let delta = conversation_context_delta(Some(context), &delivered, &HashSet::new(), None)
             .expect("human context remains");
         let ConversationContext::Thread { messages, .. } = delta else {
             panic!("expected thread context");

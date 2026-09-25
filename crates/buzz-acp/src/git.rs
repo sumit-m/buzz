@@ -324,6 +324,26 @@ fn sanitize_git_user_name(raw: &str) -> Option<String> {
     name.chars().any(|c| !is_git_crud(c)).then_some(name)
 }
 
+/// URL prefixes the relay's Git remotes can use. Git matches credential scopes
+/// by literal host, and a loopback relay is reached as both `localhost` and
+/// `127.0.0.1` (the relay advertises clone URLs with the latter).
+fn relay_git_bases(relay: &str) -> Vec<String> {
+    let mut bases = vec![relay.to_owned()];
+    if let Ok(mut url) = url::Url::parse(relay) {
+        let alias = match url.host_str() {
+            Some("localhost") => Some("127.0.0.1"),
+            Some("127.0.0.1") => Some("localhost"),
+            _ => None,
+        };
+        if let Some(alias) = alias {
+            if url.set_host(Some(alias)).is_ok() {
+                bases.push(url.as_str().trim_end_matches('/').to_owned());
+            }
+        }
+    }
+    bases
+}
+
 /// The agent's attribution and signing config. `user` mode also uses these
 /// keys to drop inherited agent identity.
 fn identity_entries(
@@ -362,14 +382,16 @@ fn build_git_env(
     managed: &[(String, String)],
     mut entries: Vec<(String, String)>,
 ) -> Vec<(String, String)> {
-    let scope = format!("credential.{relay}/git");
-    entries.extend([
-        // Reset helpers only inside this relay's Git URL namespace. Unrelated
-        // remotes retain their own helper chain and never receive this key.
-        (format!("{scope}.helper"), String::new()),
-        (format!("{scope}.helper"), "nostr".into()),
-        (format!("{scope}.useHttpPath"), "true".into()),
-    ]);
+    // Reset helpers only inside this relay's Git URL namespace. Unrelated
+    // remotes retain their own helper chain and never receive this key.
+    for base in relay_git_bases(relay) {
+        let scope = format!("credential.{base}/git");
+        entries.extend([
+            (format!("{scope}.helper"), String::new()),
+            (format!("{scope}.helper"), "nostr".into()),
+            (format!("{scope}.useHttpPath"), "true".into()),
+        ]);
+    }
     entries.extend_from_slice(managed);
     let mut env = vec![("GIT_CONFIG_COUNT".into(), entries.len().to_string())];
     for (i, (key, value)) in entries.into_iter().enumerate() {
@@ -703,6 +725,29 @@ mod git_user_name_tests {
             git_config(&env, "user.signingkey").as_deref(),
             Some(PUBKEY_HEX)
         );
+    }
+
+    #[test]
+    fn test_loopback_relay_scopes_the_helper_to_both_host_spellings() {
+        let env = build_git_env("http://localhost:3000", &identity_entries(&key_info(), "http://localhost:3000", None), vec![]);
+        for base in ["http://localhost:3000", "http://127.0.0.1:3000"] {
+            assert_eq!(
+                git_config(&env, &format!("credential.{base}/git.useHttpPath")).as_deref(),
+                Some("true"),
+                "{base} remotes must get the nostr helper"
+            );
+        }
+    }
+
+    #[test]
+    fn test_remote_relay_scopes_the_helper_to_its_own_host_only() {
+        let env = build_git_env("https://relay.example.com", &identity_entries(&key_info(), "https://relay.example.com", None), vec![]);
+        let scopes: Vec<_> = env
+            .iter()
+            .filter(|(_, v)| v.starts_with("credential.") && v.ends_with(".useHttpPath"))
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(scopes, ["credential.https://relay.example.com/git.useHttpPath"]);
     }
 
     #[test]

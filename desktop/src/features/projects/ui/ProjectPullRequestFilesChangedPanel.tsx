@@ -42,6 +42,7 @@ import type { ProjectRepoDiff, ProjectRepoDiffFile } from "@/shared/api/types";
 import { BuzzLoadingState } from "@/shared/ui/BuzzLoadingState";
 import { PROJECT_DETAIL_PANEL_CLASS } from "./projectPanelStyles";
 import { ProjectPullRequestInlineCommentThread } from "./ProjectPullRequestInlineComments";
+import { PullRequestHtmlViewButton } from "./PullRequestHtmlView";
 
 function fileName(path: string) {
   return path.split("/").pop() || path;
@@ -724,6 +725,17 @@ export function ProjectPullRequestFilesChangedPanel({
       diff={pullRequest ? diff : null}
       embedded
       error={error}
+      fileActions={
+        pullRequest
+          ? (file) => (
+              <PullRequestHtmlViewButton
+                file={file}
+                project={project}
+                pullRequest={pullRequest}
+              />
+            )
+          : undefined
+      }
       focusedAnchor={focusedAnchor}
       headerLabel={
         pullRequest
@@ -761,6 +773,7 @@ export function ProjectDiffFilesPanel({
   fileTreeClassName,
   isLoading,
   embedded = false,
+  fileActions,
   focusedAnchor,
   headerLabel,
   inlineComments,
@@ -775,6 +788,8 @@ export function ProjectDiffFilesPanel({
   isLoading: boolean;
   /** Render without an outer border, for nesting inside an existing card. */
   embedded?: boolean;
+  /** Extra controls in the selected file's header. */
+  fileActions?: (file: ProjectRepoDiffFile) => React.ReactNode;
   focusedAnchor?: ProjectPullRequestCommentAnchor | null;
   headerLabel: string;
   inlineComments?: InlineCommentControls;
@@ -926,6 +941,7 @@ export function ProjectDiffFilesPanel({
                   ) : null}
                 </div>
                 <div className="flex shrink-0 items-center gap-2 text-muted-foreground">
+                  {fileActions?.(selectedFile)}
                   <span
                     className={cn(
                       fileAdditions(selectedFile) > 0 && "text-green-500",

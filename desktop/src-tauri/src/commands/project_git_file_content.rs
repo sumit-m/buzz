@@ -8,13 +8,29 @@ use crate::app_state::AppState;
 use tauri::State;
 
 const MAX_PREVIEW_BYTES: u64 = 64 * 1024;
+/// Ceiling for a caller that renders a whole file (an HTML report with its
+/// fonts embedded), not a preview of it.
+const MAX_RENDER_BYTES: u64 = 8 * 1024 * 1024;
 
 pub(crate) fn read_preview_content(
     repo_dir: &std::path::Path,
     path: &str,
     size: Option<u64>,
 ) -> Option<String> {
-    if size.is_some_and(|value| value > MAX_PREVIEW_BYTES) {
+    read_text_content(repo_dir, path, size, MAX_PREVIEW_BYTES)
+}
+
+pub(crate) fn content_cap(max_bytes: Option<u64>) -> u64 {
+    max_bytes.map_or(MAX_PREVIEW_BYTES, |bytes| bytes.min(MAX_RENDER_BYTES))
+}
+
+pub(crate) fn read_text_content(
+    repo_dir: &std::path::Path,
+    path: &str,
+    size: Option<u64>,
+    cap: u64,
+) -> Option<String> {
+    if size.is_some_and(|value| value > cap) {
         return None;
     }
 
@@ -33,7 +49,7 @@ pub(crate) fn read_preview_content(
     }
 
     let metadata = std::fs::metadata(&normalized).ok()?;
-    if !metadata.is_file() || metadata.len() > MAX_PREVIEW_BYTES {
+    if !metadata.is_file() || metadata.len() > cap {
         return None;
     }
     let bytes = std::fs::read(normalized).ok()?;
@@ -128,9 +144,11 @@ pub async fn get_project_repo_file_content(
     target_ref: Option<String>,
     target_commit: Option<String>,
     path: String,
+    max_bytes: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     validate_workspace_clone_url(&clone_url, &state)?;
+    let cap = content_cap(max_bytes);
     validate_repo_file_path(&path)?;
     let auth = build_git_auth_config(&state)?;
     let branch = clean_branch(default_branch);
@@ -151,7 +169,7 @@ pub async fn get_project_repo_file_content(
             target_commit.as_deref(),
             &auth,
         )?;
-        Ok(read_preview_content(&repo_dir, &path, None))
+        Ok(read_text_content(&repo_dir, &path, None, cap))
     })
     .await
     .map_err(|error| format!("repo file content task failed: {error}"))?

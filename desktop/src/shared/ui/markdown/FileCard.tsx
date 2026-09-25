@@ -4,7 +4,11 @@ import { Download, Eye, FileText } from "lucide-react";
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
 
 import { isHtmlFilename } from "./htmlReport";
-import { downloadRelayFile, RelayHtmlDialog } from "./HtmlReportDialog";
+import {
+  downloadRelayFile,
+  relayHtmlDocument,
+  useHtmlDocumentViewer,
+} from "./HtmlReportDialog";
 
 /** Human-readable byte size: "820 B", "12.4 KB", "3.1 MB". */
 function formatFileSize(bytes: number): string {
@@ -41,7 +45,7 @@ export function FileCard({
   size?: number;
 }) {
   const cardRef = React.useRef<HTMLButtonElement | null>(null);
-  const [viewing, setViewing] = React.useState(false);
+  const viewer = useHtmlDocumentViewer();
   const sizeLabel = size != null ? formatFileSize(size) : "";
   const isHtml = isHtmlFilename(filename);
   useSmoothCorners(cardRef);
@@ -52,7 +56,7 @@ export function FileCard({
         ref={cardRef}
         type="button"
         onClick={() => {
-          if (isHtml) setViewing(true);
+          if (isHtml) viewer.open(relayHtmlDocument(href, filename));
           else downloadRelayFile(href, filename);
         }}
         data-testid="file-card"
@@ -78,13 +82,7 @@ export function FileCard({
           <Download className="h-4 w-4 shrink-0 text-muted-foreground" />
         )}
       </button>
-      {viewing ? (
-        <RelayHtmlDialog
-          filename={filename}
-          href={href}
-          onClose={() => setViewing(false)}
-        />
-      ) : null}
+      {viewer.dialog}
     </>
   );
 }

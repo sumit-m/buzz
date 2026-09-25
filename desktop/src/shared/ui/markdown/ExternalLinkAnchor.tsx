@@ -5,12 +5,15 @@ import { toast } from "sonner";
 import { cn } from "@/shared/lib/cn";
 import { copyTextToClipboard } from "@/shared/lib/clipboard";
 
+import { isRelayHtmlReport } from "./htmlReport";
+import { HtmlReportLink } from "./HtmlReportDialog";
 import { MaskedLinkTooltip } from "./MaskedLinkTooltip";
 import {
   MediaContextMenu,
   type MediaContextMenuPosition,
   useDismissMediaContextMenu,
 } from "./MediaContextMenu";
+import { useMarkdownRuntime } from "./runtimeContext";
 
 /**
  * An external `[text](href)` link with a custom right-click menu.
@@ -19,7 +22,8 @@ import {
  * useful link actions, so a plain right-click on a link is a no-op. This adds
  * an in-app menu with "Open link" (via the OS opener, matching the anchor's
  * left-click `target="_blank"` behavior) and "Copy link" (the real href, not
- * the masked display text).
+ * the masked display text). A relay-hosted HTML file opens in the in-app
+ * viewer, since a browser has no member signature to read relay media.
  */
 export function ExternalLinkAnchor({
   anchorProps,
@@ -34,9 +38,18 @@ export function ExternalLinkAnchor({
   isLinearLink: boolean;
   label: string;
 }) {
+  const { relayOrigin } = useMarkdownRuntime();
   const [menu, setMenu] = React.useState<MediaContextMenuPosition | null>(null);
   const closeMenu = React.useCallback(() => setMenu(null), []);
   useDismissMediaContextMenu(Boolean(menu), closeMenu);
+
+  if (href && isRelayHtmlReport(href, relayOrigin)) {
+    return (
+      <HtmlReportLink href={href} label={label}>
+        {children}
+      </HtmlReportLink>
+    );
+  }
 
   const anchor = (
     <a

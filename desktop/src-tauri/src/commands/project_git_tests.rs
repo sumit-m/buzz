@@ -135,3 +135,60 @@ fn rendering_a_file_reads_past_the_preview_cap_up_to_the_render_cap() {
     assert_eq!(content_cap(None), 64 * 1024);
     assert_eq!(content_cap(Some(u64::MAX)), 8 * 1024 * 1024);
 }
+
+#[test]
+fn pull_request_checkout_falls_back_to_its_commit_without_a_nostr_ref() {
+    use super::super::project_git_exec::{build_test_git_auth_config, run_git};
+    use super::super::project_git_file_content::checkout_project_repo;
+
+    let auth = build_test_git_auth_config().expect("build test git config");
+    let root = tempfile::tempdir().expect("create test directory");
+    let remote = root.path().join("remote.git");
+    let worktree = root.path().join("worktree");
+    let remote_path = remote.to_str().expect("remote path");
+    let worktree_path = worktree.to_str().expect("worktree path");
+    run_git(&["init", "--bare", "--", remote_path], None, &auth).expect("init remote");
+    run_git(&["init", "--", worktree_path], None, &auth).expect("init worktree");
+    std::fs::write(worktree.join("report.html"), "<!doctype html>").expect("write report");
+    run_git(&["add", "report.html"], Some(&worktree), &auth).expect("stage report");
+    run_git(
+        &[
+            "-c",
+            "user.name=Buzz Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "Add report",
+        ],
+        Some(&worktree),
+        &auth,
+    )
+    .expect("commit report");
+    let commit = run_git(&["rev-parse", "HEAD"], Some(&worktree), &auth)
+        .expect("resolve commit")
+        .trim()
+        .to_string();
+    run_git(
+        &["push", remote_path, "HEAD:refs/heads/comparison"],
+        Some(&worktree),
+        &auth,
+    )
+    .expect("push branch");
+
+    let checkout = root.path().join("checkout");
+    checkout_project_repo(
+        &checkout,
+        remote_path,
+        None,
+        Some("refs/nostr/missing"),
+        Some(&commit),
+        &auth,
+    )
+    .expect("checkout by commit");
+
+    assert_eq!(
+        read_preview_content(&checkout, "report.html", None).as_deref(),
+        Some("<!doctype html>")
+    );
+}

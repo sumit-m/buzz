@@ -95,11 +95,24 @@ pub(crate) fn checkout_project_repo(
             None,
             auth,
         )?;
-        run_git(
+        let fetched = run_git(
             &["fetch", "--depth=100", "origin", fetch_ref],
             Some(repo_dir),
             auth,
-        )?;
+        );
+        // A PR pushed as a plain branch has no `refs/nostr/<id>` on the relay;
+        // its commit is still reachable, as the diff view already relies on.
+        match (fetched, target_commit) {
+            (Ok(_), _) => {}
+            (Err(_), Some(commit)) if target_ref.is_some() => {
+                run_git(
+                    &["fetch", "--depth=100", "origin", commit],
+                    Some(repo_dir),
+                    auth,
+                )?;
+            }
+            (Err(error), _) => return Err(error),
+        }
         if let Some(expected_commit) = target_commit {
             let fetched_commit = run_git(&["rev-parse", "FETCH_HEAD"], Some(repo_dir), auth)
                 .ok()

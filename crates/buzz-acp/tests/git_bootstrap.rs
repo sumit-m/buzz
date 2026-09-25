@@ -28,7 +28,8 @@ cd "$PROBE_DIR"
 test -z "${NOSTR_PRIVATE_KEY:-}"
 test "$(git config test.inherited)" = preserved
 test "$(git config user.name)" = 'Git Probe'
-test "$(git config --get-urlmatch credential.helper https://relay.invalid/git/test/repo)" = nostr
+case "$(git config --get-urlmatch credential.helper https://relay.invalid/git/test/repo)" in /*/git-credential-nostr) ;; *) exit 1 ;; esac
+test -x "$(git config gpg.x509.program)"
 ! git config --get-urlmatch credential.helper https://unrelated.invalid/git/test/repo
 ! git config --get-urlmatch credential.helper https://relay.invalid/other/repo
 ! git config --get-urlmatch credential.helper https://relay.invalid/git-other/repo

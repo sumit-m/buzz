@@ -32,10 +32,15 @@ impl GitEnvironment {
             == GitIdentityMode::Agent;
         let dir = tempfile::Builder::new().prefix("buzz-acp-git-").tempdir()?;
         set_owner_only(dir.path())?;
-        symlink(executable, &dir.path().join("git-credential-nostr"))?;
-        if agent {
-            symlink(executable, &dir.path().join("git-sign-nostr"))?;
-        }
+        // Git is pointed at these by absolute path: agent runtimes' shell tools
+        // may rebuild PATH, and a helper found only via PATH then vanishes.
+        let credential_helper =
+            git_path(&symlink(executable, &dir.path().join("git-credential-nostr"))?);
+        let sign_program = if agent {
+            git_path(&symlink(executable, &dir.path().join("git-sign-nostr"))?)
+        } else {
+            String::new()
+        };
         let keyfile = dir.path().join(".nostr-key");
         let secret = Zeroizing::new(keys.secret_key().to_secret_hex());
         write_keyfile_atomic(&keyfile, secret.as_bytes())?;
@@ -46,6 +51,8 @@ impl GitEnvironment {
                 .to_owned(),
             pubkey_hex: keys.public_key().to_hex(),
             npub: keys.public_key().to_bech32()?,
+            credential_helper,
+            sign_program,
         };
         let mut relay = url::Url::parse(relay_url)?;
         let scheme = match relay.scheme() {
@@ -83,7 +90,7 @@ impl GitEnvironment {
                         .any(|(managed, _)| same_config_key(managed, key))
             });
         }
-        let mut env = build_git_env(relay, &managed, inherited);
+        let mut env = build_git_env(relay, &info.credential_helper, &managed, inherited);
         let mut paths = vec![dir.path().to_path_buf()];
         paths.extend(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),
@@ -112,6 +119,8 @@ struct KeyInfo {
     keyfile_path: String,
     pubkey_hex: String,
     npub: String,
+    credential_helper: String,
+    sign_program: String,
 }
 
 fn inherited_config() -> anyhow::Result<Vec<(String, String)>> {
@@ -367,7 +376,7 @@ fn identity_entries(
     ];
     entries.extend([
         ("gpg.format".into(), "x509".into()),
-        ("gpg.x509.program".into(), "git-sign-nostr".into()),
+        ("gpg.x509.program".into(), info.sign_program.clone()),
         ("commit.gpgSign".into(), "true".into()),
         ("tag.gpgSign".into(), "true".into()),
         ("user.signingkey".into(), info.pubkey_hex.clone()),
@@ -379,6 +388,7 @@ fn identity_entries(
 /// Compose a complete config block, including the caller's entries, for env-cleared MCP children.
 fn build_git_env(
     relay: &str,
+    credential_helper: &str,
     managed: &[(String, String)],
     mut entries: Vec<(String, String)>,
 ) -> Vec<(String, String)> {
@@ -388,7 +398,7 @@ fn build_git_env(
         let scope = format!("credential.{base}/git");
         entries.extend([
             (format!("{scope}.helper"), String::new()),
-            (format!("{scope}.helper"), "nostr".into()),
+            (format!("{scope}.helper"), credential_helper.to_owned()),
             (format!("{scope}.useHttpPath"), "true".into()),
         ]);
     }
@@ -427,17 +437,26 @@ fn set_owner_only(_: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Git for Windows runs helpers through MinGW bash, which treats `\` as an
+/// escape; forward slashes work on every platform git supports.
+fn git_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// Link `src` at `dst` and return the path actually created.
 #[cfg(unix)]
-fn symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(src, dst)
+fn symlink(src: &Path, dst: &Path) -> std::io::Result<std::path::PathBuf> {
+    std::os::unix::fs::symlink(src, dst)?;
+    Ok(dst.to_path_buf())
 }
 
 #[cfg(not(unix))]
-fn symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+fn symlink(src: &Path, dst: &Path) -> std::io::Result<std::path::PathBuf> {
     // No symlinks without elevation on Windows; copy instead. The target needs
     // a .exe extension or PATH lookup (via PATHEXT) won't treat it as runnable.
     let dst = dst.with_extension("exe");
-    std::fs::copy(src, dst).map(|_| ())
+    std::fs::copy(src, &dst)?;
+    Ok(dst)
 }
 
 #[cfg(test)]
@@ -455,6 +474,8 @@ mod git_user_name_tests {
             keyfile_path: "/tmp/.nostr-key".into(),
             pubkey_hex: PUBKEY_HEX.into(),
             npub: NPUB.into(),
+            credential_helper: "/tmp/buzz-acp-git/git-credential-nostr".into(),
+            sign_program: "/tmp/buzz-acp-git/git-sign-nostr".into(),
         }
     }
 
@@ -462,6 +483,7 @@ mod git_user_name_tests {
         let relay = "https://localhost:3000";
         build_git_env(
             relay,
+            &key_info().credential_helper,
             &identity_entries(&key_info(), relay, display_name),
             vec![],
         )
@@ -729,7 +751,12 @@ mod git_user_name_tests {
 
     #[test]
     fn test_loopback_relay_scopes_the_helper_to_both_host_spellings() {
-        let env = build_git_env("http://localhost:3000", &identity_entries(&key_info(), "http://localhost:3000", None), vec![]);
+        let env = build_git_env(
+            "http://localhost:3000",
+            &key_info().credential_helper,
+            &identity_entries(&key_info(), "http://localhost:3000", None),
+            vec![],
+        );
         for base in ["http://localhost:3000", "http://127.0.0.1:3000"] {
             assert_eq!(
                 git_config(&env, &format!("credential.{base}/git.useHttpPath")).as_deref(),
@@ -741,7 +768,12 @@ mod git_user_name_tests {
 
     #[test]
     fn test_remote_relay_scopes_the_helper_to_its_own_host_only() {
-        let env = build_git_env("https://relay.example.com", &identity_entries(&key_info(), "https://relay.example.com", None), vec![]);
+        let env = build_git_env(
+            "https://relay.example.com",
+            &key_info().credential_helper,
+            &identity_entries(&key_info(), "https://relay.example.com", None),
+            vec![],
+        );
         let scopes: Vec<_> = env
             .iter()
             .filter(|(_, v)| v.starts_with("credential.") && v.ends_with(".useHttpPath"))

@@ -1,5 +1,4 @@
 import { Eye } from "lucide-react";
-import * as React from "react";
 
 import type {
   ProjectPullRequest,
@@ -8,7 +7,7 @@ import type {
 import { getProjectRepoFileContent } from "@/shared/api/projectGit";
 import type { ProjectRepoDiffFile } from "@/shared/api/types";
 import { isHtmlFilename } from "@/shared/ui/markdown/htmlReport";
-import { HtmlReportDialog } from "@/shared/ui/markdown/HtmlReportDialog";
+import { useHtmlDocumentViewer } from "@/shared/ui/markdown/HtmlReportDialog";
 
 const MAX_RENDER_BYTES = 8 * 1024 * 1024;
 
@@ -26,7 +25,7 @@ export function PullRequestHtmlViewButton({
   project: Project;
   pullRequest: ProjectPullRequest;
 }) {
-  const [viewing, setViewing] = React.useState(false);
+  const viewer = useHtmlDocumentViewer();
   const cloneUrl = pullRequest.cloneUrls[0] ?? project.cloneUrls[0];
   if (!cloneUrl || !isHtmlFilename(file.path) || isDeletedFile(file)) {
     return null;
@@ -38,33 +37,32 @@ export function PullRequestHtmlViewButton({
       <button
         className="flex items-center gap-1 rounded px-1.5 py-0.5 text-foreground hover:bg-muted"
         data-testid="pull-request-html-view"
-        onClick={() => setViewing(true)}
+        onClick={() =>
+          viewer.open({
+            filename,
+            load: async () => {
+              const html = await getProjectRepoFileContent({
+                cloneUrl,
+                defaultBranch: project.defaultBranch,
+                maxBytes: MAX_RENDER_BYTES,
+                path: file.path,
+                targetCommit: pullRequest.commit ?? null,
+                targetRef: `refs/nostr/${pullRequest.id}`,
+              });
+              if (html == null) {
+                throw new Error("the file is not text or is larger than 8 MB");
+              }
+              return html;
+            },
+            loadKey: `${pullRequest.id}:${pullRequest.commit}:${file.path}`,
+          })
+        }
         type="button"
       >
         <Eye className="h-3.5 w-3.5" />
         View
       </button>
-      {viewing ? (
-        <HtmlReportDialog
-          filename={filename}
-          load={async () => {
-            const html = await getProjectRepoFileContent({
-              cloneUrl,
-              defaultBranch: project.defaultBranch,
-              maxBytes: MAX_RENDER_BYTES,
-              path: file.path,
-              targetCommit: pullRequest.commit ?? null,
-              targetRef: `refs/nostr/${pullRequest.id}`,
-            });
-            if (html == null) {
-              throw new Error("the file is not text or is larger than 8 MB");
-            }
-            return html;
-          }}
-          loadKey={`${pullRequest.id}:${pullRequest.commit}:${file.path}`}
-          onClose={() => setViewing(false)}
-        />
-      ) : null}
+      {viewer.dialog}
     </>
   );
 }

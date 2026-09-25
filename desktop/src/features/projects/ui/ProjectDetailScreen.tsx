@@ -2,6 +2,10 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import {
+  closeHtmlDocument,
+  useHtmlDocumentHost,
+} from "@/shared/ui/markdown/htmlDocumentPanel";
 import { useTerminalContextOverride } from "@/app/TerminalContextOverrideContext";
 import {
   type Project,
@@ -143,6 +147,9 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   const [selectedIssueId, setSelectedIssueId] = React.useState<string | null>(
     issueId ?? null,
   );
+  const htmlDocument = useHtmlDocumentHost();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new selection closes the document
+  React.useEffect(closeHtmlDocument, [selectedPullRequestId]);
   const [createIssueRequestKey, setCreateIssueRequestKey] = React.useState(0);
   const [createPullRequestRequestKey, setCreatePullRequestRequestKey] =
     React.useState(0);
@@ -843,6 +850,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
                   contextItem={contextItem}
                   createIssuePending={createIssueMutation.isPending}
                   detachedRepository={detachedRepositoryPanel}
+                  htmlDocument={htmlDocument}
                   files={displayedRepositoryFiles}
                   identityPubkey={identityPubkey}
                   issues={issuesQuery.data ?? []}
@@ -873,7 +881,8 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
               )
             }
             fallbackPanelOpen={
-              !profilePanelPubkey && !repositoryPanel.collapsed
+              !profilePanelPubkey &&
+              (!repositoryPanel.collapsed || htmlDocument !== null)
             }
             fallbackPanelResizing={activeRightPanelWidth.isResizing}
             fallbackPanelWidthPx={activeRightPanelWidth.widthPx}

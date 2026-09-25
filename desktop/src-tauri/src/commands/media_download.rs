@@ -31,6 +31,26 @@ const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60)
 /// - URL scheme is `https` (or `http` for localhost dev)
 /// - URL origin matches the relay base URL
 /// - URL path matches `/media/{hash}.{ext}`
+fn same_loopback_origin(a: &url::Url, b: &url::Url) -> bool {
+    let loopback =
+        |url: &url::Url| matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    loopback(a)
+        && loopback(b)
+        && a.scheme() == b.scheme()
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
+fn token_base_for(url: &str, relay_base: &str) -> String {
+    match (url::Url::parse(url), url::Url::parse(relay_base)) {
+        (Ok(target), Ok(base))
+            if target.origin() != base.origin() && same_loopback_origin(&target, &base) =>
+        {
+            target.origin().ascii_serialization()
+        }
+        _ => relay_base.to_string(),
+    }
+}
+
 pub(super) fn validate_download_url(url: &str, relay_base: &str) -> Result<(), String> {
     let parsed = url::Url::parse(url).map_err(|_| "invalid URL".to_string())?;
     let base = url::Url::parse(relay_base).map_err(|_| "invalid relay base URL".to_string())?;
@@ -47,8 +67,10 @@ pub(super) fn validate_download_url(url: &str, relay_base: &str) -> Result<(), S
         _ => return Err("download URL must use HTTPS".to_string()),
     }
 
-    // Origin must match relay.
-    if parsed.origin() != base.origin() {
+    // Origin must match relay. A loopback relay is one server however it is
+    // spelled: it stamps upload URLs with the uploader's Host, so an agent
+    // reaching it as 127.0.0.1 hands out links a `localhost` desktop must accept.
+    if parsed.origin() != base.origin() && !same_loopback_origin(&parsed, &base) {
         return Err("download URL must match the relay origin".to_string());
     }
 
@@ -269,7 +291,11 @@ pub(super) async fn fetch_blob_bytes_with_cap(
     // `validate_download_url`, satisfying the mint_media_get_auth safety
     // contract (the token never leaves the relay origin).
     let relay_base = relay_api_base_url_with_override(state);
-    if let Some(auth) = mint_media_get_auth(state, &relay_base) {
+    // The relay checks the token against the host it was reached at, so a
+    // loopback URL spelled differently from the configured base is signed for
+    // the host actually contacted — the same relay, per `validate_download_url`.
+    let auth_base = token_base_for(url, &relay_base);
+    if let Some(auth) = mint_media_get_auth(state, &auth_base) {
         req = req.header("authorization", auth);
     }
 
@@ -824,6 +850,36 @@ mod tests {
             "http://localhost:3000",
         )
         .is_ok());
+    }
+
+    #[test]
+    fn test_validate_download_url_loopback_spellings_are_one_relay() {
+        assert!(validate_download_url(
+            "http://127.0.0.1:3000/media/abc.html",
+            "http://localhost:3000",
+        )
+        .is_ok());
+        // A different port is a different server.
+        assert!(validate_download_url(
+            "http://127.0.0.1:8080/media/abc.html",
+            "http://localhost:3000",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn test_token_is_minted_for_the_loopback_host_contacted() {
+        assert_eq!(
+            super::token_base_for(
+                "http://127.0.0.1:3000/media/abc.html",
+                "http://localhost:3000"
+            ),
+            "http://127.0.0.1:3000"
+        );
+        assert_eq!(
+            super::token_base_for("https://relay.example.com/media/abc.jpg", RELAY_BASE),
+            RELAY_BASE
+        );
     }
 
     #[test]

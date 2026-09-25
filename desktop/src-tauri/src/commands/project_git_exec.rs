@@ -377,10 +377,10 @@ fn validate_clone_url_against_relay(clone_url: &str, relay_base: &str) -> Result
     let clone = Url::parse(clone_url).map_err(|error| format!("invalid clone URL: {error}"))?;
     let relay = Url::parse(relay_base)
         .map_err(|error| format!("configured relay URL is invalid: {error}"))?;
-    if clone.scheme() != relay.scheme()
-        || clone.host_str() != relay.host_str()
-        || clone.port_or_known_default() != relay.port_or_known_default()
-    {
+    let same_origin = clone.scheme() == relay.scheme()
+        && clone.host_str() == relay.host_str()
+        && clone.port_or_known_default() == relay.port_or_known_default();
+    if !same_origin && !crate::relay::same_loopback_origin(&clone, &relay) {
         return Err("clone URL must use the active workspace relay".into());
     }
     let relay_path = relay.path().trim_end_matches('/');
@@ -507,6 +507,15 @@ mod tests {
             "https://relay.example/prefix",
         )
         .is_err());
+    }
+
+    #[test]
+    fn clone_url_accepts_either_loopback_spelling_of_the_relay() {
+        let owner = "a".repeat(64);
+        let agent_clone = format!("http://127.0.0.1:3000/git/{owner}/repo");
+        assert!(validate_clone_url_against_relay(&agent_clone, "http://localhost:3000").is_ok());
+        assert!(validate_clone_url_against_relay(&agent_clone, "http://localhost:3001").is_err());
+        assert!(validate_clone_url_against_relay(&agent_clone, "https://localhost:3000").is_err());
     }
 
     #[test]

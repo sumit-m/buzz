@@ -60,6 +60,18 @@ pub fn relay_ws_url_with_override(state: &AppState) -> String {
 
 /// Returns the relay HTTP API base URL, checking the workspace override first.
 /// Precedence: workspace override > env vars > build-time vars > default.
+/// A loopback relay is one server however it is spelled: it stamps URLs with
+/// the client's Host, so an agent reaching it as 127.0.0.1 hands out links a
+/// `localhost` desktop must treat as its own relay.
+pub(crate) fn same_loopback_origin(a: &url::Url, b: &url::Url) -> bool {
+    let loopback =
+        |url: &url::Url| matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    loopback(a)
+        && loopback(b)
+        && a.scheme() == b.scheme()
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
 pub fn relay_api_base_url_with_override(state: &AppState) -> String {
     match workspace_relay_override(state) {
         Some(url) => relay_http_base_url(&url),

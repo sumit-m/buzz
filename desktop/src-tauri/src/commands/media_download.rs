@@ -25,25 +25,13 @@ pub(super) const MAX_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
 /// Download request timeout.
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Validate that a URL is a legitimate relay media URL.
-///
-/// Ensures:
-/// - URL scheme is `https` (or `http` for localhost dev)
-/// - URL origin matches the relay base URL
-/// - URL path matches `/media/{hash}.{ext}`
-fn same_loopback_origin(a: &url::Url, b: &url::Url) -> bool {
-    let loopback =
-        |url: &url::Url| matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
-    loopback(a)
-        && loopback(b)
-        && a.scheme() == b.scheme()
-        && a.port_or_known_default() == b.port_or_known_default()
-}
-
+/// The origin to sign a read token for: the relay's, or the loopback host
+/// actually contacted when the URL spells the relay differently.
 fn token_base_for(url: &str, relay_base: &str) -> String {
     match (url::Url::parse(url), url::Url::parse(relay_base)) {
         (Ok(target), Ok(base))
-            if target.origin() != base.origin() && same_loopback_origin(&target, &base) =>
+            if target.origin() != base.origin()
+                && crate::relay::same_loopback_origin(&target, &base) =>
         {
             target.origin().ascii_serialization()
         }
@@ -51,6 +39,12 @@ fn token_base_for(url: &str, relay_base: &str) -> String {
     }
 }
 
+/// Validate that a URL is a legitimate relay media URL.
+///
+/// Ensures:
+/// - URL scheme is `https` (or `http` for localhost dev)
+/// - URL origin matches the relay base URL
+/// - URL path matches `/media/{hash}.{ext}`
 pub(super) fn validate_download_url(url: &str, relay_base: &str) -> Result<(), String> {
     let parsed = url::Url::parse(url).map_err(|_| "invalid URL".to_string())?;
     let base = url::Url::parse(relay_base).map_err(|_| "invalid relay base URL".to_string())?;
@@ -70,7 +64,7 @@ pub(super) fn validate_download_url(url: &str, relay_base: &str) -> Result<(), S
     // Origin must match relay. A loopback relay is one server however it is
     // spelled: it stamps upload URLs with the uploader's Host, so an agent
     // reaching it as 127.0.0.1 hands out links a `localhost` desktop must accept.
-    if parsed.origin() != base.origin() && !same_loopback_origin(&parsed, &base) {
+    if parsed.origin() != base.origin() && !crate::relay::same_loopback_origin(&parsed, &base) {
         return Err("download URL must match the relay origin".to_string());
     }
 

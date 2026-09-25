@@ -28,28 +28,42 @@ export function downloadRelayFile(href: string, filename: string) {
   );
 }
 
+async function loadRelayHtml(href: string, signal: AbortSignal) {
+  const bytes = await fetchMediaBytes(href, signal);
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 /**
- * Shows a relay-hosted HTML file in the app. A browser cannot open relay media
- * (reads need a member's signature), so the bytes come through the native
- * authenticated fetch and render in a frame with no scripts and no network.
+ * Shows an HTML file in the app, rendered in a frame with no scripts and no
+ * network. The caller fetches it with its own credentials: relay media and
+ * relay git both need a member's signature, which a browser does not have.
  */
 export function HtmlReportDialog({
-  href,
   filename,
+  load,
+  loadKey,
   onClose,
+  onDownload,
 }: {
-  href: string;
   filename: string;
+  load: (signal: AbortSignal) => Promise<string>;
+  /** Changes when `load` would return a different file. */
+  loadKey: string;
   onClose: () => void;
+  onDownload?: () => void;
 }) {
   const [state, setState] = React.useState<LoadState>({ phase: "loading" });
+  const loadRef = React.useRef(load);
+  loadRef.current = load;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: loadKey identifies the file
   React.useEffect(() => {
     const controller = new AbortController();
     setState({ phase: "loading" });
-    fetchMediaBytes(href, controller.signal)
-      .then((bytes) => {
-        const html = new TextDecoder("utf-8").decode(bytes);
+    loadRef
+      .current(controller.signal)
+      .then((html) => {
+        if (controller.signal.aborted) return;
         setState({ phase: "ready", html: withReportCsp(html) });
       })
       .catch((err: unknown) => {
@@ -60,7 +74,7 @@ export function HtmlReportDialog({
         });
       });
     return () => controller.abort();
-  }, [href]);
+  }, [loadKey]);
 
   return (
     <Dialog
@@ -75,19 +89,21 @@ export function HtmlReportDialog({
             <DialogTitle className="min-w-0 truncate text-sm font-medium">
               {filename}
             </DialogTitle>
-            <Button
-              className="ml-auto h-7 px-2"
-              onClick={() => downloadRelayFile(href, filename)}
-              size="sm"
-              type="button"
-              variant="ghost"
-            >
-              <Download className="h-4 w-4" />
-              Download
-            </Button>
+            {onDownload ? (
+              <Button
+                className="ml-auto h-7 px-2"
+                onClick={onDownload}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                <Download className="h-4 w-4" />
+                Download
+              </Button>
+            ) : null}
           </div>
           <DialogDescription className="sr-only">
-            HTML attachment preview
+            HTML file preview
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 bg-white">
@@ -112,6 +128,27 @@ export function HtmlReportDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** A relay-hosted HTML file (an attachment or a plain link) in the viewer. */
+export function RelayHtmlDialog({
+  filename,
+  href,
+  onClose,
+}: {
+  filename: string;
+  href: string;
+  onClose: () => void;
+}) {
+  return (
+    <HtmlReportDialog
+      filename={filename}
+      load={(signal) => loadRelayHtml(href, signal)}
+      loadKey={href}
+      onClose={onClose}
+      onDownload={() => downloadRelayFile(href, filename)}
+    />
   );
 }
 
@@ -143,7 +180,7 @@ export function HtmlReportLink({
         {children}
       </a>
       {viewing ? (
-        <HtmlReportDialog
+        <RelayHtmlDialog
           filename={filename}
           href={href}
           onClose={() => setViewing(false)}

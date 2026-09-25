@@ -1,4 +1,6 @@
-use super::super::project_git_file_content::validate_repo_file_path;
+use super::super::project_git_file_content::{
+    content_cap, read_text_content, validate_repo_file_path,
+};
 use super::*;
 
 #[test]
@@ -108,4 +110,28 @@ fn parse_worktree_files_counts_only_files_toward_eager_preview_limit() {
 
     assert_eq!(files.len(), MAX_EAGER_FILE_PREVIEWS);
     assert!(files.iter().all(|file| file.preview_content.is_some()));
+}
+
+#[test]
+fn rendering_a_file_reads_past_the_preview_cap_up_to_the_render_cap() {
+    let repo_dir = tempfile::tempdir().expect("create temporary repository");
+    let report = "x".repeat(200 * 1024);
+    std::fs::write(repo_dir.path().join("report.html"), &report).expect("write report");
+
+    assert_eq!(
+        read_preview_content(repo_dir.path(), "report.html", None),
+        None
+    );
+    assert_eq!(
+        read_text_content(
+            repo_dir.path(),
+            "report.html",
+            None,
+            content_cap(Some(u64::MAX))
+        )
+        .map(|content| content.len()),
+        Some(report.len())
+    );
+    assert_eq!(content_cap(None), 64 * 1024);
+    assert_eq!(content_cap(Some(u64::MAX)), 8 * 1024 * 1024);
 }

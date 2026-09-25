@@ -4,7 +4,7 @@ import { Download, Eye, FileText } from "lucide-react";
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
 
 import { isHtmlFilename } from "./htmlReport";
-import { downloadRelayFile, HtmlReportDialog } from "./HtmlReportDialog";
+import { downloadRelayFile, RelayHtmlDialog } from "./HtmlReportDialog";
 
 /** Human-readable byte size: "820 B", "12.4 KB", "3.1 MB". */
 function formatFileSize(bytes: number): string {
@@ -79,7 +79,7 @@ export function FileCard({
         )}
       </button>
       {viewing ? (
-        <HtmlReportDialog
+        <RelayHtmlDialog
           filename={filename}
           href={href}
           onClose={() => setViewing(false)}

@@ -183,6 +183,8 @@ export async function getProjectRepoFileContent(input: {
   targetRef?: string | null;
   targetCommit?: string | null;
   path: string;
+  /** Read up to this many bytes (capped natively) instead of the preview limit. */
+  maxBytes?: number | null;
 }): Promise<string | null> {
   return invokeTauri<string | null>("get_project_repo_file_content", {
     cloneUrl: input.cloneUrl,
@@ -190,6 +192,7 @@ export async function getProjectRepoFileContent(input: {
     targetRef: input.targetRef ?? null,
     targetCommit: input.targetCommit ?? null,
     path: input.path,
+    maxBytes: input.maxBytes ?? null,
   });
 }
 

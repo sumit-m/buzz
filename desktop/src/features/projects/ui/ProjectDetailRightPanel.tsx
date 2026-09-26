@@ -36,7 +36,6 @@ export function ProjectDetailRightPanel({
     return (
       <ProjectHtmlDocumentPanel
         canResetWidth={repositoryProps.canResetWidth}
-        detached={detachedRepository}
         doc={htmlDocument}
         onResetWidth={repositoryProps.onResetWidth}
         onResizeStart={repositoryProps.onResizeStart}

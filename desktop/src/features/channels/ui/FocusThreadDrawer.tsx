@@ -303,7 +303,12 @@ export function FocusThreadDrawer({
           x: travelPx,
         }}
         initial={{ opacity: 0, x: travelPx }}
-        style={{ left: THREAD_FOCUS_SLIVER_WIDTH_PX }}
+        style={
+          {
+            left: THREAD_FOCUS_SLIVER_WIDTH_PX,
+            "--panel-top-radius": "1rem",
+          } as React.CSSProperties
+        }
         transition={
           prefersReducedMotion ? REDUCED_MOTION_TRANSITION : ENTER_TRANSITION
         }

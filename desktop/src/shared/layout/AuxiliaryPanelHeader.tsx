@@ -97,6 +97,7 @@ function AuxiliaryPanelHeaderBackdrop({
       aria-hidden="true"
       className={cn(
         "pointer-events-none absolute inset-x-0 top-0 z-40 h-13",
+        PANEL_TOP_RADIUS_CLASS,
         getAuxiliaryPanelSurfaceClass(surface),
       )}
       data-testid="auxiliary-panel-header-backdrop"
@@ -105,6 +106,12 @@ function AuxiliaryPanelHeaderBackdrop({
 }
 
 /** Title/action row for right auxiliary panels across docked and standalone modes. */
+/**
+ * Blurred header layers escape a rounded parent's clip in Chromium, painting
+ * square corners over it; they take the radius a drawer hands down instead.
+ */
+const PANEL_TOP_RADIUS_CLASS = "rounded-t-[var(--panel-top-radius,0px)]";
+
 export function AuxiliaryPanelHeader({
   backdrop = false,
   backdropSurface = "default",
@@ -135,6 +142,7 @@ export function AuxiliaryPanelHeader({
         <div
           className={cn(
             "flex cursor-default select-none items-center",
+            PANEL_TOP_RADIUS_CLASS,
             isSinglePanel
               ? cn(
                   "relative z-41 -mb-13 min-h-13 shrink-0 gap-2.5 px-4 py-2 sm:pr-3",

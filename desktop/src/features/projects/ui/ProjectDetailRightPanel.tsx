@@ -5,9 +5,7 @@ import { useCommunities } from "@/features/communities/useCommunities";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import type { ProjectDetailAgentContext } from "@/features/projects/lib/projectDetailAgentContext";
-import type { HtmlDocument } from "@/shared/ui/markdown/htmlDocumentPanel";
 import { ProjectAgentChatPanel } from "./ProjectAgentChatPanel";
-import { ProjectHtmlDocumentPanel } from "./ProjectHtmlDocumentPanel";
 import { ProjectRepositoryActionsPanel } from "./ProjectRepositoryActionsPanel";
 import type { ProjectRightPanelMode } from "./ProjectRightPanelControls";
 
@@ -18,31 +16,17 @@ type RepositoryPanelProps = React.ComponentProps<
 export function ProjectDetailRightPanel({
   context,
   detachedRepository = false,
-  htmlDocument,
   mode,
   onClose,
   ...repositoryProps
 }: RepositoryPanelProps & {
   context: ProjectDetailAgentContext;
   detachedRepository?: boolean;
-  /** An open HTML document takes the panel until it is closed. */
-  htmlDocument?: HtmlDocument | null;
   mode: ProjectRightPanelMode;
   onClose: () => void;
 }) {
   const { activeCommunity } = useCommunities();
   const identityQuery = useIdentityQuery();
-  if (htmlDocument) {
-    return (
-      <ProjectHtmlDocumentPanel
-        canResetWidth={repositoryProps.canResetWidth}
-        doc={htmlDocument}
-        onResetWidth={repositoryProps.onResetWidth}
-        onResizeStart={repositoryProps.onResizeStart}
-        widthPx={repositoryProps.widthPx}
-      />
-    );
-  }
   if (mode === "chat") {
     // Remount on community identity as well as repository address: the same
     // repo coordinate can exist in two communities, and retained panel state

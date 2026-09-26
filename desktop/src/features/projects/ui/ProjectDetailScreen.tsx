@@ -67,6 +67,7 @@ import { ProjectBranchActionDialogs } from "./ProjectBranchActionDialogs";
 import { ProjectDetailChrome } from "./ProjectDetailChrome";
 import { ProjectConversationPanelController } from "./ProjectConversationPanelContext";
 import { ProjectDetailRightPanel } from "./ProjectDetailRightPanel";
+import { ProjectHtmlDocumentDrawer } from "./ProjectHtmlDocumentDrawer";
 import { ProjectDetailUnavailableState } from "./ProjectDetailUnavailableState";
 import { ProjectChannelHome } from "./ProjectChannelHome";
 import { ProjectRightPanelControls } from "./ProjectRightPanelControls";
@@ -852,7 +853,6 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
                   contextItem={contextItem}
                   createIssuePending={createIssueMutation.isPending}
                   detachedRepository={detachedRepositoryPanel}
-                  htmlDocument={htmlDocument}
                   files={displayedRepositoryFiles}
                   identityPubkey={identityPubkey}
                   issues={issuesQuery.data ?? []}
@@ -883,8 +883,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
               )
             }
             fallbackPanelOpen={
-              !profilePanelPubkey &&
-              (!repositoryPanel.collapsed || htmlDocument !== null)
+              !profilePanelPubkey && !repositoryPanel.collapsed
             }
             fallbackPanelResizing={activeRightPanelWidth.isResizing}
             fallbackPanelWidthPx={activeRightPanelWidth.widthPx}
@@ -1014,6 +1013,10 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
                 widthPx={threadPanelWidth.widthPx}
               />
             ) : null}
+            <ProjectHtmlDocumentDrawer
+              doc={htmlDocument}
+              projectName={repository.name}
+            />
           </ProjectConversationPanelController>
         </div>
       </ProfilePanelProvider>

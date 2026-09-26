@@ -2030,6 +2030,7 @@ pub(crate) async fn run_isolated_prompt(
             huddle_instructions: None,
             canvas: None,
             facts: None,
+            repositories: None,
             name: None,
             scope: None,
             channel_type: None,

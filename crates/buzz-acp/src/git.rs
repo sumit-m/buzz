@@ -779,7 +779,10 @@ mod git_user_name_tests {
             .filter(|(_, v)| v.starts_with("credential.") && v.ends_with(".useHttpPath"))
             .map(|(_, v)| v.as_str())
             .collect();
-        assert_eq!(scopes, ["credential.https://relay.example.com/git.useHttpPath"]);
+        assert_eq!(
+            scopes,
+            ["credential.https://relay.example.com/git.useHttpPath"]
+        );
     }
 
     #[test]

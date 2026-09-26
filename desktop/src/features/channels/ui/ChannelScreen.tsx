@@ -84,7 +84,7 @@ import { useChannelRouteTarget } from "./useChannelRouteTarget";
 import { useChannelOpenReadState } from "./useChannelOpenReadState";
 import { useChannelUnreadState } from "./useChannelUnreadState";
 import type { ChannelScreenProps } from "./ChannelScreen.types";
-import { GuardedChannelPane } from "./GuardedChannelPane"; import { useHtmlDocumentAuxiliary } from "./useHtmlDocumentAuxiliary"; import { useNavigationGuard } from "./useNavigationGuard"; import * as searchForwarding from "./searchTargetForwarding";
+import { GuardedChannelPane } from "./GuardedChannelPane"; import { useHtmlDocumentAuxiliary } from "./HtmlDocumentPanel"; import { useNavigationGuard } from "./useNavigationGuard"; import * as searchForwarding from "./searchTargetForwarding";
 const EMPTY_RELAY_EVENTS: RelayEvent[] = [];
 export function ChannelScreen({
   activeChannel,

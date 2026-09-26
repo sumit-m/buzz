@@ -64,3 +64,26 @@ export function withReportCsp(html: string): string {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${REPORT_CSP}">`;
   return `${prologue}${meta}${html.slice(prologue.length)}`;
 }
+
+const HTML_OPEN_TAG_RE = /<html\b[^>]*>/i;
+const THEME_ATTR_RE = /\sdata-theme\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/i;
+
+/**
+ * Tell the page which theme the viewer is in, as `data-theme` on `<html>`.
+ * A page that styles `:root[data-theme="dark"]` follows the app; one that
+ * does not is unaffected.
+ */
+export function withViewerTheme(html: string, isDark: boolean): string {
+  const theme = `data-theme="${isDark ? "dark" : "light"}"`;
+  const tag = HTML_OPEN_TAG_RE.exec(html);
+  if (!tag) {
+    const prologue = LEADING_PROLOGUE_RE.exec(html)?.[0] ?? "";
+    return `${prologue}<html ${theme}>${html.slice(prologue.length)}`;
+  }
+  const opened = tag[0]
+    .replace(THEME_ATTR_RE, "")
+    .replace(/^<html/i, `<html ${theme}`);
+  return (
+    html.slice(0, tag.index) + opened + html.slice(tag.index + tag[0].length)
+  );
+}

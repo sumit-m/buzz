@@ -5,7 +5,6 @@ export type HtmlDocument = {
   load: (signal: AbortSignal) => Promise<string>;
   /** Changes when `load` would return a different file. */
   loadKey: string;
-  onDownload?: () => void;
 };
 
 let current: HtmlDocument | null = null;

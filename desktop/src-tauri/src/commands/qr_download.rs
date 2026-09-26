@@ -29,9 +29,45 @@ pub async fn save_png_data_url(
     save_bytes_with_dialog(&app, &filename, "PNG image", &["png"], &bytes).await
 }
 
+fn html_filename(filename: &str) -> String {
+    let name = sanitize_filename(filename);
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".html") || lower.ends_with(".htm") {
+        name
+    } else {
+        format!("{name}.html")
+    }
+}
+
+/// Save an HTML document the viewer is showing through the native save-file
+/// dialog. The page came from the relay or a repository the viewer can read.
+#[tauri::command]
+pub async fn save_html_file(
+    html: String,
+    filename: String,
+    app: tauri::AppHandle,
+) -> Result<bool, String> {
+    let filename = html_filename(&filename);
+    save_bytes_with_dialog(
+        &app,
+        &filename,
+        "HTML page",
+        &["html", "htm"],
+        html.as_bytes(),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn html_filename_keeps_or_adds_the_html_extension() {
+        assert_eq!(html_filename("report.HTML"), "report.HTML");
+        assert_eq!(html_filename("dir/report.htm"), "report.htm");
+        assert_eq!(html_filename("report"), "report.html");
+    }
 
     #[test]
     fn decode_png_data_url_accepts_png_payload() {

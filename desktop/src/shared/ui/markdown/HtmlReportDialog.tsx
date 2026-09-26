@@ -3,8 +3,9 @@ import { Download, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { invokeTauri } from "@/shared/api/tauri";
-import { cn } from "@/shared/lib/cn";
 import { fetchMediaBytes } from "@/shared/api/tauriMedia";
+import { cn } from "@/shared/lib/cn";
+import { useTheme } from "@/shared/theme/ThemeProvider";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -15,7 +16,7 @@ import {
 } from "@/shared/ui/dialog";
 
 import { type HtmlDocument, openHtmlDocument } from "./htmlDocumentPanel";
-import { isHtmlFilename, withReportCsp } from "./htmlReport";
+import { isHtmlFilename, withReportCsp, withViewerTheme } from "./htmlReport";
 
 type LoadState =
   | { phase: "loading" }
@@ -39,35 +40,27 @@ export function relayHtmlDocument(
     load: async (signal) =>
       new TextDecoder("utf-8").decode(await fetchMediaBytes(href, signal)),
     loadKey: href,
-    onDownload: () => downloadRelayFile(href, filename),
   };
 }
 
 /**
- * Renders an HTML file in a frame with no scripts and no network. The
- * document fetches its own bytes: relay media and relay git both need a
- * member's signature, which a browser does not have.
+ * Fetches a document's HTML with its own credentials: relay media and relay
+ * git both need a member's signature, which a browser does not have.
  */
-export function HtmlReportFrame({
-  className,
-  doc,
-}: {
-  className?: string;
-  doc: HtmlDocument;
-}) {
+function useHtmlDocumentState(doc: HtmlDocument | null): LoadState {
   const [state, setState] = React.useState<LoadState>({ phase: "loading" });
-  const loadRef = React.useRef(doc.load);
-  loadRef.current = doc.load;
+  const loadRef = React.useRef(doc?.load);
+  loadRef.current = doc?.load;
+  const loadKey = doc?.loadKey;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: loadKey identifies the file
   React.useEffect(() => {
+    const load = loadRef.current;
+    if (!loadKey || !load) return;
     const controller = new AbortController();
     setState({ phase: "loading" });
-    loadRef
-      .current(controller.signal)
+    load(controller.signal)
       .then((html) => {
-        if (controller.signal.aborted) return;
-        setState({ phase: "ready", html: withReportCsp(html) });
+        if (!controller.signal.aborted) setState({ phase: "ready", html });
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
@@ -77,25 +70,40 @@ export function HtmlReportFrame({
         });
       });
     return () => controller.abort();
-  }, [doc.loadKey]);
+  }, [loadKey]);
 
+  return state;
+}
+
+/** Renders the HTML in a frame with no scripts and no network, in the app's theme. */
+function HtmlReportFrame({
+  className,
+  filename,
+  state,
+}: {
+  className?: string;
+  filename: string;
+  state: LoadState;
+}) {
+  const { isDark } = useTheme();
   return (
-    <div className={cn("h-full min-h-0 flex-1 bg-white", className)}>
+    <div className={cn("h-full min-h-0 flex-1", className)}>
       {state.phase === "ready" ? (
         <iframe
           className="h-full w-full border-0"
           data-testid="html-report-frame"
           referrerPolicy="no-referrer"
           sandbox=""
-          srcDoc={state.html}
-          title={doc.filename}
+          srcDoc={withViewerTheme(withReportCsp(state.html), isDark)}
+          style={{ colorScheme: isDark ? "dark" : "light" }}
+          title={filename}
         />
       ) : (
         <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
           {state.phase === "loading" ? (
             <Loader2 className="h-5 w-5 animate-spin" />
           ) : (
-            `Could not open ${doc.filename}: ${state.message}`
+            `Could not open ${filename}: ${state.message}`
           )}
         </div>
       )}
@@ -103,29 +111,75 @@ export function HtmlReportFrame({
   );
 }
 
-export function HtmlReportDownloadButton({ doc }: { doc: HtmlDocument }) {
-  if (!doc.onDownload) return null;
+function HtmlDocumentDownloadButton({
+  filename,
+  state,
+}: {
+  filename: string;
+  state: LoadState;
+}) {
   return (
     <Button
-      className="h-7 px-2"
-      onClick={doc.onDownload}
-      size="sm"
+      aria-label="Download"
+      className="shrink-0"
+      disabled={state.phase !== "ready"}
+      onClick={() => {
+        if (state.phase !== "ready") return;
+        invokeTauri("save_html_file", { filename, html: state.html }).catch(
+          (err: unknown) => {
+            toast.error(err instanceof Error ? err.message : "Download failed");
+          },
+        );
+      }}
+      size="icon"
+      title="Download"
       type="button"
       variant="ghost"
     >
-      <Download className="h-4 w-4" />
-      Download
+      <Download />
     </Button>
   );
 }
 
-export function HtmlReportDialog({
+export type HtmlDocumentParts = {
+  actions: React.ReactNode;
+  body: React.ReactNode;
+  title: string;
+};
+
+/**
+ * Everything the HTML viewer shows, whichever panel hosts it: the title, the
+ * header actions and the rendered page. Hosts supply only their chrome.
+ */
+export function useHtmlDocumentParts(
+  doc: HtmlDocument | null,
+): HtmlDocumentParts | null {
+  const state = useHtmlDocumentState(doc);
+  if (!doc) return null;
+  return {
+    actions: (
+      <HtmlDocumentDownloadButton filename={doc.filename} state={state} />
+    ),
+    body: (
+      <HtmlReportFrame
+        className="overflow-hidden rounded-lg border border-border/60"
+        filename={doc.filename}
+        state={state}
+      />
+    ),
+    title: doc.filename,
+  };
+}
+
+/** Where a screen has no panel to dock the viewer in. */
+function HtmlReportDialog({
   doc,
   onClose,
 }: {
   doc: HtmlDocument;
   onClose: () => void;
 }) {
+  const parts = useHtmlDocumentParts(doc);
   return (
     <Dialog
       onOpenChange={(open) => {
@@ -137,23 +191,23 @@ export function HtmlReportDialog({
         <DialogHeader className="shrink-0 border-b border-border/50 px-4 py-3 pr-14">
           <div className="flex items-center justify-between gap-2">
             <DialogTitle className="min-w-0 truncate text-sm font-medium">
-              {doc.filename}
+              {parts?.title}
             </DialogTitle>
-            <HtmlReportDownloadButton doc={doc} />
+            {parts?.actions}
           </div>
           <DialogDescription className="sr-only">
             HTML file preview
           </DialogDescription>
         </DialogHeader>
-        <HtmlReportFrame doc={doc} />
+        <div className="flex min-h-0 flex-1 flex-col p-4">{parts?.body}</div>
       </DialogContent>
     </Dialog>
   );
 }
 
 /**
- * Opens a document in the docked side panel, or in a dialog where the screen
- * has no panel to dock it in.
+ * Opens a document in the docked drawer, or in a dialog where the screen has
+ * no drawer to dock it in.
  */
 export function useHtmlDocumentViewer() {
   const [dialogDoc, setDialogDoc] = React.useState<HtmlDocument | null>(null);

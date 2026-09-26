@@ -6,6 +6,7 @@ import {
   isHtmlFilename,
   isRelayHtmlReport,
   withReportCsp,
+  withViewerTheme,
 } from "./htmlReport.ts";
 
 const HASH = "a".repeat(64);
@@ -73,4 +74,19 @@ test("withReportCsp places the policy after the doctype", () => {
 
 test("withReportCsp leads a document without a doctype", () => {
   assert.ok(withReportCsp("<img src=x>").startsWith("<meta http-equiv"));
+});
+
+test("withViewerTheme marks the html element with the app theme", () => {
+  assert.equal(
+    withViewerTheme('<!doctype html><html lang="en"><body>', true),
+    '<!doctype html><html data-theme="dark" lang="en"><body>',
+  );
+  assert.equal(
+    withViewerTheme('<html data-theme="dark">', false),
+    '<html data-theme="light">',
+  );
+  assert.equal(
+    withViewerTheme("<!DOCTYPE html><p>x", true),
+    '<!DOCTYPE html><html data-theme="dark"><p>x',
+  );
 });

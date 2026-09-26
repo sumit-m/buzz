@@ -2,6 +2,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import { HtmlDocumentDrawer } from "@/features/channels/ui/HtmlDocumentPanel";
 import {
   closeHtmlDocument,
   useHtmlDocumentHost,
@@ -67,7 +68,6 @@ import { ProjectBranchActionDialogs } from "./ProjectBranchActionDialogs";
 import { ProjectDetailChrome } from "./ProjectDetailChrome";
 import { ProjectConversationPanelController } from "./ProjectConversationPanelContext";
 import { ProjectDetailRightPanel } from "./ProjectDetailRightPanel";
-import { ProjectHtmlDocumentDrawer } from "./ProjectHtmlDocumentDrawer";
 import { ProjectDetailUnavailableState } from "./ProjectDetailUnavailableState";
 import { ProjectChannelHome } from "./ProjectChannelHome";
 import { ProjectRightPanelControls } from "./ProjectRightPanelControls";
@@ -1013,10 +1013,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
                 widthPx={threadPanelWidth.widthPx}
               />
             ) : null}
-            <ProjectHtmlDocumentDrawer
-              doc={htmlDocument}
-              projectName={repository.name}
-            />
+            <HtmlDocumentDrawer label={repository.name} />
           </ProjectConversationPanelController>
         </div>
       </ProfilePanelProvider>

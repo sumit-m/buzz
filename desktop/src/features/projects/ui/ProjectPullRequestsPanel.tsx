@@ -50,7 +50,6 @@ import { ProjectRichContent } from "./ProjectRichContent";
 import { PullRequestMetaHeader } from "./PullRequestMetaRail";
 import { PullRequestReviewCard } from "./PullRequestReviewCard";
 import { ShareLinkButton } from "./ShareLinkButton";
-import { PROJECT_DETAIL_READING_COLUMN_CLASS } from "./projectPanelStyles";
 import {
   ProjectStatusProgressIcon,
   type ProjectStatusProgressState,
@@ -519,9 +518,11 @@ export function ProjectPullRequestDetail({
     identityQuery.data?.pubkey,
   );
 
+  // Each section keeps the reading column except Files changed, which spans
+  // the content area like a commit's.
   return (
     <div
-      className={PROJECT_DETAIL_READING_COLUMN_CLASS}
+      className="w-full overflow-hidden [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-3xl"
       data-project-detail-panel
       data-testid="project-pull-request-detail"
     >
@@ -580,8 +581,10 @@ export function ProjectPullRequestDetail({
       ) : null}
       {filesChanged ? (
         <ProjectDetailSection
+          className="!max-w-none"
           count={filesCount}
           defaultOpen={false}
+          headerClassName="mx-auto max-w-3xl"
           onOpenChange={setFilesOpen}
           open={filesOpen}
           testId="project-detail-section-files"

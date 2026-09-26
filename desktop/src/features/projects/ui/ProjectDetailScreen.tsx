@@ -803,7 +803,9 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     />
   );
   const detachedRepositoryPanel =
-    !profilePanelPubkey && repositoryPanel.mode === "repository";
+    !profilePanelPubkey &&
+    repositoryPanel.mode === "repository" &&
+    htmlDocument === null;
   const sharedHeaderBackdrop =
     !selectedPullRequestId && !selectedIssueId && !selectedCommitHash;
   const handleRepositoryChange = (nextRepositoryId: string) => {

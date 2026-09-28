@@ -689,9 +689,8 @@ pub async fn merge_project_pull_request(
 mod tests {
     use super::{
         align_unborn_head_branch, build_merged_status_event, build_pull_request_status_event,
-        clone_destination, normalize_commit, same_repository,
-        validate_merge_status_metadata, validate_project_owner_announcement,
-        ProjectOwnerAnnouncementInput,
+        clone_destination, normalize_commit, same_repository, validate_merge_status_metadata,
+        validate_project_owner_announcement, ProjectOwnerAnnouncementInput,
     };
     use crate::commands::project_git_exec::{build_test_git_auth_config, run_git};
     use nostr::{Event, JsonUtil, Keys, Timestamp};

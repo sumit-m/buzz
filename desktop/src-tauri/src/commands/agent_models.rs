@@ -23,9 +23,8 @@ use crate::{
         load_personas, managed_agent_avatar_url, missing_command_message, normalize_agent_args,
         resolve_command, save_managed_agents, sync_managed_agent_processes, try_regenerate_nest,
         AgentEffortLevelInfo, AgentModelInfo, AgentModelsResponse, AgentPermissionModeInfo,
-        ManagedAgentRecord,
-        UpdateManagedAgentRequest,
-        UpdateManagedAgentResponse, DEFAULT_ACP_COMMAND,
+        ManagedAgentRecord, UpdateManagedAgentRequest, UpdateManagedAgentResponse,
+        DEFAULT_ACP_COMMAND,
     },
     relay::{relay_ws_url_with_override, sync_managed_agent_profile},
 };
@@ -288,7 +287,7 @@ pub async fn discover_agent_models(
             selected_model: None,
             supports_switching: true,
             permission_modes: Vec::new(),
-        effort_levels: Vec::new(),
+            effort_levels: Vec::new(),
         });
     }
     #[cfg(not(feature = "mesh-llm"))]

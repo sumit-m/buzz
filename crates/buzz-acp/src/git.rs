@@ -34,8 +34,10 @@ impl GitEnvironment {
         set_owner_only(dir.path())?;
         // Git is pointed at these by absolute path: agent runtimes' shell tools
         // may rebuild PATH, and a helper found only via PATH then vanishes.
-        let credential_helper =
-            git_path(&symlink(executable, &dir.path().join("git-credential-nostr"))?);
+        let credential_helper = git_path(&symlink(
+            executable,
+            &dir.path().join("git-credential-nostr"),
+        )?);
         let sign_program = if agent {
             git_path(&symlink(executable, &dir.path().join("git-sign-nostr"))?)
         } else {

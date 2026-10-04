@@ -7649,10 +7649,14 @@ revision b",
             }),
         );
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n");
+        // LOCAL DIVERGENCE: a reply to a top-level message posts at the
+        // channel top level, so upstream's `--reply-to <original>` becomes the
+        // flat-reply instruction. The edit event is still never a target.
         assert!(
-            prompt.contains(&format!("--reply-to {original_id}")),
+            prompt.contains("For ordinary replies in this turn, post at the channel"),
             "{prompt}"
         );
+        assert!(!prompt.contains(&format!("--reply-to {original_id}")));
         assert!(!prompt.contains(&format!("--reply-to {edit_id}")));
     }
 
@@ -7660,22 +7664,27 @@ revision b",
     fn edit_of_threaded_reply_anchors_original_thread_root_in_rendered_prompt() {
         let original_id = "22".repeat(32);
         let root_id = "33".repeat(32);
+        let parent_id = "44".repeat(32);
         let batch = one_event_batch(
             edit_event(&original_id),
             Some(ResolvedEdit {
                 target_event_id: original_id,
                 target_thread_tags: ThreadTags {
                     root_event_id: Some(root_id.clone()),
-                    parent_event_id: Some("44".repeat(32)),
+                    parent_event_id: Some(parent_id.clone()),
                     mentioned_pubkeys: vec![],
                 },
             }),
         );
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n");
+        // LOCAL DIVERGENCE: inside a thread we reply at the level we were
+        // asked at — the original's parent — where upstream jumps to the
+        // thread root. Either way the anchor comes from the original's tags.
         assert!(
-            prompt.contains(&format!("--reply-to {root_id}")),
+            prompt.contains(&format!("--reply-to {parent_id}")),
             "{prompt}"
         );
+        assert!(!prompt.contains(&format!("--reply-to {root_id}")));
     }
 
     #[test]
@@ -7685,10 +7694,13 @@ revision b",
         let edit_id = edit.id.to_hex();
         let prompt =
             format_prompt(&one_event_batch(edit, None), &FormatPromptArgs::default()).join("\n");
+        // LOCAL DIVERGENCE: a top-level reply posts flat, so the fallback
+        // target is never named either; what matters is that the edit is not.
         assert!(
-            prompt.contains(&format!("--reply-to {original_id}")),
+            prompt.contains("For ordinary replies in this turn, post at the channel"),
             "{prompt}"
         );
+        assert!(!prompt.contains(&format!("--reply-to {original_id}")));
         assert!(!prompt.contains(&format!("--reply-to {edit_id}")));
     }
 

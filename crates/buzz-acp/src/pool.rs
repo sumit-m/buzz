@@ -2231,12 +2231,24 @@ async fn apply_startup_effort(
     .await;
 
     match result {
-        Ok(Ok(_)) => {
+        Ok(Ok(response)) => {
+            // The adapter clamps a level the model does not support, so report
+            // the value it echoed back rather than the one requested. There is
+            // no ACP notification for effort the way `current_mode_update`
+            // covers Mode; the activity log reads this `effort_applied` event.
+            let applied = applied_config_value(&response, &config_id).unwrap_or(value.clone());
             tracing::info!(
                 target: "pool::effort",
-                "applied startup effort {value} via configId={config_id} on session {session_id}"
+                "applied startup effort {applied} (requested {value}) via configId={config_id} on session {session_id}"
             );
-            Ok(Some(StartupEffortOutcome::Applied { config_id, value }))
+            agent.acp.observe(
+                "effort_applied",
+                serde_json::json!({ "effort": applied, "requested": value }),
+            );
+            Ok(Some(StartupEffortOutcome::Applied {
+                config_id,
+                value: applied,
+            }))
         }
         // Transport-class errors may have corrupted the stdio stream — propagate
         // so the caller can respawn the agent instead of reusing a poisoned one.
@@ -2269,6 +2281,23 @@ async fn apply_startup_effort(
             Err(AcpError::Timeout(MODEL_SWITCH_TIMEOUT))
         }
     }
+}
+
+/// The `currentValue` a `session/set_config_option` response reports for
+/// `config_id`, or `None` when the adapter echoes no config options.
+fn applied_config_value(response: &serde_json::Value, config_id: &str) -> Option<String> {
+    response["configOptions"]
+        .as_array()?
+        .iter()
+        .find(|opt| {
+            opt.get("configId")
+                .or_else(|| opt.get("id"))
+                .and_then(|v| v.as_str())
+                == Some(config_id)
+        })?
+        .get("currentValue")?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// Patch the `currentValue` of the configOption whose `configId`/`id` matches

@@ -2564,7 +2564,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
         sections.push(section.to_string());
     }
 
-    // 2. Context hints (with a human-aware reply anchor).
+    // 2. Context hints (with a same-level reply anchor).
     //
     // In a thread every turn anchors to the triggering event's parent, so the
     // reply sits beside its question (see `resolve_reply_anchor`). Top-level,

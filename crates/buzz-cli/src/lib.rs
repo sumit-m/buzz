@@ -3334,7 +3334,16 @@ mod tests {
         );
         assert_eq!(
             names(&cmd, "repos"),
-            vec!["bind", "clone", "create", "default-branch", "get", "list", "protect", "state"]
+            vec![
+                "bind",
+                "clone",
+                "create",
+                "default-branch",
+                "get",
+                "list",
+                "protect",
+                "state"
+            ]
         );
         let repos = cmd
             .get_subcommands()

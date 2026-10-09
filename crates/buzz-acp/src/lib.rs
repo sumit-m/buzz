@@ -10685,13 +10685,16 @@ mod edit_native_steer_tests {
         );
     }
 
-    /// An agent↔agent thread turn replies under its own trigger. A human's
-    /// message in that thread must reply at the thread root, so it takes the
-    /// cancel+merge path, whose re-prompt carries its own `<context>`.
+    /// LOCAL DIVERGENCE: a thread turn replies beside its trigger, so an
+    /// agent↔agent turn asked at depth 2 replies under the depth-1 message it
+    /// answers. A human's depth-1 message in that thread must reply at the
+    /// thread root, so it takes the cancel+merge path, whose re-prompt carries
+    /// its own `<context>`.
     #[tokio::test]
     async fn human_follow_up_to_agent_thread_turn_cancels_and_merges() {
         use nostr::{EventBuilder, Keys, Kind, Tag};
         let root = "ab".repeat(32);
+        let mid = "cd".repeat(32);
         let agent = Keys::generate();
         let other_agent = Keys::generate();
         let agent_profile = |keys: &Keys| {
@@ -10705,7 +10708,8 @@ mod edit_native_steer_tests {
             "agent asks",
         )
         .tags([
-            Tag::parse(["e", root.as_str(), "", "reply"]).unwrap(),
+            Tag::parse(["e", root.as_str(), "", "root"]).unwrap(),
+            Tag::parse(["e", mid.as_str(), "", "reply"]).unwrap(),
             Tag::parse(["p", other_agent.public_key().to_hex().as_str()]).unwrap(),
         ])
         .sign_with_keys(&agent)

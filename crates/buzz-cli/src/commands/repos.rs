@@ -323,7 +323,7 @@ pub async fn cmd_list_repos(
                 .collect();
             serde_json::to_string(&compact).unwrap_or_default()
         }
-        crate::OutputFormat::Json => resp,
+        crate::OutputFormat::Json | crate::OutputFormat::Agent => resp,
     };
     println!("{output}");
     if let Some(note) = empty_listing_note(owner, channel, &output) {

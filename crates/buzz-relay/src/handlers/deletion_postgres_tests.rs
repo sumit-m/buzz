@@ -130,10 +130,11 @@ async fn failed_target_soft_delete_stores_nothing() {
             retry.message
         );
         assert_eq!(row_state(&state, &tenant, &deletion).await, (true, false));
+        // LOCAL DIVERGENCE: the soft-deleted target is then purged outright.
         assert_eq!(
             row_state(&state, &tenant, &target).await,
-            (true, true),
-            "kind {kind}: the target is soft-deleted with the deletion"
+            (false, false),
+            "kind {kind}: the target is gone after the deletion"
         );
     }
 }
@@ -170,30 +171,25 @@ async fn resent_deletion_repairs_a_live_target() {
             "kind {kind}: a repairing resend reaches dispatch: {:?}",
             repair.message
         );
+        // LOCAL DIVERGENCE: the soft-deleted target is then purged outright.
         assert_eq!(
             row_state(&state, &tenant, &target).await,
-            (true, true),
-            "kind {kind}: the resend soft-deletes the live target"
+            (false, false),
+            "kind {kind}: the resend destroys the live target"
         );
 
-        // Once applied, a kind 5 resend is a duplicate. Kind 9005 validation
-        // reads a tombstoned target as missing, so its resend is refused
-        // before storage, as it was before deletions became atomic.
+        // LOCAL DIVERGENCE: upstream answers a kind 5 resend as a duplicate.
+        // Validation runs first and the purged target is missing, so both
+        // kinds are refused before storage.
         let again = ingest_event(&state, &tenant, deletion.clone(), http_auth(&owner)).await;
-        match (kind, again) {
-            (5, Ok(result)) => assert!(
-                result.accepted && result.message.starts_with("duplicate:"),
-                "an applied kind 5 deletion is a duplicate: {:?}",
-                result.message
-            ),
-            (9005, Err(error)) => assert!(
+        match again {
+            Err(error) => assert!(
                 format!("{error:?}").contains("deletion target not found"),
-                "{error:?}"
+                "kind {kind}: {error:?}"
             ),
-            (kind, Ok(result)) => panic!("kind {kind} resend: {:?}", result.message),
-            (kind, Err(error)) => panic!("kind {kind} resend: {error:?}"),
+            Ok(result) => panic!("kind {kind} resend: {:?}", result.message),
         }
         assert_eq!(row_state(&state, &tenant, &deletion).await, (true, false));
-        assert_eq!(row_state(&state, &tenant, &target).await, (true, true));
+        assert_eq!(row_state(&state, &tenant, &target).await, (false, false));
     }
 }

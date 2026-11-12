@@ -7636,18 +7636,18 @@ mod postgres_tests {
         )
         .await
         .expect("in-scope token deletes the author's message");
-        // Re-deleting a soft-deleted message stores the deletion in its channel.
+        // LOCAL DIVERGENCE: upstream stores a re-deletion of a soft-deleted
+        // message in its channel. The first deletion purged it here, so a
+        // second one has no target and is refused like any unknown id.
         let redeletion = delete(&deleted.id.to_hex(), &author);
-        ingest_event_inner(&state, &tracer, &tenant, redeletion.clone(), author_auth())
-            .await
-            .expect("author re-deletes a soft-deleted message");
-        let stored = state
-            .db
-            .get_event_by_id(community, redeletion.id.as_bytes())
-            .await
-            .expect("read re-deletion")
-            .expect("re-deletion stored");
-        assert_eq!(stored.channel_id, Some(channels[0]));
+        match ingest_event_inner(&state, &tracer, &tenant, redeletion, author_auth()).await {
+            Err(IngestError::Rejected(msg)) => assert_eq!(
+                msg,
+                "invalid: deletion target not found or not deletable by you"
+            ),
+            Err(other) => panic!("re-deletion of a purged message: {other:?}"),
+            Ok(_) => panic!("re-deletion of a purged message accepted"),
+        }
     }
 
     #[tokio::test]

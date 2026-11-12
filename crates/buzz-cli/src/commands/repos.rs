@@ -682,7 +682,7 @@ async fn fetch_repo_announcement(
             crate::validate::validate_hex64(pk)?;
             pk.to_string()
         }
-        None => client.keys().public_key().to_hex(),
+        None => client.public_key().to_hex(),
     };
     let filter = serde_json::json!({
         "kinds": [KIND_GIT_REPO_ANNOUNCEMENT],
@@ -837,7 +837,7 @@ pub async fn cmd_clone_repo(
 
     // Repo-local, never global: every local agent shares one working directory,
     // so a global write would attribute the other agents' commits to this one.
-    let pubkey = client.keys().public_key().to_hex();
+    let pubkey = client.public_key().to_hex();
     let destination_str = destination.to_string_lossy().to_string();
     // Derived, never configured: an agent's commits must be attributable to the
     // agent, or the git trail disagrees with the pubkey trail.

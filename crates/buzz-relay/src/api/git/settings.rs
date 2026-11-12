@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 use super::{
     binding::{resolve_repo_binding, RepoBinding},
     hydrate::load_pointer,
-    manifest::{is_safe_refname, next_published_at, pointer_key, Manifest},
+    manifest::{digest_of_manifest_key, is_safe_refname, next_published_at, Manifest, RepoScope},
     manifest_event::{build_ref_state_event, RefStateInputs},
     store::{CasOutcome, ETag, GitStore, Precond},
     transport::{authorize_git_read, deny_banned_git_principal, validate_repo_id},
@@ -64,6 +64,7 @@ struct SetDefaultBranch {
 
 /// A loaded snapshot cannot be rebound to another pointer or refreshed at CAS.
 struct DefaultBranchSnapshot {
+    scope: RepoScope,
     pointer: String,
     etag: ETag,
     digest: String,
@@ -77,6 +78,10 @@ impl DefaultBranchSnapshot {
         owner: &str,
         repo: &str,
     ) -> Result<Self, Response> {
+        // LOCAL DIVERGENCE: manifests live under the repository's own prefix,
+        // not upstream's global `manifests/`.
+        let scope = RepoScope::new(tenant.community(), owner, repo)
+            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "invalid repository"))?;
         let (etag, digest, manifest) = load_pointer(store, tenant, owner, repo)
             .await
             .map_err(backend)?
@@ -87,7 +92,8 @@ impl DefaultBranchSnapshot {
                 )
             })?;
         Ok(Self {
-            pointer: pointer_key(tenant.community(), owner, repo),
+            pointer: scope.pointer_key(),
+            scope,
             etag,
             digest,
             manifest,
@@ -138,9 +144,11 @@ impl DefaultBranchSnapshot {
             self.manifest.parent = Some(self.digest.clone());
             self.manifest.validate().map_err(backend)?;
             let bytes = self.manifest.canonical_bytes().map_err(backend)?;
-            let key = store.put_manifest(&bytes).await.map_err(backend)?;
-            self.digest = key
-                .strip_prefix("manifests/")
+            let key = store
+                .put_manifest(&self.scope, &bytes)
+                .await
+                .map_err(backend)?;
+            self.digest = digest_of_manifest_key(&key)
                 .ok_or_else(|| backend("invalid manifest key"))?
                 .to_string();
         }

@@ -3528,6 +3528,15 @@ async fn handle_a_tag_deletion(
                     d_tag = d_tag,
                     "NIP-09 a-tag deletion: soft-deleted addressable event by coordinate"
                 );
+                // Deleting a repo announcement is permanent: the git objects,
+                // the ref state, the satellite events and the name go too.
+                // Gated on `deleted` — a replayed tombstone matches nothing
+                // under NIP-09's at-or-before rule and must destroy nothing,
+                // which matters here because the name is released and the
+                // coordinate may by then belong to a different owner.
+                if k == KIND_GIT_REPO_ANNOUNCEMENT {
+                    super::repo_delete::delete_repository(tenant, state, pubkey_hex, d_tag).await;
+                }
             } else {
                 tracing::debug!(
                     kind = k,

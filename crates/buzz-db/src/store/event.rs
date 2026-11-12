@@ -1704,6 +1704,45 @@ pub use super::event_deletion::{
     soft_delete_by_coordinate, soft_delete_event_and_update_thread, DeletionTarget,
 };
 
+/// Soft-delete every event of `kinds` carrying `a` = `coordinate`.
+///
+/// Used when a repository is permanently deleted: its patches, issues, pull
+/// requests and status events all point at the repo coordinate and would
+/// otherwise outlive it, reachable by REQ but by nothing in the UI.
+///
+/// One indexed query — `tags @> '[["a", <coordinate>]]'` rides the
+/// `idx_events_tags_gin` index that the `#a` REQ filter already uses.
+///
+/// These stay *soft* deletes on purpose. Inserts are `ON CONFLICT DO NOTHING`,
+/// so the tombstoned row is what keeps a signed copy held by any peer from
+/// being re-published back into the relay. Removing the rows outright would
+/// make the events resurrectable.
+///
+/// No `created_at` bound, unlike the coordinate delete: these are regular
+/// events rather than replaceable heads, so there is no newer version at the
+/// same address that a late tombstone could destroy.
+///
+/// Returns the number of rows deleted by this call.
+pub async fn soft_delete_events_referencing_coordinate(
+    pool: &PgPool,
+    community_id: CommunityId,
+    coordinate: &str,
+    kinds: &[i32],
+) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE events SET deleted_at = NOW() \
+         WHERE community_id = $1 AND kind = ANY($2) AND deleted_at IS NULL \
+         AND tags @> jsonb_build_array(jsonb_build_array('a', $3::text))",
+    )
+    .bind(community_id.as_uuid())
+    .bind(kinds)
+    .bind(coordinate)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
 /// Physically delete a soft-deleted event, everything it anchors, and every
 /// row that references any of them.
 ///
@@ -2725,6 +2764,22 @@ impl Db {
         channel_id: Uuid,
     ) -> Result<u64> {
         crate::event::hard_delete_channel_events(&self.pool, community_id, channel_id).await
+    }
+
+    /// Soft-delete every event of `kinds` whose `a` tag names `coordinate`.
+    pub async fn soft_delete_events_referencing_coordinate(
+        &self,
+        community_id: CommunityId,
+        coordinate: &str,
+        kinds: &[i32],
+    ) -> Result<u64> {
+        crate::event::soft_delete_events_referencing_coordinate(
+            &self.pool,
+            community_id,
+            coordinate,
+            kinds,
+        )
+        .await
     }
 
     /// Queries events matching the given filter parameters.

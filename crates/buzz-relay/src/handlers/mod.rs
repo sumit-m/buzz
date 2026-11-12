@@ -61,6 +61,8 @@ mod put_user_postgres_tests;
 pub mod relay_admin;
 #[cfg(test)]
 mod remove_user_postgres_tests;
+/// Permanent repository deletion, triggered by a kind:5 against a kind:30617.
+pub mod repo_delete;
 /// NIP-56 report (kind:1984) validation + moderation queue persistence.
 pub mod report;
 /// HTTP report-resolution orchestrations for the deployment admin API (Phase 2).

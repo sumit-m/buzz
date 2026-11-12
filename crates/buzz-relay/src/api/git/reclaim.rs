@@ -323,6 +323,65 @@ mod tests {
         assert!(plan_keys(&objects, &live).is_empty());
     }
 
+    /// The delete path is objects-first, name-last precisely so an interrupted
+    /// delete can be finished by re-issuing it. That only holds if a second run
+    /// over a prefix the first run already emptied is a clean no-op rather than
+    /// an error — this is the property, against a real backend.
+    #[tokio::test]
+    async fn deleting_a_repo_prefix_twice_is_a_no_op_the_second_time() {
+        if std::env::var("BUZZ_GIT_S3_PROBE").as_deref() != Ok("1") {
+            return;
+        }
+        let store = GitStore::new(
+            &std::env::var("BUZZ_S3_ENDPOINT").unwrap_or_else(|_| "http://localhost:9000".into()),
+            &std::env::var("BUZZ_S3_ACCESS_KEY").unwrap_or_else(|_| "buzz_dev".into()),
+            &std::env::var("BUZZ_S3_SECRET_KEY").unwrap_or_else(|_| "buzz_dev_secret".into()),
+            &std::env::var("BUZZ_GIT_S3_BUCKET")
+                .or_else(|_| std::env::var("BUZZ_S3_BUCKET"))
+                .unwrap_or_else(|_| "buzz-media".into()),
+            &std::env::var("BUZZ_S3_REGION").unwrap_or_else(|_| "us-east-1".into()),
+            buzz_media::config::S3AddressingStyle::Path,
+        )
+        .expect("connect object store");
+
+        let scope = RepoScope::new(
+            buzz_core::CommunityId::from_uuid(uuid::Uuid::new_v4()),
+            &"d".repeat(64),
+            "doomed",
+        )
+        .expect("valid scope");
+
+        for body in [b"pack-one".as_slice(), b"pack-two".as_slice()] {
+            store.put_pack(&scope, body).await.expect("write pack");
+        }
+        store
+            .put_pointer(
+                &scope.pointer_key(),
+                &[b'0'; 64],
+                super::super::store::Precond::IfNoneMatchStar,
+            )
+            .await
+            .expect("write pointer");
+
+        let first = delete_repo_objects(&store, &scope)
+            .await
+            .expect("first delete");
+        assert_eq!(first.objects, 3, "pointer plus both packs");
+        assert!(
+            store
+                .list_prefix(&scope.key_prefix(), 100)
+                .await
+                .expect("list after delete")
+                .is_empty(),
+            "the prefix must be empty"
+        );
+
+        let second = delete_repo_objects(&store, &scope)
+            .await
+            .expect("re-running a completed delete must not error");
+        assert_eq!(second, Reclaimed::default(), "nothing left to free");
+    }
+
     /// A repo pushed to before namespacing has live packs under the global
     /// prefix. Those are outside its scope, so reconciliation cannot reach
     /// them — which is the correct outcome, since it also cannot prove no

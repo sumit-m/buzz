@@ -88,7 +88,7 @@ const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
         id: "builtin:bumble",
         display_name: "Bumble",
         claude_display_name: "Fable",
-        claude_model: "claude-fable-5[1m]",
+        claude_model: "fable[1m]",
         avatar_url: None,
         default_active: true,
     },

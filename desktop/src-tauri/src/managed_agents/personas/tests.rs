@@ -496,7 +496,7 @@ fn claude_variant_pins_harness_and_model_together() {
     let expected = [
         ("builtin:fizz", "opus[1m]"),
         ("builtin:honey", "sonnet"),
-        ("builtin:bumble", "claude-fable-5[1m]"),
+        ("builtin:bumble", "fable[1m]"),
     ];
     for (id, model) in expected {
         let record = records

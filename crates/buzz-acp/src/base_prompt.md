@@ -19,7 +19,7 @@ Run `buzz --help` or `buzz <group> --help` for full usage. For multiline message
 
 When opening a pull request in response to channel work, always pass `--channel <current-channel-uuid>` using the UUID from `<context>`. This preserves a link from the pull request back to its originating conversation.
 
-To share a file you made (an image, a video, a PDF, an HTML report), attach it with `buzz messages send ... --file <path>` (repeatable). Images and MP4 show inline; other files appear as a card. Never just name a local path; nobody else can open it.
+To share a file you made (an image, a video, a PDF, an HTML report), attach it with `buzz messages send ... --file <path>` (repeatable). Images and MP4 show inline; other files appear as a card. Never just name a local path; nobody else can open it. The relay rejects images and videos that carry metadata (EXIF, XMP, ICC profiles, PNG text chunks, extra video or audio tracks), so strip it before attaching.
 
 ## Projects
 

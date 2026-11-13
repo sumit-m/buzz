@@ -19,6 +19,8 @@ Run `buzz --help` or `buzz <group> --help` for full usage. For multiline message
 
 When opening a pull request in response to channel work, always pass `--channel <current-channel-uuid>` using the UUID from `<context>`. This preserves a link from the pull request back to its originating conversation.
 
+To share a file you made (an image, a video, a PDF, an HTML report), attach it with `buzz messages send ... --file <path>` (repeatable). Images and MP4 show inline; other files appear as a card. Never just name a local path; nobody else can open it.
+
 ## Projects
 
 A project is a named grouping (`kind:30621`) with a home channel. Creating a second project with the same name produces a duplicate card in Buzz Desktop — never do that for work that already has a project.

@@ -56,6 +56,12 @@ import {
   useRepositoryFileContent,
 } from "./useRepositoryFileContent";
 import { useRepositoryImagePreview } from "./useRepositoryImagePreview";
+import { RepositoryImageView } from "./RepositoryImageView";
+import {
+  RepositoryFileTiles,
+  RepositoryViewModeToggle,
+  useRepositoryViewMode,
+} from "./RepositoryFileTiles";
 import {
   type RepositoryFilesContext,
   useRepositoryFilesNavigation,
@@ -540,10 +546,12 @@ function BreadcrumbButton({
 function FileContentPanel({
   file,
   fileContentSource,
+  files,
   onOpenPath,
 }: {
   file: ProjectRepoFile;
   fileContentSource?: RepositoryFileContentSource;
+  files: ProjectRepoFile[];
   onOpenPath: (path: string) => void;
 }) {
   const image = useRepositoryImagePreview(file, fileContentSource);
@@ -592,14 +600,12 @@ function FileContentPanel({
       {image.isLoading || fileContent.isLoading ? (
         <BuzzLoadingState label="Loading file" />
       ) : image.url ? (
-        <div className="flex justify-center bg-background/60 p-4">
-          <img
-            alt={fileName}
-            className="max-h-[70vh] max-w-full rounded-md object-contain"
-            data-testid="project-repository-image-preview"
-            src={image.url}
-          />
-        </div>
+        <RepositoryImageView
+          file={file}
+          fileContentSource={fileContentSource}
+          files={files}
+          url={image.url}
+        />
       ) : fileContent.content ? (
         <pre className="overflow-x-auto bg-background/60 p-4">
           {language ? (
@@ -670,6 +676,7 @@ export function RepositoryFilesPanel({
     () => repositoryEntries(files, currentPath),
     [currentPath, files],
   );
+  const [viewMode, setViewMode] = useRepositoryViewMode();
   const visibleEntries = entries.slice(0, visibleEntryCount);
   const nextVisibleEntryCount = nextRepositoryEntryLimit(
     visibleEntryCount,
@@ -795,6 +802,7 @@ export function RepositoryFilesPanel({
       <FileContentPanel
         file={selectedFile}
         fileContentSource={fileContentSource}
+        files={files}
         onOpenPath={openPath}
       />
     );
@@ -904,6 +912,11 @@ export function RepositoryFilesPanel({
                         </span>
                       </p>
                     </div>
+                    <RepositoryViewModeToggle
+                      className="ml-auto"
+                      mode={viewMode}
+                      onChange={setViewMode}
+                    />
                     <time
                       className="shrink-0 whitespace-nowrap text-right text-xs text-muted-foreground"
                       dateTime={new Date(
@@ -922,7 +935,7 @@ export function RepositoryFilesPanel({
             </ProjectRepositoryLatestCommitRow>
           </thead>
           <tbody>
-            {visibleEntries.map((entry) => {
+            {(viewMode === "details" ? visibleEntries : []).map((entry) => {
               const latestCommit = entry.latestCommit;
               const openEntry = () =>
                 openRepositoryEntry(entry, openPath, setSelectedFile);
@@ -972,6 +985,16 @@ export function RepositoryFilesPanel({
           </tbody>
         </table>
       </div>
+      {viewMode === "tiles" ? (
+        <RepositoryFileTiles
+          entries={visibleEntries}
+          fileContentSource={fileContentSource}
+          onOpen={(entry) =>
+            openRepositoryEntry(entry, openPath, setSelectedFile)
+          }
+          renderIcon={(entry) => <RepositoryEntryIcon entry={entry} />}
+        />
+      ) : null}
       {entries.length > visibleEntries.length ? (
         <div className="flex items-center justify-between gap-3 border-border/50 border-t px-4 py-3 text-2xs text-muted-foreground">
           <span aria-live="polite">

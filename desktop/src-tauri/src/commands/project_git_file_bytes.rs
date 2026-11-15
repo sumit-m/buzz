@@ -11,9 +11,9 @@ use crate::app_state::AppState;
 use tauri::State;
 
 /// Matches the relay's image upload ceiling.
-const MAX_PREVIEW_FILE_BYTES: u64 = 50 * 1024 * 1024;
+pub(super) const MAX_PREVIEW_FILE_BYTES: u64 = 50 * 1024 * 1024;
 
-fn read_file_bytes(repo_dir: &std::path::Path, path: &str, cap: u64) -> Option<Vec<u8>> {
+pub(super) fn read_file_bytes(repo_dir: &std::path::Path, path: &str, cap: u64) -> Option<Vec<u8>> {
     let full_path = repo_dir.join(path);
     if std::fs::symlink_metadata(&full_path)
         .ok()?

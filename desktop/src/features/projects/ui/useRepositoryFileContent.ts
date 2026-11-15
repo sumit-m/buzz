@@ -1,12 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 
 import type { ProjectRepoFile } from "@/features/projects/hooks";
+import type { ProjectRepoThumbnail } from "@/shared/api/projectGit";
 
 export type RepositoryFileContentSource = {
   cacheKey: readonly unknown[];
   load: (path: string) => Promise<string | null>;
   /** Raw bytes, for files the text preview cannot show (images). */
   loadBytes?: (path: string) => Promise<Uint8Array<ArrayBuffer> | null>;
+  /** Thumbnails for the tiles view, read from one checkout. */
+  loadThumbnails?: (paths: string[]) => Promise<ProjectRepoThumbnail[]>;
 };
 
 export function useRepositoryFileContent(

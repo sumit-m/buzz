@@ -26,6 +26,7 @@ import {
 import { useProjectBranchActions } from "@/features/projects/branchMutations";
 import { useOptimisticProjectBranches } from "@/features/projects/useOptimisticProjectBranches";
 import { useProjectRepositoryRefSelection } from "@/features/projects/useProjectRepositoryRefSelection";
+import { useRetainedLocalBranches } from "@/features/projects/useRetainedLocalBranches";
 import { useUpdateProjectPullRequestMutation } from "@/features/projects/pullRequestMutations";
 import { useCreateProjectIssueMutation } from "@/features/projects/issueMutations";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
@@ -36,6 +37,7 @@ import { useCommunities } from "@/features/communities/useCommunities";
 import {
   projectBranchCreationReason,
   projectBranchManagementState,
+  projectBranchOptions,
   projectBranchOptionsFromSync,
   resolveProjectDefaultBranch,
 } from "@/features/projects/lib/projectBranches";
@@ -131,9 +133,16 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
           (pullRequest) => pullRequest.branchName ?? null,
         ) ?? [],
     });
+  const { localBranches, reportLocalBranches } = useRetainedLocalBranches(
+    repository?.id ?? null,
+  );
+  const selectableBranches = React.useMemo(
+    () => projectBranchOptions(branchOptions, localBranches),
+    [branchOptions, localBranches],
+  );
   const { activeBranch, selectBranch, selectedTag, selectTag } =
     useProjectRepositoryRefSelection({
-      branchOptions,
+      branchOptions: selectableBranches,
       defaultBranch,
       projectAvailable: Boolean(repository),
       projectPending: projectQuery.isPending,
@@ -266,6 +275,10 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     activeCommunity?.reposDir,
     activeBranch,
   );
+  const reportedLocalBranches = repoSyncStatusQuery.data?.localBranches;
+  React.useEffect(() => {
+    if (reportedLocalBranches) reportLocalBranches(reportedLocalBranches);
+  }, [reportLocalBranches, reportedLocalBranches]);
   const pushLocalRepoMutation = usePushProjectLocalRepositoryMutation(
     repository,
     activeCommunity?.reposDir,
@@ -318,9 +331,20 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
         !localBranches.includes(branch)
       ) {
         setRepoSource("remote");
+      } else if (
+        repoSource === "remote" &&
+        localBranches?.includes(branch) &&
+        !branchOptions.includes(branch)
+      ) {
+        setRepoSource("local");
       }
     },
-    [repoSource, repoSyncStatusQuery.data?.localBranches, selectBranch],
+    [
+      branchOptions,
+      repoSource,
+      repoSyncStatusQuery.data?.localBranches,
+      selectBranch,
+    ],
   );
   const handleTagChange = React.useCallback(
     (tag: string) => {

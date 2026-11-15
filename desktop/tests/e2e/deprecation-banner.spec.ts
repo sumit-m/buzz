@@ -3,6 +3,9 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 import { BUZZ_APP_DOWNLOADS_MANIFEST_URL } from "../../src/app/newAppInstaller";
 import { installMockBridge } from "../helpers/bridge";
 
+// LOCAL DIVERGENCE: this fork stays on the 0.X app and does not mount the banner.
+test.skip(true, "deprecation banner is not mounted locally");
+
 type InstallerFailureReason =
   | "network"
   | "storage"

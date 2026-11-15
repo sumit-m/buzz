@@ -196,6 +196,24 @@ export async function getProjectRepoFileContent(input: {
   });
 }
 
+/** Raw bytes of a repository file (for image previews); null when unavailable. */
+export async function getProjectRepoFileBytes(input: {
+  cloneUrl: string;
+  defaultBranch?: string | null;
+  targetRef?: string | null;
+  targetCommit?: string | null;
+  path: string;
+}): Promise<Uint8Array<ArrayBuffer> | null> {
+  const bytes = await invokeTauri<ArrayBuffer>("get_project_repo_file_bytes", {
+    cloneUrl: input.cloneUrl,
+    defaultBranch: input.defaultBranch ?? null,
+    targetRef: input.targetRef ?? null,
+    targetCommit: input.targetCommit ?? null,
+    path: input.path,
+  });
+  return bytes.byteLength > 0 ? new Uint8Array(bytes) : null;
+}
+
 export async function getProjectRepoDiff(input: {
   cloneUrl: string;
   defaultBranch?: string | null;
@@ -296,6 +314,24 @@ export async function getProjectLocalRepoFileContent(input: {
     cloneUrl: input.cloneUrl ?? null,
     path: input.path,
   });
+}
+
+export async function getProjectLocalRepoFileBytes(input: {
+  reposDir?: string | null;
+  projectDtag: string;
+  cloneUrl?: string | null;
+  path: string;
+}): Promise<Uint8Array<ArrayBuffer> | null> {
+  const bytes = await invokeTauri<ArrayBuffer>(
+    "get_project_local_repo_file_bytes",
+    {
+      reposDir: input.reposDir ?? null,
+      projectDtag: input.projectDtag,
+      cloneUrl: input.cloneUrl ?? null,
+      path: input.path,
+    },
+  );
+  return bytes.byteLength > 0 ? new Uint8Array(bytes) : null;
 }
 
 export async function listProjectLocalRepositories(input: {

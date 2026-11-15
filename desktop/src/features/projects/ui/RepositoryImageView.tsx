@@ -17,7 +17,7 @@ function ImageInfoSidebar({ sidecar }: { sidecar: ImageSidecar }) {
   const { prompt } = sidecar;
   return (
     <aside
-      className="w-full shrink-0 space-y-4 lg:w-80"
+      className="w-full shrink-0 space-y-4 lg:w-[350px]"
       data-testid="project-repository-image-info"
     >
       {prompt ? (
@@ -42,7 +42,7 @@ function ImageInfoSidebar({ sidecar }: { sidecar: ImageSidecar }) {
             <div className="min-w-0" key={field.label}>
               <dt className="text-xs text-muted-foreground">{field.label}</dt>
               <dd
-                className="truncate text-sm font-medium text-foreground"
+                className="break-words text-sm font-medium text-foreground"
                 title={field.value}
               >
                 {field.value}

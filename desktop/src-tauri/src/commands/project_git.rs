@@ -593,8 +593,12 @@ pub(crate) fn compare_local_remote_status(
 
     // A legacy empty clone may have an unborn local `master` while the project
     // declares `main`. Permit that mismatch only when the remote has no branch
-    // refs at all.
-    let is_first_publish = remote_head.is_none() && !remote_has_branches;
+    // refs at all, and only when the declared branch does not exist locally:
+    // the push renames the checked-out branch to it, which must never replace
+    // a local branch of that name.
+    let is_first_publish = remote_head.is_none()
+        && !remote_has_branches
+        && !local_branches.iter().any(|name| name == &branch);
     let merge_base = base_branch.as_deref().and_then(|base_branch| {
         run_git(
             &[

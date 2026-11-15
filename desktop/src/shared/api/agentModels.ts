@@ -2,6 +2,12 @@ import type { AgentModelsResponse } from "@/shared/api/types";
 import { invokeTauri } from "@/shared/api/tauri";
 
 export type DiscoverAgentModelsInput = {
+  /**
+   * The model the agent is saved with. A Claude probe starts on it, as the
+   * agent does, so the catalog lists it even when Claude Code offers that id
+   * only to a session already on it (e.g. `opus[1m]`).
+   */
+  startModel?: string;
   acpCommand?: string;
   agentCommand: string;
   agentArgs?: string[];

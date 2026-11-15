@@ -443,6 +443,7 @@ export function AgentInstanceEditDialog({
     open,
     provider: providerForDiscovery,
     selectedRuntime,
+    startModel: agent.model ?? "",
   });
 
   // D2/D3: the top-level API key owns display while the readiness gate keeps the

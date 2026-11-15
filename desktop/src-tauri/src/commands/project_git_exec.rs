@@ -8,6 +8,7 @@ use crate::{app_state::AppState, managed_agents::resolve_command};
 use nostr::{Keys, ToBech32};
 use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use url::Url;
 
@@ -49,6 +50,54 @@ pub(crate) struct GitAuthConfig {
     credential_helper: Option<std::path::PathBuf>,
     nsec: String,
     allow_file_transport: bool,
+    line_endings: Vec<(String, String)>,
+}
+
+/// Line-ending settings from the user's own git config.
+///
+/// Every app git call disables system and global config, which on Windows
+/// also drops Git for Windows' `core.autocrlf=true`. A CRLF checkout then
+/// reads as modified against its LF index, and push and pull are blocked
+/// until some other git refreshes the index. These settings are values, not
+/// hooks or helpers, so carrying them over keeps the isolation intact.
+fn user_line_endings(git_path: &std::path::Path) -> Vec<(String, String)> {
+    static LINE_ENDINGS: OnceLock<Vec<(String, String)>> = OnceLock::new();
+    LINE_ENDINGS
+        .get_or_init(|| {
+            let mut command = Command::new(git_path);
+            command
+                .args(["config", "--get-regexp", r"^core\.(autocrlf|eol)$"])
+                .current_dir(std::env::temp_dir())
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_CONFIG_PARAMETERS")
+                .env_remove("GIT_CONFIG_COUNT")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            crate::util::configure_no_window(&mut command);
+            command
+                .output()
+                .map(|output| parse_line_endings(&String::from_utf8_lossy(&output.stdout)))
+                .unwrap_or_default()
+        })
+        .clone()
+}
+
+fn parse_line_endings(output: &str) -> Vec<(String, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.trim().split_once(' ')?;
+            let key = key.to_ascii_lowercase();
+            let value = value.trim().to_ascii_lowercase();
+            let allowed = match key.as_str() {
+                "core.autocrlf" => matches!(value.as_str(), "true" | "false" | "input"),
+                "core.eol" => matches!(value.as_str(), "lf" | "crlf" | "native"),
+                _ => false,
+            };
+            allowed.then_some((key, value))
+        })
+        .collect()
 }
 
 fn read_pipe_lossy(pipe: Option<impl Read>) -> String {
@@ -168,6 +217,9 @@ fn configure_git_auth(command: &mut Command, auth: &GitAuthConfig, needs_credent
             .to_string(),
         ),
     ];
+    for (key, value) in &auth.line_endings {
+        entries.push((key.as_str(), value.clone()));
+    }
     if needs_credentials {
         let Some(cred_helper) = &auth.credential_helper else {
             return apply_git_config(command, &entries);
@@ -208,9 +260,11 @@ pub(crate) fn build_git_clone_auth_config(
     state: &AppState,
 ) -> Result<GitAuthConfig, String> {
     if validate_github_clone_url(clone_url).is_ok() {
+        let git_path =
+            resolve_command("git").ok_or_else(|| "git was not found on PATH".to_string())?;
         return Ok(GitAuthConfig {
-            git_path: resolve_command("git")
-                .ok_or_else(|| "git was not found on PATH".to_string())?,
+            line_endings: user_line_endings(&git_path),
+            git_path,
             credential_helper: None,
             nsec: String::new(),
             allow_file_transport: false,
@@ -227,6 +281,7 @@ pub(crate) fn build_git_auth_config_for_keys(keys: &Keys) -> Result<GitAuthConfi
         .to_bech32()
         .map_err(|error| format!("encode identity key: {error}"))?;
     Ok(GitAuthConfig {
+        line_endings: user_line_endings(&git_path),
         git_path,
         credential_helper,
         nsec,
@@ -393,9 +448,9 @@ fn validate_clone_url_against_relay(clone_url: &str, relay_base: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::{
-        clean_branch, clean_target_ref, credential_helper_config_value, git_needs_credentials,
-        git_subcommand, validate_clone_url, validate_clone_url_against_relay,
-        validate_local_clone_url,
+        build_test_git_auth_config, clean_branch, clean_target_ref, credential_helper_config_value,
+        git_needs_credentials, git_subcommand, parse_line_endings, run_git, validate_clone_url,
+        validate_clone_url_against_relay, validate_local_clone_url,
     };
 
     #[test]
@@ -527,5 +582,80 @@ mod tests {
         assert!(validate_local_clone_url("https://user@github.com/block/buzz").is_err());
         assert!(validate_local_clone_url("https://github.com.evil.test/block/buzz").is_err());
         assert!(validate_local_clone_url("https://gitlab.com/block/buzz").is_err());
+    }
+
+    #[test]
+    fn line_endings_keep_only_known_settings_in_order() {
+        let parsed = parse_line_endings(concat!(
+            "core.autocrlf true\n",
+            "core.eol LF\n",
+            "core.autocrlf input\n",
+            "core.autocrlf maybe\n",
+            "core.hookspath /tmp\n",
+        ));
+        assert_eq!(
+            parsed,
+            [
+                ("core.autocrlf".to_string(), "true".to_string()),
+                ("core.eol".to_string(), "lf".to_string()),
+                ("core.autocrlf".to_string(), "input".to_string()),
+            ]
+        );
+        assert!(parse_line_endings("").is_empty());
+    }
+
+    #[test]
+    fn a_crlf_checkout_of_lf_files_is_clean_under_the_users_autocrlf() {
+        let root = tempfile::tempdir().expect("create test directory");
+        let checkout = root.path();
+        let mut auth = build_test_git_auth_config().expect("build test git config");
+        auth.line_endings = vec![("core.autocrlf".to_string(), "true".to_string())];
+
+        run_git(&["init"], Some(checkout), &auth).expect("initialize checkout");
+        std::fs::write(checkout.join("README.md"), "one\ntwo\n").expect("write fixture");
+        run_git(&["add", "README.md"], Some(checkout), &auth).expect("stage fixture");
+        run_git(
+            &[
+                "-c",
+                "user.name=Buzz Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "LF file",
+            ],
+            Some(checkout),
+            &auth,
+        )
+        .expect("commit fixture");
+        // As a terminal checkout leaves it: CRLF on disk, its size in the index.
+        let readme = checkout.join("README.md");
+        std::fs::remove_file(&readme).expect("remove fixture");
+        run_git(&["checkout", "--", "README.md"], Some(checkout), &auth)
+            .expect("check out with autocrlf");
+        assert_eq!(
+            std::fs::read(&readme).expect("read checkout"),
+            b"one\r\ntwo\r\n"
+        );
+        // A newer mtime forces git to compare content, as after any touch.
+        std::fs::File::options()
+            .write(true)
+            .open(&readme)
+            .and_then(|file| {
+                file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(10))
+            })
+            .expect("touch fixture");
+
+        // Without the user's setting the raw bytes differ. Checked first:
+        // a clean status under autocrlf refreshes the index and would mask it.
+        let user_line_endings = std::mem::take(&mut auth.line_endings);
+        let status = run_git(&["status", "--porcelain"], Some(checkout), &auth)
+            .expect("status without autocrlf");
+        assert_eq!(status.trim(), "M README.md");
+
+        auth.line_endings = user_line_endings;
+        let status = run_git(&["status", "--porcelain"], Some(checkout), &auth)
+            .expect("status with autocrlf");
+        assert_eq!(status.trim(), "");
     }
 }

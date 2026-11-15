@@ -56,12 +56,10 @@ export function sidecarPathFor(imagePath: string): string {
 function formatDate(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      });
+  if (Number.isNaN(date.getTime())) return value;
+  const day = date.toLocaleDateString(undefined, { dateStyle: "medium" });
+  const time = date.toLocaleTimeString(undefined, { timeStyle: "short" });
+  return `${day} ${time}`;
 }
 
 function scalarText(value: unknown): string | null {

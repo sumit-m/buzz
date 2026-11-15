@@ -4,8 +4,10 @@ import type { ProjectPullRequest, Repository } from "@/features/projects/hooks";
 import {
   getProjectLocalRepoFileBytes,
   getProjectLocalRepoFileContent,
+  getProjectLocalRepoThumbnails,
   getProjectRepoFileBytes,
   getProjectRepoFileContent,
+  getProjectRepoThumbnails,
 } from "@/shared/api/projectGit";
 import type { RepositoryFileContentSource } from "./useRepositoryFileContent";
 
@@ -54,6 +56,13 @@ export function useRepositoryFileContentSource({
             cloneUrl: repository.cloneUrls[0] ?? null,
             path,
           }),
+        loadThumbnails: (paths) =>
+          getProjectLocalRepoThumbnails({
+            reposDir,
+            projectDtag: repository.dtag,
+            cloneUrl: repository.cloneUrls[0] ?? null,
+            paths,
+          }),
       };
     }
 
@@ -91,6 +100,14 @@ export function useRepositoryFileContentSource({
           targetRef,
           targetCommit,
           path,
+        }),
+      loadThumbnails: (paths) =>
+        getProjectRepoThumbnails({
+          cloneUrl,
+          defaultBranch: activeBranch ?? repository.defaultBranch,
+          targetRef,
+          targetCommit,
+          paths,
         }),
     };
   }, [

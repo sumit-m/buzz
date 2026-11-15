@@ -537,6 +537,7 @@ export function AgentDefinitionDialog({
       ? effectiveProvider
       : "",
     selectedRuntime,
+    startModel: initialValues?.model ?? "",
   });
   const staticModelOptions = getPersonaModelOptions(runtime, effectiveProvider);
   const runtimeModelOptions = getRuntimePersonaModelOptions(runtime);

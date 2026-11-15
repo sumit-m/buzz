@@ -246,6 +246,7 @@ export function usePersonaModelDiscovery({
   provider,
   selectedModel = "",
   selectedRuntime,
+  startModel = "",
 }: {
   envVars: EnvVarsValue;
   isCustomProviderEditing: boolean;
@@ -263,6 +264,12 @@ export function usePersonaModelDiscovery({
    */
   selectedModel?: string;
   selectedRuntime: AcpRuntimeCatalogEntry | undefined;
+  /**
+   * The model the agent is saved with, not the live selection. A Claude
+   * catalog probe starts on it, as the agent does, because Claude Code lists
+   * some ids (`opus[1m]`) only for a session already on them.
+   */
+  startModel?: string;
 }) {
   const [modelDiscoveryData, setModelDiscoveryData] =
     React.useState<AgentModelsResponse | null>(null);
@@ -307,6 +314,8 @@ export function usePersonaModelDiscovery({
   const modelDiscoveryArgsKey = JSON.stringify(
     selectedRuntime?.defaultArgs ?? [],
   );
+  const catalogStartModel =
+    selectedRuntime?.id === "claude" ? startModel.trim() : "";
   const modelDiscoveryKey = React.useMemo(() => {
     if (!canDiscoverModelOptions || discoveryAgentCommand === null) {
       return null;
@@ -317,9 +326,11 @@ export function usePersonaModelDiscovery({
       agentArgs: modelDiscoveryArgsKey,
       provider: trimmedProvider,
       envVars: modelDiscoveryEnvKey,
+      startModel: catalogStartModel,
     });
   }, [
     canDiscoverModelOptions,
+    catalogStartModel,
     discoveryAgentCommand,
     modelDiscoveryArgsKey,
     modelDiscoveryEnvKey,
@@ -381,6 +392,7 @@ export function usePersonaModelDiscovery({
         provider: trimmedProvider || undefined,
         envVars,
         definitionEnv: selectedRuntimeDefinitionEnv ?? {},
+        startModel: catalogStartModel || undefined,
       })
         .then((response) => {
           if (modelDiscoveryRequestRef.current !== requestId) {
@@ -443,6 +455,7 @@ export function usePersonaModelDiscovery({
       }
     };
   }, [
+    catalogStartModel,
     discoveryAgentCommand,
     envVars,
     modelDiscoveryKey,

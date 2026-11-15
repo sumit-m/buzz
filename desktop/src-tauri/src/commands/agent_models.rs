@@ -149,12 +149,13 @@ pub async fn get_agent_models(
         resolved_acp,
         agent_command,
         agent_args,
-        persisted_model,
+        persisted_model.clone(),
         merged_env,
         // No model selected: this path serves callers that want the catalog
         // only, and the extra round-trip would cost them for nothing. The
         // draft-discovery path below asks when the dialog needs effort levels.
         None,
+        persisted_model,
     )
     .await
 }
@@ -200,6 +201,10 @@ pub struct DiscoverAgentModelsInput {
     /// callers that only need the model list leave it unset.
     #[serde(default)]
     pub model: Option<String>,
+    /// The model the agent is saved with. A Claude probe starts on it, as the
+    /// agent itself does, so the catalog includes it.
+    #[serde(default)]
+    pub start_model: Option<String>,
 }
 
 /// Query available models from an unsaved agent configuration.
@@ -341,6 +346,7 @@ pub async fn discover_agent_models(
         None,
         merged_env,
         input.model,
+        input.start_model,
     )
     .await
 }

@@ -4,7 +4,9 @@ import { test } from "node:test";
 import {
   REPORT_CSP,
   isHtmlFilename,
+  isJsonFilename,
   isRelayHtmlReport,
+  prettyJson,
   withReportCsp,
   withViewerTheme,
 } from "./htmlReport.ts";
@@ -15,6 +17,20 @@ test("isHtmlFilename matches .html and .htm only", () => {
   assert.equal(isHtmlFilename("report.HTML"), true);
   assert.equal(isHtmlFilename("report.htm"), true);
   assert.equal(isHtmlFilename("report.html.pdf"), false);
+});
+
+test("isJsonFilename matches .json only", () => {
+  assert.equal(isJsonFilename("h1.JSON"), true);
+  assert.equal(isJsonFilename("h1.json.txt"), false);
+  assert.equal(isJsonFilename("h1.jsonl"), false);
+});
+
+test("prettyJson indents valid JSON and keeps anything else as is", () => {
+  assert.equal(
+    prettyJson('{"a":1,"b":[2]}'),
+    '{\n  "a": 1,\n  "b": [\n    2\n  ]\n}',
+  );
+  assert.equal(prettyJson("{not json"), "{not json");
 });
 
 test("isRelayHtmlReport accepts relay-hosted HTML", () => {

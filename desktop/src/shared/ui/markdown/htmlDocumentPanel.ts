@@ -5,6 +5,10 @@ export type HtmlDocument = {
   load: (signal: AbortSignal) => Promise<string>;
   /** Changes when `load` would return a different file. */
   loadKey: string;
+  /** Show the text as highlighted source in this language instead of a page. */
+  language?: string;
+  /** Replaces saving the loaded text, e.g. to keep the original file's bytes. */
+  download?: () => void;
 };
 
 let current: HtmlDocument | null = null;

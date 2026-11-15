@@ -55,6 +55,7 @@ import {
   type RepositoryFileContentSource,
   useRepositoryFileContent,
 } from "./useRepositoryFileContent";
+import { useRepositoryImagePreview } from "./useRepositoryImagePreview";
 import {
   type RepositoryFilesContext,
   useRepositoryFilesNavigation,
@@ -545,7 +546,11 @@ function FileContentPanel({
   fileContentSource?: RepositoryFileContentSource;
   onOpenPath: (path: string) => void;
 }) {
-  const fileContent = useRepositoryFileContent(file, fileContentSource);
+  const image = useRepositoryImagePreview(file, fileContentSource);
+  const fileContent = useRepositoryFileContent(
+    file,
+    image.isImage ? undefined : fileContentSource,
+  );
   const language = languageForPath(file.path);
   const pathSegments = file.path.split("/").filter(Boolean);
   const fileName = pathSegments[pathSegments.length - 1] ?? file.path;
@@ -584,8 +589,17 @@ function FileContentPanel({
       <div className="border-border/50 border-b bg-muted/10 px-4 py-2 text-2xs text-muted-foreground sm:hidden">
         Last changed {formatLastChangedAt(file.lastChangedAt)}
       </div>
-      {fileContent.isLoading ? (
+      {image.isLoading || fileContent.isLoading ? (
         <BuzzLoadingState label="Loading file" />
+      ) : image.url ? (
+        <div className="flex justify-center bg-background/60 p-4">
+          <img
+            alt={fileName}
+            className="max-h-[70vh] max-w-full rounded-md object-contain"
+            data-testid="project-repository-image-preview"
+            src={image.url}
+          />
+        </div>
       ) : fileContent.content ? (
         <pre className="overflow-x-auto bg-background/60 p-4">
           {language ? (

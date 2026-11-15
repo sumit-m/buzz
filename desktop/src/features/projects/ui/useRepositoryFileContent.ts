@@ -5,6 +5,8 @@ import type { ProjectRepoFile } from "@/features/projects/hooks";
 export type RepositoryFileContentSource = {
   cacheKey: readonly unknown[];
   load: (path: string) => Promise<string | null>;
+  /** Raw bytes, for files the text preview cannot show (images). */
+  loadBytes?: (path: string) => Promise<Uint8Array<ArrayBuffer> | null>;
 };
 
 export function useRepositoryFileContent(

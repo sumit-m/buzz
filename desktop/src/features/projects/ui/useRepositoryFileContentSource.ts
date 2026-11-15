@@ -2,7 +2,9 @@ import * as React from "react";
 
 import type { ProjectPullRequest, Repository } from "@/features/projects/hooks";
 import {
+  getProjectLocalRepoFileBytes,
   getProjectLocalRepoFileContent,
+  getProjectRepoFileBytes,
   getProjectRepoFileContent,
 } from "@/shared/api/projectGit";
 import type { RepositoryFileContentSource } from "./useRepositoryFileContent";
@@ -45,6 +47,13 @@ export function useRepositoryFileContentSource({
             cloneUrl: repository.cloneUrls[0] ?? null,
             path,
           }),
+        loadBytes: (path) =>
+          getProjectLocalRepoFileBytes({
+            reposDir,
+            projectDtag: repository.dtag,
+            cloneUrl: repository.cloneUrls[0] ?? null,
+            path,
+          }),
       };
     }
 
@@ -69,6 +78,14 @@ export function useRepositoryFileContentSource({
       ],
       load: (path) =>
         getProjectRepoFileContent({
+          cloneUrl,
+          defaultBranch: activeBranch ?? repository.defaultBranch,
+          targetRef,
+          targetCommit,
+          path,
+        }),
+      loadBytes: (path) =>
+        getProjectRepoFileBytes({
           cloneUrl,
           defaultBranch: activeBranch ?? repository.defaultBranch,
           targetRef,

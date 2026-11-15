@@ -1009,7 +1009,8 @@ fn build_upload_pack_advertisement(manifest: &super::manifest::Manifest) -> Vec<
     let caps = format!(
         "multi_ack thin-pack side-band side-band-64k ofs-delta shallow \
          deepen-since deepen-not deepen-relative no-progress include-tag \
-         multi_ack_detailed no-done symref=HEAD:{head} object-format={fmt} \
+         multi_ack_detailed no-done filter allow-reachable-sha1-in-want \
+         symref=HEAD:{head} object-format={fmt} \
          agent=buzz-git",
         head = manifest.head,
         fmt = object_format,
@@ -1190,6 +1191,9 @@ async fn info_refs_subprocess(
         .stderr(std::process::Stdio::from(stderr_file))
         .kill_on_drop(true);
     harden_git_env(&mut cmd);
+    if git_subcmd == "upload-pack" {
+        cmd.envs(upload_pack_git_config());
+    }
 
     let mut child = cmd.spawn().map_err(|e| {
         error!(error = %e, "git subprocess failed to spawn");
@@ -1523,6 +1527,22 @@ fn receive_pack_git_config(hooks_dir: String) -> Vec<(&'static str, String)> {
         // receive-pack to apply the deletion before that selection runs.
         ("GIT_CONFIG_KEY_1", "receive.denyDeleteCurrent".to_string()),
         ("GIT_CONFIG_VALUE_1", "ignore".to_string()),
+    ]
+}
+
+/// Per-process git configuration for `upload-pack` (advertisement and pack).
+///
+/// LOCAL DIVERGENCE: partial clones (`--filter=blob:none`) let a client
+/// commit new files without downloading the existing ones, and fetch a single
+/// file by id afterwards. Both only reach objects reachable from the
+/// advertised refs, which the reader may already clone in full.
+fn upload_pack_git_config() -> [(&'static str, &'static str); 5] {
+    [
+        ("GIT_CONFIG_COUNT", "2"),
+        ("GIT_CONFIG_KEY_0", "uploadpack.allowFilter"),
+        ("GIT_CONFIG_VALUE_0", "true"),
+        ("GIT_CONFIG_KEY_1", "uploadpack.allowReachableSHA1InWant"),
+        ("GIT_CONFIG_VALUE_1", "true"),
     ]
 }
 
@@ -1886,6 +1906,9 @@ fn stream_git_read(
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
     harden_git_env(&mut cmd);
+    if service == "upload-pack" {
+        cmd.envs(upload_pack_git_config());
+    }
 
     let mut child = cmd.spawn().map_err(|e| {
         error!(error = %e, service = %service, "git subprocess failed to spawn");
@@ -3953,6 +3976,8 @@ mod track_c_tests {
         assert!(caps.contains("symref=HEAD:refs/heads/main"));
         assert!(caps.contains("object-format=sha1"));
         assert!(caps.contains("side-band-64k"));
+        assert!(caps.contains(" filter "));
+        assert!(caps.contains("allow-reachable-sha1-in-want"));
 
         // 3,4: refs sorted ascending — feature before main (BTreeMap order),
         // each "<oid> <refname>\n", no NUL.
@@ -3967,6 +3992,90 @@ mod track_c_tests {
 
         // 5: trailing flush
         assert!(frames[5].is_empty());
+    }
+
+    /// A blobless partial clone downloads no file contents, and a single file
+    /// is fetched on demand — over protocol v0, the relay's protocol. Without
+    /// the config, upload-pack ignores the filter and sends every file.
+    #[test]
+    fn upload_pack_config_serves_blobless_clones_and_single_files() {
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .current_dir(dir)
+                .args(["-c", "protocol.version=0"])
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .expect("run git");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out.stdout
+        };
+        let missing_files = |clone: &std::path::Path| {
+            let list = git(clone, &["rev-list", "--objects", "--missing=print", "HEAD"]);
+            String::from_utf8_lossy(&list)
+                .lines()
+                .filter(|l| l.starts_with('?'))
+                .count()
+        };
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        std::fs::create_dir_all(source.join("assets")).unwrap();
+        git(&source, &["init", "-q", "-b", "main"]);
+        std::fs::write(source.join("assets/a.bin"), vec![1u8; 200_000]).unwrap();
+        std::fs::write(source.join("assets/b.bin"), vec![2u8; 200_000]).unwrap();
+        git(&source, &["add", "."]);
+        git(&source, &["commit", "-q", "-m", "images"]);
+        let url = format!("file://{}", source.display()).replace('\\', "/");
+
+        // Git clears GIT_CONFIG_* before starting a local upload-pack, so the
+        // relay's environment is handed over through the upload-pack command.
+        let configured = upload_pack_git_config()
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let configured = format!("env {configured} git-upload-pack");
+        for (name, upload_pack, expected_missing) in [
+            ("plain", "git-upload-pack", 0),
+            ("partial", configured.as_str(), 2),
+        ] {
+            git(
+                root.path(),
+                &[
+                    "clone",
+                    "-q",
+                    "--depth",
+                    "1",
+                    "--filter=blob:none",
+                    "--no-checkout",
+                    "--upload-pack",
+                    upload_pack,
+                    &url,
+                    name,
+                ],
+            );
+            assert_eq!(
+                missing_files(&root.path().join(name)),
+                expected_missing,
+                "{name}"
+            );
+        }
+
+        let partial = root.path().join("partial");
+        git(
+            &partial,
+            &["config", "remote.origin.uploadpack", &configured],
+        );
+        let file = git(&partial, &["cat-file", "blob", "HEAD:assets/a.bin"]);
+        assert_eq!(file.len(), 200_000);
+        assert_eq!(missing_files(&partial), 1);
     }
 
     #[test]

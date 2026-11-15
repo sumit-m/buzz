@@ -13,11 +13,25 @@ import {
 } from "@/features/projects/projectCreation";
 import { buildProjectPatchTemplate } from "@/features/projects/projectRepositoryCreation";
 import { buildProjectReadModels } from "@/features/projects/projectModels";
+import {
+  isDuplicateChannelNameError,
+  pickReusableHomeChannel,
+  rebindRepositoryTemplate,
+} from "@/features/projects/projectRecreation";
 import { relayClient } from "@/shared/api/relayClient";
-import { createChannel, signRelayEvent } from "@/shared/api/tauri";
+import {
+  createChannel,
+  getChannelDetails,
+  getChannelMembers,
+  getChannels,
+  signRelayEvent,
+  unarchiveChannel,
+  updateChannel,
+} from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import type {
   Channel,
+  ChannelDetail,
   ChannelVisibility,
   RelayEvent,
 } from "@/shared/api/types";
@@ -41,11 +55,14 @@ export type CreateProjectResult = {
   /** Retained for callers shared with legacy repository-only creation. */
   compatibilityWarning?: string;
   project: Project;
+  /** Leftovers of a deleted project with this name that creation re-used. */
+  reused?: { channel: boolean; repository: boolean };
 };
 
 export type CreateProjectResumeState = {
   channels: Map<string, Channel>;
   projectIds: Set<string>;
+  reusedChannelIds: Set<string>;
 };
 
 function formatAgentFailures(
@@ -212,7 +229,86 @@ async function finishCreate(
   }
   resume.projectIds.delete(projectId);
   resume.channels.delete(projectId);
+  if (channel) resume.reusedChannelIds.delete(channel.id);
   return { channel, project };
+}
+
+async function findReusableHomeChannel(
+  name: string,
+  ownerPubkey: string,
+  leftoverChannelId: string | null,
+): Promise<ChannelDetail | null> {
+  // `createdBy` on a channel is the relay that signs its metadata, so
+  // ownership comes from the member roles instead.
+  const { channels } = await getChannels(null);
+  const normalizedName = name.trim().toLowerCase();
+  const candidateIds = new Set<string>();
+  if (leftoverChannelId) candidateIds.add(leftoverChannelId);
+  for (const channel of channels ?? []) {
+    if (channel.name.trim().toLowerCase() === normalizedName) {
+      candidateIds.add(channel.id);
+    }
+  }
+  const candidates = await Promise.all(
+    [...candidateIds].map(async (id) => {
+      try {
+        const [detail, members] = await Promise.all([
+          getChannelDetails(id),
+          getChannelMembers(id),
+        ]);
+        const managerPubkeys = members
+          .filter(
+            (member) => member.role === "owner" || member.role === "admin",
+          )
+          .map((member) => member.pubkey);
+        return { ...detail, managerPubkeys };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return pickReusableHomeChannel({
+    candidates: candidates.filter((candidate) => candidate !== null),
+    leftoverChannelId,
+    name,
+    ownerPubkey,
+  });
+}
+
+async function reopenHomeChannel(
+  channel: ChannelDetail,
+  description?: string,
+): Promise<Channel> {
+  if (channel.archivedAt) await unarchiveChannel(channel.id);
+  const fill = description?.trim();
+  const fillDescription = Boolean(fill) && !channel.description.trim();
+  if (fillDescription && fill) {
+    await updateChannel({ channelId: channel.id, description: fill });
+  }
+  return {
+    ...channel,
+    archivedAt: null,
+    description: fillDescription && fill ? fill : channel.description,
+  };
+}
+
+async function createHomeChannel(input: CreateProjectInput): Promise<Channel> {
+  const name = input.name.trim();
+  try {
+    return await createChannel({
+      channelType: "stream",
+      description: input.description,
+      name,
+      visibility: input.channelVisibility ?? "open",
+    });
+  } catch (error) {
+    if (isDuplicateChannelNameError(error)) {
+      throw new Error(
+        `An open channel named ${name} already exists and is not yours to reuse. Choose another project name.`,
+      );
+    }
+    throw error;
+  }
 }
 
 /** Creates the home channel, a bound default repository, and the NIP-MP project. */
@@ -234,7 +330,12 @@ export async function createProject(
   );
   const projectId = `${ownerPubkey}:${dtagPreview}`;
   const canResume = resume.projectIds.has(projectId);
-  if (existingProject && !canResume) {
+  // A legacy match is the default repository a deleted project left behind:
+  // creation re-uses it rather than refusing.
+  const leftoverRepository = existingProject?.legacy
+    ? (existingProject.repositories[0] ?? null)
+    : null;
+  if (existingProject && !canResume && !leftoverRepository) {
     throw new Error(`You already have a project named "${dtagPreview}".`);
   }
   if (existingProject && !existingProject.legacy) {
@@ -265,14 +366,20 @@ export async function createProject(
   resume.projectIds.add(projectId);
   let channel = resume.channels.get(projectId);
   if (!channel) {
-    channel = await createChannel({
-      channelType: "stream",
-      description: input.description,
-      name: input.name.trim(),
-      visibility: input.channelVisibility ?? "open",
-    });
+    const leftoverChannel = await findReusableHomeChannel(
+      input.name,
+      ownerPubkey,
+      leftoverRepository?.channelId ?? null,
+    );
+    if (leftoverChannel) {
+      channel = await reopenHomeChannel(leftoverChannel, input.description);
+      resume.reusedChannelIds.add(channel.id);
+    } else {
+      channel = await createHomeChannel(input);
+    }
     resume.channels.set(projectId, channel);
   }
+  const reusedChannel = resume.reusedChannelIds.has(channel.id);
 
   const templates = buildProjectBootstrapTemplates({
     description: input.description,
@@ -290,11 +397,28 @@ export async function createProject(
   await publishProjectEvent(projectEvent);
 
   let repositoryEvent = existingRepositoryEvent;
-  if (!repositoryEvent) {
+  if (repositoryEvent) {
+    const rebound = rebindRepositoryTemplate(
+      repositoryEvent,
+      channel.id,
+      input.description,
+    );
+    if (rebound) {
+      repositoryEvent = await signRelayEvent(rebound);
+      await publishRepositoryEvent(repositoryEvent);
+    }
+  } else {
     repositoryEvent = await signRelayEvent(templates.repository);
     await publishRepositoryEvent(repositoryEvent);
   }
 
   const project = readCreatedProject(projectEvent, repositoryEvent);
-  return finishCreate(channel, project, input, resume, projectId);
+  const result = await finishCreate(channel, project, input, resume, projectId);
+  return {
+    ...result,
+    reused: {
+      channel: reusedChannel,
+      repository: Boolean(existingRepositoryEvent),
+    },
+  };
 }

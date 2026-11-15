@@ -25,6 +25,23 @@ import { getCachedRelayOrigin } from "@/shared/lib/mediaUrl";
 
 export type { CreateProjectInput, CreateProjectResult };
 
+function reusedLeftoversNotice(
+  channel: Channel | null,
+  project: Project,
+  reused: CreateProjectResult["reused"],
+): string | null {
+  const channelLabel = reused?.channel && channel ? channel.name : null;
+  if (channelLabel && reused?.repository) {
+    return `Reused channel ${channelLabel} and its repository`;
+  }
+  if (channelLabel) return `Reused channel ${channelLabel}`;
+  if (reused?.repository) {
+    const repository = project.repositories[0];
+    return `Reused repository ${repository?.name || project.dtag}`;
+  }
+  return null;
+}
+
 /** Mutation that creates a project home and inserts it into the caches. */
 export function useCreateProjectMutation() {
   const queryClient = useQueryClient();
@@ -32,12 +49,13 @@ export function useCreateProjectMutation() {
   const resumeRef = React.useRef<CreateProjectResumeState>({
     channels: new Map(),
     projectIds: new Set(),
+    reusedChannelIds: new Set(),
   });
 
   return useMutation({
     mutationFn: (input: CreateProjectInput) =>
       createProject(input, resumeRef.current),
-    onSuccess: async ({ channel, project }, input) => {
+    onSuccess: async ({ channel, project, reused }, input) => {
       markProjectDataAuthoritative(project, "local-write");
       addProjectToSidebar(
         project.projectAddress,
@@ -66,9 +84,11 @@ export function useCreateProjectMutation() {
           queryKey: channelsQueryKey,
           refetchType: "none",
         });
+        // A re-used home channel keeps its canvas.
         const useProjectHomeTemplate =
-          input.templateId === undefined ||
-          input.templateId === PROJECT_HOME_TEMPLATE_ID;
+          !reused?.channel &&
+          (input.templateId === undefined ||
+            input.templateId === PROJECT_HOME_TEMPLATE_ID);
         if (useProjectHomeTemplate) {
           const applied = await applyProjectHomeCanvas({
             channelId: channel.id,
@@ -79,6 +99,8 @@ export function useCreateProjectMutation() {
               "Project created, but its project-home canvas could not be added.",
             );
           }
+        } else if (input.templateId && reused?.channel) {
+          await applyAgents(input.templateId, channel.id);
         } else if (input.templateId) {
           await Promise.all([
             applyCanvas(input.templateId, channel.id, channel.name),
@@ -86,6 +108,8 @@ export function useCreateProjectMutation() {
           ]);
         }
       }
+      const reusedNotice = reusedLeftoversNotice(channel, project, reused);
+      if (reusedNotice) toast.success(reusedNotice);
       void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
     },
   });

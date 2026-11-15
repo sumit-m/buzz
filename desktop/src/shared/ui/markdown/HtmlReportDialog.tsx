@@ -15,8 +15,14 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 
+import { SyntaxHighlightedCode } from "./CodeBlock";
 import { type HtmlDocument, openHtmlDocument } from "./htmlDocumentPanel";
-import { isHtmlFilename, withReportCsp, withViewerTheme } from "./htmlReport";
+import {
+  isHtmlFilename,
+  prettyJson,
+  withReportCsp,
+  withViewerTheme,
+} from "./htmlReport";
 
 type LoadState =
   | { phase: "loading" }
@@ -40,6 +46,23 @@ export function relayHtmlDocument(
     load: async (signal) =>
       new TextDecoder("utf-8").decode(await fetchMediaBytes(href, signal)),
     loadKey: href,
+  };
+}
+
+/** A relay-hosted JSON file, pretty-printed and highlighted; downloads the original. */
+export function relayJsonDocument(
+  href: string,
+  filename: string,
+): HtmlDocument {
+  return {
+    filename,
+    load: async (signal) =>
+      prettyJson(
+        new TextDecoder("utf-8").decode(await fetchMediaBytes(href, signal)),
+      ),
+    loadKey: href,
+    language: "json",
+    download: () => downloadRelayFile(href, filename),
   };
 }
 
@@ -79,16 +102,29 @@ function useHtmlDocumentState(doc: HtmlDocument | null): LoadState {
 function HtmlReportFrame({
   className,
   filename,
+  language,
   state,
 }: {
   className?: string;
   filename: string;
+  language?: string;
   state: LoadState;
 }) {
   const { isDark } = useTheme();
   return (
     <div className={cn("h-full min-h-0 flex-1", className)}>
-      {state.phase === "ready" ? (
+      {state.phase === "ready" && language ? (
+        <pre
+          className="h-full overflow-auto bg-background/60 p-4"
+          data-testid="html-report-source"
+        >
+          <SyntaxHighlightedCode
+            className="whitespace-pre-wrap break-words text-xs leading-relaxed"
+            code={state.html}
+            language={language}
+          />
+        </pre>
+      ) : state.phase === "ready" ? (
         <iframe
           className="h-full w-full border-0"
           data-testid="html-report-frame"
@@ -112,9 +148,11 @@ function HtmlReportFrame({
 }
 
 function HtmlDocumentDownloadButton({
+  download,
   filename,
   state,
 }: {
+  download?: () => void;
   filename: string;
   state: LoadState;
 }) {
@@ -125,6 +163,10 @@ function HtmlDocumentDownloadButton({
       disabled={state.phase !== "ready"}
       onClick={() => {
         if (state.phase !== "ready") return;
+        if (download) {
+          download();
+          return;
+        }
         invokeTauri("save_html_file", { filename, html: state.html }).catch(
           (err: unknown) => {
             toast.error(err instanceof Error ? err.message : "Download failed");
@@ -158,12 +200,17 @@ export function useHtmlDocumentParts(
   if (!doc) return null;
   return {
     actions: (
-      <HtmlDocumentDownloadButton filename={doc.filename} state={state} />
+      <HtmlDocumentDownloadButton
+        download={doc.download}
+        filename={doc.filename}
+        state={state}
+      />
     ),
     body: (
       <HtmlReportFrame
         className="overflow-hidden rounded-lg border border-border/60"
         filename={doc.filename}
+        language={doc.language}
         state={state}
       />
     ),
@@ -196,7 +243,7 @@ function HtmlReportDialog({
             {parts?.actions}
           </div>
           <DialogDescription className="sr-only">
-            HTML file preview
+            File preview
           </DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 flex-1 flex-col p-4">{parts?.body}</div>

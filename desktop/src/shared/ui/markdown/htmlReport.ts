@@ -17,6 +17,19 @@ export function isHtmlFilename(filename: string): boolean {
   return /\.html?$/i.test(filename);
 }
 
+export function isJsonFilename(filename: string): boolean {
+  return /\.json$/i.test(filename);
+}
+
+/** Two-space indented JSON, or the text unchanged when it does not parse. */
+export function prettyJson(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
 function parseUrl(value: string): URL | null {
   try {
     return new URL(value);

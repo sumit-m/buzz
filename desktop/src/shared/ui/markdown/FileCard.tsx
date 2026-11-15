@@ -3,10 +3,11 @@ import { Download, Eye, FileText } from "lucide-react";
 
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
 
-import { isHtmlFilename } from "./htmlReport";
+import { isHtmlFilename, isJsonFilename } from "./htmlReport";
 import {
   downloadRelayFile,
   relayHtmlDocument,
+  relayJsonDocument,
   useHtmlDocumentViewer,
 } from "./HtmlReportDialog";
 
@@ -32,8 +33,8 @@ function formatFileSize(bytes: number): string {
  * the app's tunnel + a save dialog), not a plain `<a download>` link. A bare
  * link navigates the webview to the blob URL, which escapes to the OS browser
  * and gets bounced to a corporate CDN interstitial ("browser not supported").
- * The native command mirrors the image-download path. HTML files open in the
- * in-app viewer instead, which offers the same download.
+ * The native command mirrors the image-download path. HTML and JSON files open
+ * in the in-app viewer instead, which offers the same download.
  */
 export function FileCard({
   href,
@@ -48,6 +49,7 @@ export function FileCard({
   const viewer = useHtmlDocumentViewer();
   const sizeLabel = size != null ? formatFileSize(size) : "";
   const isHtml = isHtmlFilename(filename);
+  const isJson = isJsonFilename(filename);
   useSmoothCorners(cardRef);
 
   return (
@@ -57,6 +59,7 @@ export function FileCard({
         type="button"
         onClick={() => {
           if (isHtml) viewer.open(relayHtmlDocument(href, filename));
+          else if (isJson) viewer.open(relayJsonDocument(href, filename));
           else downloadRelayFile(href, filename);
         }}
         data-testid="file-card"
@@ -76,7 +79,7 @@ export function FileCard({
             </span>
           ) : null}
         </span>
-        {isHtml ? (
+        {isHtml || isJson ? (
           <Eye className="h-4 w-4 shrink-0 text-muted-foreground" />
         ) : (
           <Download className="h-4 w-4 shrink-0 text-muted-foreground" />

@@ -53,7 +53,7 @@ import {
 } from "./markdown/CodeBlock";
 import { EntityLinkAnchor, useOpenEntityLink } from "./markdown/entityLinks";
 import { ExternalLinkAnchor } from "./markdown/ExternalLinkAnchor";
-import { FileCard } from "./markdown/FileCard";
+import { FileCard, ImageSidecarFrame } from "./markdown/FileCard";
 import {
   AuthoredDeepLinkAnchor,
   ChannelDeepLinkAnchor,
@@ -1500,7 +1500,7 @@ export function createMarkdownComponents(
         );
       }
       return (
-        <span data-block-media="" className="block min-w-0 max-w-full">
+        <ImageSidecarFrame src={src}>
           <ImageBlock
             alt={alt}
             dim={entry?.dim}
@@ -1508,7 +1508,7 @@ export function createMarkdownComponents(
             src={src}
             thumbSrc={entry?.thumb ? rewriteRelayUrl(entry.thumb) : undefined}
           />
-        </span>
+        </ImageSidecarFrame>
       );
     },
     input: MarkdownInput,

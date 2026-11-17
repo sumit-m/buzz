@@ -104,8 +104,24 @@ export function ProjectAgentChatPanel({
   const profileQuery = useProfileQuery();
   const openDmMutation = useOpenDmMutation();
   const startAgentMutation = useStartManagedAgentMutation();
+  // LOCAL DIVERGENCE: an image edit names its agent (mage); a different one
+  // than the conversation's starts a new DM with it on send.
+  const [harnessAgentPubkey, setHarnessAgentPubkey] = React.useState<
+    string | null
+  >(null);
+  const harnessAgent = harnessAgentPubkey
+    ? (candidates.find(
+        (candidate) => candidate.pubkey === normalizePubkey(harnessAgentPubkey),
+      ) ?? null)
+    : null;
+  const activeConversation =
+    harnessAgent && harnessAgent.pubkey !== conversation?.agent.pubkey
+      ? null
+      : conversation;
   const selectedAgent =
-    conversation?.agent ?? pickDefaultProjectsAgent(candidates);
+    (activeConversation ? null : harnessAgent) ??
+    conversation?.agent ??
+    pickDefaultProjectsAgent(candidates);
   const candidateProfilesQuery = useUsersBatchQuery(
     selectedAgent ? [selectedAgent.pubkey] : [],
   );
@@ -160,7 +176,8 @@ export function ProjectAgentChatPanel({
         // opener so a same-second follow-up cannot be hidden by id ordering.
         if (
           homeChannel &&
-          (!conversation || conversation.channel.id === homeChannel.id)
+          (!activeConversation ||
+            activeConversation.channel.id === homeChannel.id)
         ) {
           const alreadyMember = homeChannel.memberPubkeys.some(
             (pubkey) =>
@@ -179,8 +196,10 @@ export function ProjectAgentChatPanel({
         }
         const { channel, sent } = await submitProjectAgentMessage({
           agent: selectedAgent,
-          conversation,
-          content: `${trimmed}${contextPayload}`,
+          conversation: activeConversation,
+          content: mediaTags?.some((tag) => tag[0] === "buzz-composer")
+            ? trimmed
+            : `${trimmed}${contextPayload}`,
           homeChannel,
           mentionPubkeys: [
             ...new Set([...mentionPubkeys, selectedAgent.pubkey]),
@@ -206,7 +225,8 @@ export function ProjectAgentChatPanel({
               request.expectedSignerPubkey,
             ),
         });
-        if (!conversation) {
+        if (!activeConversation) {
+          setHarnessAgentPubkey(null);
           // Anchor the conversation to the exact accepted opener event: a
           // bare timestamp cannot isolate it from unrelated same-second DM
           // history.
@@ -237,8 +257,8 @@ export function ProjectAgentChatPanel({
       }
     },
     [
+      activeConversation,
       contextPayload,
-      conversation,
       homeChannel,
       identityQuery.data?.pubkey,
       isSending,
@@ -255,6 +275,7 @@ export function ProjectAgentChatPanel({
     clearStoredProjectsAgentConversation(storageScope);
     setStoredConversation(null);
     setConversation(null);
+    setHarnessAgentPubkey(null);
   }, [storageScope]);
 
   const conversationBody = (
@@ -279,14 +300,14 @@ export function ProjectAgentChatPanel({
           )}
           data-testid="project-agent-conversation-scroll"
         >
-          {conversation ? (
+          {activeConversation ? (
             <ConversationThread
-              agent={conversation.agent}
+              agent={activeConversation.agent}
               agentAvatarUrl={selectedAgentAvatarUrl}
-              channel={conversation.channel}
+              channel={activeConversation.channel}
               currentPubkey={identityQuery.data?.pubkey ?? null}
               selfAvatarUrl={profileQuery.data?.avatarUrl ?? null}
-              opener={conversation.opener}
+              opener={activeConversation.opener}
             />
           ) : (
             <div className="flex min-h-40 flex-1 flex-col items-center justify-center gap-2 text-center">
@@ -315,6 +336,8 @@ export function ProjectAgentChatPanel({
           draftKey={`project-agent:${storageScope ?? "unscoped"}`}
           isSending={isSending}
           layoutMode="standalone"
+          harnessRepositoryAddresses={[context.repoAddress]}
+          onHarnessEditAgent={setHarnessAgentPubkey}
           onSend={handleSubmit}
           placeholder={
             selectedAgent

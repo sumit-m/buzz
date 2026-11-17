@@ -63,6 +63,7 @@ export function useRepositoryFileContentSource({
             cloneUrl: repository.cloneUrls[0] ?? null,
             paths,
           }),
+        repository,
       };
     }
 
@@ -109,6 +110,7 @@ export function useRepositoryFileContentSource({
           targetCommit,
           paths,
         }),
+      repository,
     };
   }, [
     activeBranch,

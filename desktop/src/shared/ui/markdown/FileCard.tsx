@@ -4,12 +4,16 @@ import { Download, Eye, FileText } from "lucide-react";
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
 
 import { isHtmlFilename, isJsonFilename } from "./htmlReport";
+import { isImageSidecarFile } from "./imageSidecarMatch";
+import { useMarkdownRuntime } from "./runtimeContext";
 import {
   downloadRelayFile,
   relayHtmlDocument,
   relayJsonDocument,
   useHtmlDocumentViewer,
 } from "./HtmlReportDialog";
+
+export { ImageSidecarFrame } from "./imageSidecarAttachment";
 
 /** Human-readable byte size: "820 B", "12.4 KB", "3.1 MB". */
 function formatFileSize(bytes: number): string {
@@ -50,7 +54,10 @@ export function FileCard({
   const sizeLabel = size != null ? formatFileSize(size) : "";
   const isHtml = isHtmlFilename(filename);
   const isJson = isJsonFilename(filename);
+  const { imetaByUrl } = useMarkdownRuntime();
   useSmoothCorners(cardRef);
+  // LOCAL DIVERGENCE: an image's sidecar shows as the image's info sidebar.
+  if (isImageSidecarFile(imetaByUrl, filename)) return null;
 
   return (
     <>

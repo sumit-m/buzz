@@ -11,6 +11,8 @@ export type SidecarField = {
 export type ImageSidecar = {
   prompt: string | null;
   fields: SidecarField[];
+  /** Every scalar value by its key, for starting an edit from this image. */
+  values: Record<string, string>;
 };
 
 /** Shown elsewhere (file name, prompt, dimensions) or not wanted in the sidebar. */
@@ -91,6 +93,12 @@ export function parseImageSidecar(text: string): ImageSidecar | null {
     record.dimensions = `${record.width} × ${record.height}`;
   }
 
+  const values: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(record)) {
+    const value = scalarText(raw);
+    if (value) values[key] = value;
+  }
+
   const fields: SidecarField[] = [];
   const used = new Set(HIDDEN_KEYS);
   for (const known of KNOWN_FIELDS) {
@@ -105,5 +113,5 @@ export function parseImageSidecar(text: string): ImageSidecar | null {
     if (value) fields.push({ label: titleCase(key), value });
   }
 
-  return { prompt: scalarText(record.prompt), fields };
+  return { prompt: scalarText(record.prompt), fields, values };
 }

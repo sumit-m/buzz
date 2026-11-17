@@ -73,6 +73,10 @@ pub(super) fn append_sent_from_thread_tag(
 /// to prevent injection of arbitrary tags (e.g., forged "h", "e", or "p" tags).
 pub(super) fn imeta_tags(media_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
     for media_tag in media_tags {
+        if media_tag.first().map(String::as_str) == Some(COMPOSER_TAG) {
+            composer_tag(media_tag, tags)?;
+            continue;
+        }
         if media_tag.first().map(String::as_str) != Some("imeta") {
             return Err(format!(
                 "media tags must use 'imeta' prefix (got {:?})",
@@ -82,6 +86,36 @@ pub(super) fn imeta_tags(media_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Res
         let parts: Vec<&str> = media_tag.iter().map(String::as_str).collect();
         tags.push(Tag::parse(parts).map_err(|e| format!("invalid imeta tag: {e}"))?);
     }
+    Ok(())
+}
+
+/// LOCAL DIVERGENCE: a harness panel's settings, `["buzz-composer",
+/// <harness id>, <json object>]`, ride the media-tag path from the composer.
+/// The shape is checked exactly, so it can't carry forged h/e/p tags.
+const COMPOSER_TAG: &str = "buzz-composer";
+const MAX_COMPOSER_JSON_BYTES: usize = 4096;
+
+fn composer_tag(tag_parts: &[String], tags: &mut Vec<Tag>) -> Result<(), String> {
+    let [_, harness_id, json] = tag_parts else {
+        return Err("composer tag must be [\"buzz-composer\", harness, json]".into());
+    };
+    let valid_id = !harness_id.is_empty()
+        && harness_id.len() <= 64
+        && harness_id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+    if !valid_id {
+        return Err("composer tag has an invalid harness id".into());
+    }
+    let is_object = json.len() <= MAX_COMPOSER_JSON_BYTES
+        && serde_json::from_str::<serde_json::Value>(json).is_ok_and(|v| v.is_object());
+    if !is_object {
+        return Err("composer tag payload must be a small JSON object".into());
+    }
+    tags.push(
+        Tag::parse([COMPOSER_TAG, harness_id.as_str(), json.as_str()])
+            .map_err(|e| format!("invalid composer tag: {e}"))?,
+    );
     Ok(())
 }
 
@@ -146,6 +180,35 @@ mod tests {
             tags[0].as_slice(),
             &["mention", PUBKEY, AGENT_ADDRESS_MENTION_MARKER]
         );
+    }
+
+    #[test]
+    fn media_tags_accept_a_well_formed_composer_tag_only() {
+        let tag = |parts: &[&str]| parts.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        let mut tags = Vec::new();
+        imeta_tags(
+            &[tag(&[
+                "buzz-composer",
+                "mage",
+                r#"{"v":1,"mode":"generate"}"#,
+            ])],
+            &mut tags,
+        )
+        .unwrap();
+        assert_eq!(tags[0].as_slice()[..2], ["buzz-composer", "mage"]);
+
+        for bad in [
+            tag(&["buzz-composer", "mage"]),
+            tag(&["buzz-composer", "Mage!", "{}"]),
+            tag(&["buzz-composer", "mage", "[1]"]),
+            tag(&["buzz-composer", "mage", "{}", "extra"]),
+            tag(&["h", "channel"]),
+        ] {
+            assert!(
+                imeta_tags(&[bad.clone()], &mut Vec::new()).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

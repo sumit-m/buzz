@@ -139,12 +139,14 @@ function ListRows({
 export function ComposerHarnessControls({
   error,
   onChange,
+  onPresetsOpen,
   repositories,
   spec,
   state,
 }: {
   error: string | null;
   onChange: (state: ComposerPanelState) => void;
+  onPresetsOpen?: () => void;
   repositories: ChannelRepository[];
   spec: ComposerSpec;
   state: ComposerPanelState;
@@ -287,7 +289,10 @@ export function ComposerHarnessControls({
         {preset ? (
           <ControlPopup
             label={preset.label}
-            onOpenChange={openChange(preset.id)}
+            onOpenChange={(open) => {
+              if (open) onPresetsOpen?.();
+              openChange(preset.id)(open);
+            }}
             open={openId === preset.id}
             testId={`composer-control-${preset.id}`}
             trigger={

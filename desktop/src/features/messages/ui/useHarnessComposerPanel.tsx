@@ -281,6 +281,7 @@ export function useHarnessComposerPanel({
         <ComposerHarnessControls
           error={error}
           onChange={setState}
+          onPresetsOpen={() => void refetchComposers()}
           repositories={repositories}
           spec={spec}
           state={state}

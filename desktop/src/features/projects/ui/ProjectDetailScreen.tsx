@@ -79,6 +79,7 @@ import { useProjectProfilePanel } from "./useProjectProfilePanel";
 import { useProjectRepositoryPanel } from "./useProjectRepositoryPanel";
 import { useRepositoryFileContentSource } from "./useRepositoryFileContentSource";
 import { useProjectPanelWidths } from "./useProjectPanelWidths";
+import { registerProjectChatOpener } from "@/features/messages/lib/harnessEditRequest";
 import { useProjectRepositoryOpenActions } from "./useProjectRepositoryOpenActions";
 import {
   useProjectDetailGitViews,
@@ -238,6 +239,17 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   );
   const repositoryPanel = useProjectRepositoryPanel(
     `${repository?.id ?? ""}:${activeTab}:${selectedPullRequestId ?? ""}:${selectedIssueId ?? ""}:${selectedCommitHash ?? ""}`,
+  );
+  const { expand: expandRepositoryPanel, setMode: setRepositoryPanelMode } =
+    repositoryPanel;
+  // LOCAL DIVERGENCE: a repository image's Edit opens the agent chat here.
+  React.useEffect(
+    () =>
+      registerProjectChatOpener(() => {
+        setRepositoryPanelMode("chat");
+        expandRepositoryPanel();
+      }),
+    [expandRepositoryPanel, setRepositoryPanelMode],
   );
   const {
     commitDiffQuery,

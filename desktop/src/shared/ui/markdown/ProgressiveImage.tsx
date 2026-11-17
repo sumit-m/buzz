@@ -2,6 +2,8 @@ import * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
 
+import { ImageBoxContext } from "./imageBox";
+
 // `object-scale-down` (not `object-contain`) so small dim-less badges don't
 // upscale to fill the reserve box on first view — the decoded size only
 // stabilizes after the cache hits. See #4384 for the full trade-off.
@@ -85,15 +87,16 @@ export function ProgressiveImage({
     [fullImageRef, thumbnailRef],
   );
 
+  const box = React.useContext(ImageBoxContext);
   const frameStyle = React.useMemo<React.CSSProperties>(() => {
-    const scale = Math.min(1, 384 / width, 256 / height);
+    const scale = Math.min(1, box.width / width, box.height / height);
     return {
       ...style,
       aspectRatio: `${width} / ${height}`,
       height: "auto",
       width: `${Math.max(1, Math.round(width * scale))}px`,
     };
-  }, [height, style, width]);
+  }, [box, height, style, width]);
 
   return (
     <span

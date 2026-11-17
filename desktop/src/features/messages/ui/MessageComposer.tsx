@@ -50,6 +50,7 @@ import { ComposerUploadProgressPill } from "./ComposerUploadProgressPill";
 import { NonMemberMentionDialog } from "./NonMemberMentionDialog";
 import { useComposerVoiceNote } from "./useComposerVoiceNote";
 import { useMentionSendFlow } from "./useMentionSendFlow";
+import { useHarnessComposerPanel } from "./useHarnessComposerPanel";
 import { useAgentAddressLockPicker } from "./useAgentAddressLockPicker";
 import { useAddressMentionPulse } from "./useAddressMentionPulse";
 import { useAlwaysAddressShortcut } from "./useAlwaysAddressShortcut";
@@ -98,6 +99,8 @@ function MessageComposerImpl({
   showBackgroundUploadProgress = true,
   showTopBorder = false,
   toolbarExtraActions,
+  harnessRepositoryAddresses,
+  onHarnessEditAgent,
   typingParentEventId = null,
   typingRootEventId = null,
 }: MessageComposerProps) {
@@ -255,6 +258,9 @@ function MessageComposerImpl({
     channelLinks.isChannelOpen ||
     emojiAutocomplete.isEmojiAutocompleteOpen;
   const submitMessageRef = React.useRef<() => void>(() => {});
+  // LOCAL DIVERGENCE: in a harness panel's prompt, `@name` is prompt text
+  // (character references for image models), not a mention.
+  const harnessPanelActiveRef = React.useRef(false);
   const composerScrollRef = React.useRef<HTMLDivElement>(null);
   const formRef = React.useRef<HTMLFormElement>(null);
   const composerOwnsFocus = useComposerFocusOwnership(formRef);
@@ -305,7 +311,8 @@ function MessageComposerImpl({
       if (!isSubmitLockedRef.current && !editTargetRef.current) {
         syncAddressedAgentsFromTextRef.current(text);
       }
-      mentions.updateMentionQuery(text, cursor);
+      if (harnessPanelActiveRef.current) mentions.updateMentionQuery("", 0);
+      else mentions.updateMentionQuery(text, cursor);
       channelLinks.updateChannelQuery(text, cursor);
       emojiAutocomplete.updateEmojiQuery(text, cursor);
       if (text.trim().length > 0) {
@@ -329,6 +336,30 @@ function MessageComposerImpl({
       rootTags: audienceContext?.rootTags ?? [],
       scope: audienceScope,
     });
+  const harnessPanel = useHarnessComposerPanel({
+    addressedPubkeys: persistentAudience.pubkeys,
+    channelId,
+    draftKey: effectiveDraftKey ?? null,
+    editor: richText.editor,
+    enabled: editTarget == null,
+    extraRepositoryAddresses: harnessRepositoryAddresses,
+    imageCount: [
+      ...media.pendingImeta.map((m) => m.type),
+      ...media.queuedAttachments.map((a) => a.file.type),
+    ].filter((type) => type.startsWith("image/")).length,
+    loadDraft: ({ image, mention }) => {
+      onHarnessEditAgent?.(mention.pubkey);
+      mentions.restoreDraftMentionRefs([mention]);
+      media.setPendingImeta(image instanceof File ? [] : [image]);
+      media.clearQueuedAttachments();
+      if (image instanceof File) void media.uploadFile(image);
+    },
+    mentionPubkeys: mentions.extractMentionPubkeys(previewContent),
+    text: previewContent,
+  });
+  const harnessPanelRef = React.useRef(harnessPanel);
+  harnessPanelRef.current = harnessPanel;
+  harnessPanelActiveRef.current = harnessPanel.controls !== null;
   const addressPulse = useAddressMentionPulse();
   const {
     completeOptionsReveal: completeMentionOptionsReveal,
@@ -628,6 +659,8 @@ function MessageComposerImpl({
     ) {
       return;
     }
+    if (!harnessPanelRef.current.checkSend()) return;
+    harnessPanelRef.current.rememberRequest();
     isSubmitLockedRef.current = true;
     setIsSubmitLocked(true);
     onPreparingMentionSendChange?.(true);
@@ -643,7 +676,10 @@ function MessageComposerImpl({
         capturedThreadContext,
         pendingImeta: currentPendingImeta,
         queuedAttachments: currentQueuedAttachments,
-        linkPreviewTags: preparedLinkPreviews ? [] : getReadyLinkPreviewTags(),
+        linkPreviewTags: [
+          ...(preparedLinkPreviews ? [] : getReadyLinkPreviewTags()),
+          ...harnessPanelRef.current.sendTags(),
+        ],
         preparedLinkPreviews,
         sentDraftKey: resolveSentDraftKey(
           effectiveDraftKeyRef.current,
@@ -854,6 +890,7 @@ function MessageComposerImpl({
               layoutMode === "standalone" &&
                 "backdrop-blur-md dark:backdrop-blur-xl",
             )}
+            data-composer-draft-key={effectiveDraftKey ?? undefined}
             data-submit-locked={isSubmitLocked ? "true" : "false"}
             data-testid="message-composer"
             onDragEnter={acceptsDrop ? media.handleDragEnter : undefined}
@@ -917,6 +954,11 @@ function MessageComposerImpl({
             >
               {addressLockAnnouncement}
             </output>
+            {harnessPanel.modeToggle ? (
+              <div className="mb-2 flex justify-end">
+                {harnessPanel.modeToggle}
+              </div>
+            ) : null}
             {(media.pendingImeta.length > 0 ||
               media.queuedAttachments.length > 0 ||
               media.isUploading) && (
@@ -952,6 +994,7 @@ function MessageComposerImpl({
             >
               <EditorContent editor={richText.editor} />
             </div>
+            {harnessPanel.controls}
             <ComposerDockToolbar
               addressedAgents={
                 editTarget == null && !composerDisabled ? lockedAgents : []

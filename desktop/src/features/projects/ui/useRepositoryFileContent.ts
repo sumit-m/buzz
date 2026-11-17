@@ -1,3 +1,4 @@
+import type { Repository } from "@/features/projects/projectModels";
 import { useQuery } from "@tanstack/react-query";
 
 import type { ProjectRepoFile } from "@/features/projects/hooks";
@@ -10,6 +11,8 @@ export type RepositoryFileContentSource = {
   loadBytes?: (path: string) => Promise<Uint8Array<ArrayBuffer> | null>;
   /** Thumbnails for the tiles view, read from one checkout. */
   loadThumbnails?: (paths: string[]) => Promise<ProjectRepoThumbnail[]>;
+  /** The repository these files are from, for actions that reach its channel. */
+  repository?: Repository;
 };
 
 export function useRepositoryFileContent(

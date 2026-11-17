@@ -31,6 +31,9 @@ test("parseImageSidecar labels mage's fields in sidebar order", () => {
     }),
   );
   assert.equal(sidecar.prompt, "a white fox in a jungle");
+  assert.equal(sidecar.values.model_id, "mango-v4");
+  assert.equal(sidecar.values.width, "1024");
+  assert.equal(sidecar.values.tags, undefined);
   assert.deepEqual(
     sidecar.fields.map((field) => [field.label, field.value]),
     [
@@ -49,5 +52,9 @@ test("parseImageSidecar labels mage's fields in sidebar order", () => {
 test("parseImageSidecar rejects anything but a JSON object", () => {
   assert.equal(parseImageSidecar("{not json"), null);
   assert.equal(parseImageSidecar("[1,2]"), null);
-  assert.deepEqual(parseImageSidecar("{}"), { prompt: null, fields: [] });
+  assert.deepEqual(parseImageSidecar("{}"), {
+    prompt: null,
+    fields: [],
+    values: {},
+  });
 });

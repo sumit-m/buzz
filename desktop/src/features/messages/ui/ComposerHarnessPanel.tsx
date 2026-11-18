@@ -2,9 +2,12 @@ import {
   Check,
   GitBranch,
   Image as ImageIcon,
+  LoaderCircle,
   type LucideIcon,
+  Shapes,
   SlidersHorizontal,
   Sparkles,
+  UserPlus,
   WandSparkles,
   X,
 } from "lucide-react";
@@ -26,18 +29,22 @@ import {
   setRepo,
   valueControls,
 } from "@/features/messages/lib/composerHarnessState";
+import { assetControls } from "@/features/messages/lib/promptHandles";
 import { cn } from "@/shared/lib/cn";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import {
   type ChannelRepository,
   ComposerRepoFolderPopup,
 } from "./ComposerRepoFolderPopup";
+import { AssetRow } from "./HarnessAssets";
 
 const ICONS: Record<string, LucideIcon> = {
   sparkles: Sparkles,
   wand: WandSparkles,
   "git-branch": GitBranch,
   photo: ImageIcon,
+  "user-plus": UserPlus,
+  shapes: Shapes,
 };
 
 const BUTTON_CLASS =
@@ -66,6 +73,8 @@ function Shape({ size, max }: { size?: [number, number]; max: number }) {
 
 function ControlPopup({
   children,
+  heading,
+  keepEditorFocus = false,
   label,
   open,
   onOpenChange,
@@ -73,6 +82,9 @@ function ControlPopup({
   testId,
 }: {
   children: React.ReactNode;
+  heading?: React.ReactNode;
+  /** A pick writes into the prompt, so closing leaves focus in the editor. */
+  keepEditorFocus?: boolean;
   label: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -89,8 +101,17 @@ function ControlPopup({
       >
         {trigger}
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-auto min-w-48 p-3" side="top">
-        <p className="mb-2 text-xs text-muted-foreground">{label}</p>
+      <PopoverContent
+        align="start"
+        className="w-auto min-w-48 p-3"
+        onCloseAutoFocus={
+          keepEditorFocus ? (event) => event.preventDefault() : undefined
+        }
+        side="top"
+      >
+        <p className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+          {heading ?? label}
+        </p>
         {children}
       </PopoverContent>
     </Popover>
@@ -139,14 +160,22 @@ function ListRows({
 export function ComposerHarnessControls({
   error,
   onChange,
+  onControlOpen,
+  onInsertHandle,
   onPresetsOpen,
+  refreshingId,
   repositories,
   spec,
   state,
 }: {
   error: string | null;
   onChange: (state: ComposerPanelState) => void;
+  /** A control with a `refresh` opened its menu. */
+  onControlOpen?: (controlId: string) => void;
+  /** An `assets` pick: puts `@handle` in the prompt. */
+  onInsertHandle?: (handle: string) => void;
   onPresetsOpen?: () => void;
+  refreshingId?: string | null;
   repositories: ChannelRepository[];
   spec: ComposerSpec;
   state: ComposerPanelState;
@@ -326,6 +355,63 @@ export function ComposerHarnessControls({
             />
           </ControlPopup>
         ) : null}
+        {assetControls(spec).map((control) => {
+          const Icon = (control.icon && ICONS[control.icon]) || UserPlus;
+          return (
+            <ControlPopup
+              heading={
+                <>
+                  {control.title ?? control.label}
+                  {refreshingId === control.id ? (
+                    <LoaderCircle
+                      aria-label="Refreshing"
+                      className="h-3 w-3 animate-spin"
+                    />
+                  ) : null}
+                </>
+              }
+              keepEditorFocus
+              key={control.id}
+              label={control.label}
+              onOpenChange={(open) => {
+                if (open && control.refresh?.length) {
+                  onControlOpen?.(control.id);
+                }
+                openChange(control.id)(open);
+              }}
+              open={openId === control.id}
+              testId={`composer-control-${control.id}`}
+              trigger={
+                <>
+                  <Icon className="h-4 w-4" />
+                  {control.label}
+                </>
+              }
+            >
+              {control.options.length === 0 ? (
+                <p className="px-2 py-1.5 text-sm text-muted-foreground">
+                  {refreshingId === control.id ? "Loading…" : "None found"}
+                </p>
+              ) : (
+                <div className="-mx-1 flex max-h-80 min-w-64 flex-col overflow-y-auto">
+                  {control.options.map((option) => (
+                    <button
+                      className="rounded-lg px-2 py-2 hover:bg-muted/60"
+                      key={option.value}
+                      onClick={() => {
+                        onInsertHandle?.(option.value);
+                        setOpenId(null);
+                      }}
+                      type="button"
+                    >
+                      <AssetRow large option={option} />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </ControlPopup>
+          );
+        })}
         {repo && (repositories.length > 0 || state.repo) ? (
           <span className="inline-flex items-center">
             <ControlPopup

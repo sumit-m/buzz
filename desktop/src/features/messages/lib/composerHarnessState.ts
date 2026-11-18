@@ -13,6 +13,9 @@ export type ComposerOption = {
   scale?: number;
   sets?: Record<string, string>;
   modes?: string[];
+  /** `https` thumbnail of an `assets` option. */
+  image?: string;
+  hint?: string;
 };
 
 export type ComposerControl = {
@@ -26,6 +29,10 @@ export type ComposerControl = {
   defaultFolder?: string;
   /** The image sidecar key holding this control's value. */
   sidecarKey?: string;
+  /** Heading of the control's menu. */
+  title?: string;
+  /** Set when opening the menu re-reads its options from the harness. */
+  refresh?: string[];
 };
 
 export type ComposerMode = {

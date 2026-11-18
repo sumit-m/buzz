@@ -6,6 +6,17 @@ export function listHarnessComposers(): Promise<HarnessComposer[]> {
   return invokeTauri<HarnessComposer[]>("list_harness_composers");
 }
 
+/** Runs a control's refresh (its menu opened); returns every panel. */
+export function refreshHarnessControl(
+  harnessId: string,
+  controlId: string,
+): Promise<HarnessComposer[]> {
+  return invokeTauri<HarnessComposer[]>("refresh_harness_control", {
+    harnessId,
+    controlId,
+  });
+}
+
 /** Folder paths at a branch's tip, read from a blobless shallow clone. */
 export function getProjectRepoFolders(input: {
   cloneUrl: string;

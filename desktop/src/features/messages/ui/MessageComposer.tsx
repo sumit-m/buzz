@@ -354,6 +354,7 @@ function MessageComposerImpl({
       media.clearQueuedAttachments();
       if (image instanceof File) void media.uploadFile(image);
     },
+    mentionNames: mentions.knownNames,
     mentionPubkeys: mentions.extractMentionPubkeys(previewContent),
     text: previewContent,
   });
@@ -985,6 +986,7 @@ function MessageComposerImpl({
                 ) : null}
               </div>
             )}
+            {harnessPanel.promptExtras}
             {/* biome-ignore lint/a11y/noStaticElementInteractions: keydown handler bridges Tiptap editor to autocomplete and submit */}
             <div
               className="rich-text-composer relative max-h-32 overflow-y-auto"

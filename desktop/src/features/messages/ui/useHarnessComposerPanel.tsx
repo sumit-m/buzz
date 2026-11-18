@@ -33,6 +33,7 @@ import {
   ComposerHarnessControls,
   ComposerHarnessModeToggle,
 } from "./ComposerHarnessPanel";
+import { useHarnessHandles } from "./useHarnessHandles";
 
 function escapeRegExp(text: string) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -65,6 +66,7 @@ export function useHarnessComposerPanel({
   extraRepositoryAddresses,
   imageCount,
   loadDraft,
+  mentionNames,
   mentionPubkeys,
   text,
 }: {
@@ -81,6 +83,8 @@ export function useHarnessComposerPanel({
     image: ImetaMedia | File;
     mention: DraftMentionRef;
   }) => void;
+  /** Names Buzz highlights as mentions; never prompt handles. */
+  mentionNames: readonly string[];
   mentionPubkeys: readonly string[];
   text: string;
 }) {
@@ -266,6 +270,13 @@ export function useHarnessComposerPanel({
   }, [channelId, editRepositories, extraAddressKey, projects.data]);
 
   const visible = Boolean(spec && state);
+  const handles = useHarnessHandles({
+    editor,
+    harnessId,
+    mentionNames,
+    spec: visible ? spec : null,
+    text,
+  });
 
   return {
     modeToggle:
@@ -281,12 +292,17 @@ export function useHarnessComposerPanel({
         <ComposerHarnessControls
           error={error}
           onChange={setState}
+          onControlOpen={(controlId) => void handles.refreshControl(controlId)}
+          onInsertHandle={handles.insertHandle}
           onPresetsOpen={() => void refetchComposers()}
+          refreshingId={handles.refreshingId}
           repositories={repositories}
           spec={spec}
           state={state}
         />
       ) : null,
+    /** Asset chips above the prompt and the `@` autocomplete. */
+    promptExtras: handles.promptExtras,
     /** False (with the reason shown in the panel) when the request can't go. */
     checkSend: () => {
       if (!spec || !state) return true;

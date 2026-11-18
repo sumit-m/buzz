@@ -586,6 +586,7 @@ pub fn run() {
             get_project_repo_thumbnails,
             get_project_repo_folders,
             list_harness_composers,
+            refresh_harness_control,
             get_project_repo_diff,
             get_project_local_repo_diff,
             get_project_local_repo_snapshot,

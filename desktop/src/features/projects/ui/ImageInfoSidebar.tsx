@@ -3,6 +3,12 @@ import { Copy, Globe, Pencil } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 
+import type { AssetIndex } from "@/features/messages/lib/promptHandles";
+import {
+  HighlightedHandles,
+  PromptAssets,
+  useHarnessAssetIndex,
+} from "@/features/messages/ui/HarnessAssets";
 import { cn } from "@/shared/lib/cn";
 import { copyTextToClipboard } from "@/shared/lib/clipboard";
 import { Button } from "@/shared/ui/button";
@@ -11,7 +17,8 @@ import type { ImageSidecar } from "./imageSidecar";
 /**
  * An image's prompt (with Copy Prompt, Edit where the caller supports it, and
  * a globe opening the generator's link to the image) and labelled fields from
- * its sidecar.
+ * its sidecar. Characters and references the prompt names (`@handle`) show
+ * above it while a harness lists assets.
  */
 export function ImageInfoSidebar({
   onEdit,
@@ -21,6 +28,7 @@ export function ImageInfoSidebar({
   sidecar: ImageSidecar;
 }) {
   const { prompt } = sidecar;
+  const assets = useHarnessAssetIndex();
   const parsedExpiry = sidecar.values.expires_at
     ? new Date(sidecar.values.expires_at)
     : null;
@@ -40,7 +48,10 @@ export function ImageInfoSidebar({
     >
       {prompt ? (
         <div className="space-y-4 rounded-xl border border-border/60 bg-muted/20 p-4">
-          <CollapsiblePrompt prompt={prompt} />
+          {assets.size > 0 ? (
+            <PromptAssets index={assets} prompt={prompt} />
+          ) : null}
+          <CollapsiblePrompt assets={assets} prompt={prompt} />
           <div className="flex flex-wrap gap-2">
             <Button
               onClick={() => copyTextToClipboard(prompt, "Prompt copied")}
@@ -115,7 +126,13 @@ function webLink(value: string | undefined): string | null {
 }
 
 /** The prompt clamped to 5 lines, or expanded and scrolling past 15. */
-function CollapsiblePrompt({ prompt }: { prompt: string }) {
+function CollapsiblePrompt({
+  assets,
+  prompt,
+}: {
+  assets: AssetIndex;
+  prompt: string;
+}) {
   const textRef = React.useRef<HTMLParagraphElement>(null);
   const [expanded, setExpanded] = React.useState(false);
   const [overflows, setOverflows] = React.useState(false);
@@ -143,7 +160,11 @@ function CollapsiblePrompt({ prompt }: { prompt: string }) {
         data-testid="image-info-prompt"
         ref={textRef}
       >
-        {prompt}
+        {assets.size > 0 ? (
+          <HighlightedHandles index={assets} text={prompt} />
+        ) : (
+          prompt
+        )}
       </p>
       {overflows ? (
         <button

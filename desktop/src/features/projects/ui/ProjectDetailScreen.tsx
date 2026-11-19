@@ -81,6 +81,7 @@ import { useRepositoryFileContentSource } from "./useRepositoryFileContentSource
 import { useProjectPanelWidths } from "./useProjectPanelWidths";
 import { registerProjectChatOpener } from "@/features/messages/lib/harnessEditRequest";
 import { useProjectRepositoryOpenActions } from "./useProjectRepositoryOpenActions";
+import { useLiveRepoRefresh } from "./useLiveRepoRefresh";
 import {
   useProjectDetailGitViews,
   useRetainedPullRequestSelection,
@@ -120,6 +121,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     PROJECT_REPOSITORY_SEARCH_KEYS,
   );
   const repoStateQuery = useRepoStateQuery(repository);
+  useLiveRepoRefresh(repository);
   const pullRequestsQuery = useProjectPullRequestsQuery(repository);
   const defaultBranch = repository
     ? resolveProjectDefaultBranch(repository.defaultBranch, repoStateQuery.data)

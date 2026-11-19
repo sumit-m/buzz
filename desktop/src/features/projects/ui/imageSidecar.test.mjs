@@ -56,5 +56,47 @@ test("parseImageSidecar rejects anything but a JSON object", () => {
     prompt: null,
     fields: [],
     values: {},
+    origin: null,
   });
+});
+
+test("parseImageSidecar reads mage-agent's origin block", () => {
+  const sidecar = parseImageSidecar(
+    JSON.stringify({
+      prompt: "remove the ball",
+      buzz: {
+        mode: "edit",
+        source: {
+          url: "https://relay/media/ab.png",
+          m: "image/png",
+          x: "ab",
+          dim: "896x1152",
+          extra: "x",
+        },
+        repo: "owner/site",
+      },
+    }),
+  );
+  assert.deepEqual(sidecar.origin, {
+    mode: "edit",
+    source: {
+      url: "https://relay/media/ab.png",
+      m: "image/png",
+      x: "ab",
+      dim: "896x1152",
+    },
+    repo: "owner/site",
+  });
+  assert.equal(sidecar.fields.length, 0);
+  assert.equal(
+    parseImageSidecar('{"buzz":{"mode":"generate"}}').origin.source,
+    null,
+  );
+  assert.equal(parseImageSidecar('{"buzz":{"mode":"later"}}').origin, null);
+  assert.equal(
+    parseImageSidecar(
+      '{"buzz":{"mode":"edit","source":{"url":"file:///c/a.png"}}}',
+    ).origin.source,
+    null,
+  );
 });

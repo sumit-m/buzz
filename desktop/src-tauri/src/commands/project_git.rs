@@ -3,6 +3,7 @@ use super::project_git_exec::{
     GitAuthConfig,
 };
 use super::project_git_file_content::{checkout_project_repo, read_preview_content};
+use super::project_git_file_dates::set_created_at;
 use super::project_git_push::push_project_local_repository_blocking;
 pub use super::project_git_types::{
     GitIdentityInfo, ProjectLocalRepoInfo, ProjectLocalRepoSnapshotInfo, ProjectRepoCommitInfo,
@@ -181,6 +182,7 @@ fn parse_worktree_files(
                     .map(|commit| commit.timestamp)
                     .or_else(|| path_modified_at(&full_path)),
                 latest_commit,
+                created_at: None,
             }
         })
         .collect()
@@ -250,6 +252,7 @@ fn parse_ls_tree(
                     .get(path)
                     .map(|commit| commit.timestamp),
                 latest_commit: latest_commit_by_path.get(path).cloned(),
+                created_at: None,
             })
         })
         .collect()
@@ -296,7 +299,7 @@ fn snapshot_from_repo(
     };
 
     let files = if latest_commit.is_some() {
-        let latest_commit_by_path = run_git(
+        let history = run_git(
             &[
                 "log",
                 "--format=%H%x00%h%x00%an%x00%ae%x00%at%x00%s",
@@ -307,12 +310,14 @@ fn snapshot_from_repo(
             Some(repo_dir),
             auth,
         )
-        .map(|output| parse_latest_commit_by_path(&output))
         .unwrap_or_default();
+        let latest_commit_by_path = parse_latest_commit_by_path(&history);
 
-        run_git(&["ls-tree", "-r", "--long", "HEAD"], Some(repo_dir), auth)
+        let mut files = run_git(&["ls-tree", "-r", "--long", "HEAD"], Some(repo_dir), auth)
             .map(|output| parse_ls_tree(repo_dir, &output, &latest_commit_by_path))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        set_created_at(&mut files, &history, repo_dir);
+        files
     } else {
         Vec::new()
     };
@@ -340,7 +345,7 @@ fn snapshot_from_worktree(
     .and_then(|output| parse_latest_commit(&output));
     let branch_activity_range = branch_activity_range(repo_dir, auth, branch_name, base_branch);
     let branch_activity_ref = branch_activity_range.as_deref().unwrap_or("HEAD");
-    let (commits, contributors, latest_commit_by_path) = if latest_commit.is_some() {
+    let (commits, contributors, history) = if latest_commit.is_some() {
         let commits = run_git(
             &[
                 "log",
@@ -360,7 +365,7 @@ fn snapshot_from_worktree(
         )
         .map(|output| parse_contributors(&output))
         .unwrap_or_default();
-        let latest_commit_by_path = run_git(
+        let history = run_git(
             &[
                 "log",
                 "--format=%H%x00%h%x00%an%x00%ae%x00%at%x00%s",
@@ -371,14 +376,14 @@ fn snapshot_from_worktree(
             Some(repo_dir),
             auth,
         )
-        .map(|output| parse_latest_commit_by_path(&output))
         .unwrap_or_default();
-        (commits, contributors, latest_commit_by_path)
+        (commits, contributors, history)
     } else {
-        (Vec::new(), Vec::new(), std::collections::HashMap::new())
+        (Vec::new(), Vec::new(), String::new())
     };
+    let latest_commit_by_path = parse_latest_commit_by_path(&history);
 
-    let files = run_git(
+    let mut files = run_git(
         &[
             "ls-files",
             "--cached",
@@ -391,6 +396,7 @@ fn snapshot_from_worktree(
     )
     .map(|output| parse_worktree_files(repo_dir, &output, &latest_commit_by_path))
     .unwrap_or_default();
+    set_created_at(&mut files, &history, repo_dir);
 
     ProjectRepoSnapshotInfo {
         latest_commit,

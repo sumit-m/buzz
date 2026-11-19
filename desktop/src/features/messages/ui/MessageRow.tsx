@@ -907,6 +907,7 @@ export const MessageRow = React.memo(
               : "",
           )}
           data-message-author={message.pubkey ?? undefined}
+          data-message-channel={channelId ?? undefined}
           data-message-id={message.id}
           data-testid="message-row"
           onAnimationEnd={handleEntranceAnimationEnd}

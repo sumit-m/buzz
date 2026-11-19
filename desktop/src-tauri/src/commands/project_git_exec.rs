@@ -45,6 +45,20 @@ fn git_needs_credentials(args: &[&str]) -> bool {
     )
 }
 
+/// LOCAL DIVERGENCE: whether `dir` is a partial (`--filter`) clone. Its
+/// missing objects are fetched on demand by whichever command needs them
+/// (`diff`, `show`, `cat-file`, ...), so every command run in one needs the
+/// relay's credentials; without them Git for Windows prompts for a username.
+/// Relays that serve partial clones made this reachable.
+fn is_partial_clone(dir: &std::path::Path) -> bool {
+    std::fs::read_to_string(dir.join(".git").join("config")).is_ok_and(|config| {
+        config.lines().any(|line| {
+            let setting: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+            setting.eq_ignore_ascii_case("promisor=true")
+        })
+    })
+}
+
 pub(crate) struct GitAuthConfig {
     git_path: std::path::PathBuf,
     credential_helper: Option<std::path::PathBuf>,
@@ -119,7 +133,7 @@ pub(crate) fn run_git(
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    let needs_credentials = git_needs_credentials(args);
+    let needs_credentials = git_needs_credentials(args) || cwd.is_some_and(is_partial_clone);
     let timeout = if needs_credentials {
         REMOTE_GIT_TIMEOUT
     } else {
@@ -492,6 +506,30 @@ mod tests {
             "HEAD"
         ]));
         assert!(!git_needs_credentials(&["rev-parse", "HEAD"]));
+    }
+
+    #[test]
+    fn partial_clones_are_recognised() {
+        use super::is_partial_clone;
+        use crate::commands::project_git_folders::test_repo::{git, served};
+        let root = tempfile::tempdir().unwrap();
+        let url = served(root.path(), &["a.jpg"]);
+        let blobless = root.path().join("blobless");
+        let full = root.path().join("full");
+        git(
+            root.path(),
+            &[
+                "clone",
+                "-q",
+                "--filter=blob:none",
+                &url,
+                &blobless.to_string_lossy(),
+            ],
+        );
+        git(root.path(), &["clone", "-q", &url, &full.to_string_lossy()]);
+        assert!(is_partial_clone(&blobless));
+        assert!(!is_partial_clone(&full));
+        assert!(!is_partial_clone(&root.path().join("missing")));
     }
 
     #[test]

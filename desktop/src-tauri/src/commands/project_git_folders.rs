@@ -4,7 +4,7 @@
 //! relay that serves partial clones; any other relay falls back to a full
 //! shallow clone, which is slower but still correct.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tauri::State;
 
@@ -32,12 +32,22 @@ pub async fn get_project_repo_folders(
     .map_err(|error| format!("repo folders task failed: {error}"))?
 }
 
-pub(crate) fn list_repo_folders(
+/// A blobless, depth-1 clone without a checkout: folder listings and file
+/// hashes, no file contents.
+pub(crate) struct ShallowClone {
+    pub dir: PathBuf,
+    /// `None` for an empty repository.
+    pub head: Option<String>,
+}
+
+/// Clones `clone_url` into `work/repo`. `None` when the repository is empty or
+/// has no `branch` yet.
+pub(crate) fn shallow_clone(
     work: &Path,
     clone_url: &str,
     branch: Option<&str>,
     auth: &GitAuthConfig,
-) -> Result<Vec<String>, String> {
+) -> Result<Option<ShallowClone>, String> {
     let repo_dir = work.join("repo");
     let repo_arg = repo_dir.to_string_lossy().into_owned();
     let mut args = vec![
@@ -53,22 +63,40 @@ pub(crate) fn list_repo_folders(
     }
     args.extend([clone_url, repo_arg.as_str()]);
     if let Err(error) = run_git(&args, Some(work), auth) {
-        // An empty repository, or one without that branch yet, has no folders.
         let lower = error.to_ascii_lowercase();
         if lower.contains("not found in upstream") || lower.contains("empty repository") {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         return Err(format!("clone failed: {error}"));
     }
-    if run_git(
+    let head = run_git(
         &["rev-parse", "--verify", "--quiet", "HEAD"],
         Some(&repo_dir),
         auth,
     )
-    .is_err()
-    {
+    .ok()
+    .map(|output| output.trim().to_string())
+    .filter(|commit| !commit.is_empty());
+    Ok(Some(ShallowClone {
+        dir: repo_dir,
+        head,
+    }))
+}
+
+pub(crate) fn list_repo_folders(
+    work: &Path,
+    clone_url: &str,
+    branch: Option<&str>,
+    auth: &GitAuthConfig,
+) -> Result<Vec<String>, String> {
+    // An empty repository, or one without that branch yet, has no folders.
+    let Some(ShallowClone {
+        dir: repo_dir,
+        head: Some(_),
+    }) = shallow_clone(work, clone_url, branch, auth)?
+    else {
         return Ok(Vec::new());
-    }
+    };
     let listing = run_git(
         &["ls-tree", "-r", "-d", "--name-only", "-z", "HEAD"],
         Some(&repo_dir),
@@ -82,16 +110,19 @@ pub(crate) fn list_repo_folders(
         .collect())
 }
 
+/// A local bare repository served over `file://`, for tests.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::commands::project_git_exec::build_test_git_auth_config;
+pub(crate) mod test_repo {
+    use std::path::Path;
 
-    fn auth() -> GitAuthConfig {
+    use crate::commands::project_git_exec::{build_test_git_auth_config, GitAuthConfig};
+
+    pub(crate) fn auth() -> GitAuthConfig {
         build_test_git_auth_config().expect("git on PATH")
     }
 
-    fn git(dir: &Path, args: &[&str]) {
+    /// Runs git and returns its trimmed output.
+    pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
         let out = std::process::Command::new("git")
             .current_dir(dir)
             .args(args)
@@ -106,9 +137,11 @@ mod tests {
             "git {args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
-    fn served(root: &Path, files: &[&str]) -> String {
+    /// The bare repo's `file://` URL, seeded with `files` (50 KB each) on `main`.
+    pub(crate) fn served(root: &Path, files: &[&str]) -> String {
         let bare = root.join("remote.git");
         git(
             root,
@@ -142,6 +175,12 @@ mod tests {
         }
         url
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_repo::{auth, served};
+    use super::*;
 
     #[test]
     fn lists_nested_folders() {

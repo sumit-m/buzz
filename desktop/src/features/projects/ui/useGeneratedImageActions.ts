@@ -1,0 +1,361 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import * as React from "react";
+import { toast } from "sonner";
+
+import { useManagedAgentsQuery } from "@/features/agents/hooks";
+import { useChannelsQuery } from "@/features/channels/hooks";
+import {
+  composerPayload,
+  composerTag,
+  editTargetFor,
+  stateFromSidecar,
+} from "@/features/messages/lib/composerHarnessState";
+import { useSendMessageMutation } from "@/features/messages/hooks";
+import { useProjectsQuery } from "@/features/projects/hooks";
+import {
+  type CommitAdd,
+  candidateRepositories,
+  canRegenerate,
+  fileName,
+  folderLabel,
+  folderOf,
+  type ImageLocation,
+  locationFromMatches,
+  parseRepoValue,
+  planRelocation,
+  regenerateMessage,
+  repoValueFor,
+} from "@/features/projects/lib/generatedImage";
+import type { Repository } from "@/features/projects/projectModels";
+import {
+  commitProjectRepoFiles,
+  findProjectRepoFiles,
+  listHarnessComposers,
+  type RepoFileAdd,
+} from "@/shared/api/harnessComposer";
+import { useIdentityQuery } from "@/shared/api/hooks";
+import { getProjectRepoFileBytes } from "@/shared/api/projectGit";
+import { type ImageSidecar, sidecarPathFor } from "./imageSidecar";
+
+/** Where a generated image's sidebar is shown. */
+export type GeneratedImageContext =
+  | {
+      kind: "chat";
+      /** The message's image and sidecar uploads. */
+      imageUrl: string;
+      sidecarUrl: string | null;
+    }
+  | {
+      kind: "repo";
+      repository: Repository;
+      path: string;
+      onOpenPath?: (path: string) => void;
+    };
+
+const CHANNEL_ATTRIBUTE = "data-message-channel";
+const AUTHOR_ATTRIBUTE = "data-message-author";
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let at = 0; at < bytes.length; at += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+  }
+  return btoa(binary);
+}
+
+async function resolveAdd(add: CommitAdd): Promise<RepoFileAdd> {
+  if ("url" in add) return add;
+  const { repository, path } = add.from;
+  const bytes = await getProjectRepoFileBytes({
+    cloneUrl: repository.cloneUrls[0] ?? "",
+    defaultBranch: repository.defaultBranch || null,
+    path,
+  });
+  if (!bytes) throw new Error(`Could not read ${path}`);
+  return { path: add.path, contentBase64: toBase64(bytes) };
+}
+
+/**
+ * LOCAL DIVERGENCE: the image info sidebar's repo button and Regenerate. The
+ * image's repo location is looked up by file name in the repos it may be in
+ * (only when asked), so a move made anywhere is still found.
+ */
+export function useGeneratedImageActions({
+  context,
+  rootRef,
+  sidecar,
+}: {
+  context: GeneratedImageContext | undefined;
+  rootRef: React.RefObject<HTMLElement | null>;
+  sidecar: ImageSidecar;
+}) {
+  const queryClient = useQueryClient();
+  const projects = useProjectsQuery();
+  const channels = useChannelsQuery();
+  const agents = useManagedAgentsQuery();
+  const identity = useIdentityQuery();
+  const sendMessage = useSendMessageMutation(null, identity.data);
+  const composers = useQuery({
+    queryKey: ["harness-composers"],
+    queryFn: listHarnessComposers,
+    staleTime: 60_000,
+  });
+
+  const [message, setMessage] = React.useState<{
+    channelId: string | null;
+    authorPubkey: string | null;
+  }>({ channelId: null, authorPubkey: null });
+  React.useLayoutEffect(() => {
+    const root = rootRef.current;
+    setMessage({
+      channelId:
+        root
+          ?.closest(`[${CHANNEL_ATTRIBUTE}]`)
+          ?.getAttribute(CHANNEL_ATTRIBUTE) ?? null,
+      authorPubkey:
+        root
+          ?.closest(`[${AUTHOR_ATTRIBUTE}]`)
+          ?.getAttribute(AUTHOR_ATTRIBUTE) ?? null,
+    });
+  }, [rootRef]);
+
+  const current = context?.kind === "repo" ? context.repository : null;
+  const channelId = current ? (current.channelId ?? null) : message.channelId;
+  const repositories = React.useMemo(
+    () =>
+      candidateRepositories(
+        (projects.data ?? []).flatMap((project) => project.repositories),
+        { channelId, current, originRepo: sidecar.origin?.repo ?? null },
+      ),
+    [channelId, current, projects.data, sidecar.origin?.repo],
+  );
+  const imageName =
+    sidecar.values.name ??
+    (context?.kind === "repo" ? fileName(context.path) : null);
+  const viewedPath = context?.kind === "repo" ? context.path : null;
+
+  const locationKey = [
+    "generated-image-location",
+    imageName,
+    repositories.map((repository) => repository.id).join(","),
+  ];
+  const findLocation = React.useCallback(async () => {
+    if (!imageName) return null;
+    for (const repository of repositories) {
+      const cloneUrl = repository.cloneUrls[0];
+      if (!cloneUrl) continue;
+      const matches = await findProjectRepoFiles({
+        cloneUrl,
+        branch: repository.defaultBranch || null,
+        names: [imageName, sidecarPathFor(imageName)],
+      });
+      const found = locationFromMatches(
+        repository,
+        matches,
+        imageName,
+        repository.id === current?.id ? viewedPath : null,
+      );
+      if (found) return found;
+    }
+    return null;
+  }, [current?.id, imageName, repositories, viewedPath]);
+  const [locationWanted, setLocationWanted] = React.useState(false);
+  const location = useQuery({
+    enabled: locationWanted && Boolean(imageName),
+    queryKey: locationKey,
+    queryFn: findLocation,
+    staleTime: 30_000,
+  });
+  const fetchLocation = () =>
+    queryClient.fetchQuery({
+      queryKey: locationKey,
+      queryFn: findLocation,
+      staleTime: 30_000,
+    });
+
+  const target = editTargetFor(
+    composers.data ?? [],
+    agents.data ?? [],
+    message.authorPubkey,
+  );
+  const findChannel = (id: string | null | undefined) =>
+    id
+      ? (channels.data ?? []).find((candidate) => candidate.id === id)
+      : undefined;
+  /**
+   * Why a move can't commit to `repository`: like a save, the viewer must own
+   * it or be in its bound channel, and the agent committing must be able to
+   * push there (owner or channel member).
+   */
+  const pushBlock = (
+    repository: Repository,
+    agent: { name: string; pubkey: string },
+  ): string | null => {
+    const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    const bound = findChannel(repository.channelId);
+    const viewer = identity.data?.pubkey ?? "";
+    if (!same(repository.owner, viewer) && !bound?.isMember) {
+      return `You're not in ${repository.name}'s channel`;
+    }
+    const agentIn = bound?.memberPubkeys.some((pubkey) =>
+      same(pubkey, agent.pubkey),
+    );
+    if (!same(repository.owner, agent.pubkey) && !agentIn) {
+      return `${agent.name} can't push to ${repository.name}`;
+    }
+    return null;
+  };
+
+  const [moving, setMoving] = React.useState(false);
+  const relocate = async (value: string) => {
+    const parsed = parseRepoValue(value);
+    const destination = parsed
+      ? repositories.find(
+          (repository) =>
+            repository.dtag === parsed.dtag &&
+            (!parsed.owner || repository.owner === parsed.owner),
+        )
+      : undefined;
+    if (!parsed || !destination || !imageName) return;
+    if (!target) {
+      toast.error("No image agent to make the move");
+      return;
+    }
+    const { agent } = target;
+    setMoving(true);
+    try {
+      const from = await fetchLocation();
+      const plan = planRelocation({
+        attachments:
+          context?.kind === "chat"
+            ? { imageUrl: context.imageUrl, sidecarUrl: context.sidecarUrl }
+            : null,
+        folder: parsed.folder,
+        imageName,
+        location: from,
+        target: destination,
+      });
+      if (!plan) {
+        toast.message(
+          from ? "The image is already there" : "Nothing to copy from",
+        );
+        return;
+      }
+      const blocked = plan.commits
+        .map((commit) => pushBlock(commit.repository, agent))
+        .find((reason) => reason !== null);
+      if (blocked) {
+        toast.error(blocked);
+        return;
+      }
+      for (const commit of plan.commits) {
+        await commitProjectRepoFiles({
+          agentPubkey: agent.pubkey,
+          cloneUrl: commit.repository.cloneUrls[0] ?? "",
+          branch: commit.repository.defaultBranch || null,
+          renames: commit.renames,
+          adds: await Promise.all(commit.adds.map(resolveAdd)),
+          deletes: commit.deletes,
+          message: commit.message,
+        });
+      }
+      const { repository, imagePath } = plan.destination;
+      const moved: ImageLocation = {
+        repository,
+        imagePath,
+        sidecarPath:
+          !from || from.sidecarPath ? sidecarPathFor(imagePath) : null,
+      };
+      queryClient.setQueryData(locationKey, moved);
+      for (const commit of plan.commits) {
+        void queryClient.invalidateQueries({
+          queryKey: ["project", commit.repository.id],
+        });
+      }
+      toast.success(
+        `${from ? "Moved" : "Copied"} to ${repository.name}: ${folderLabel(parsed.folder)}`,
+      );
+      if (context?.kind === "repo" && repository.id === context.repository.id) {
+        context.onOpenPath?.(imagePath);
+      }
+    } catch (error) {
+      toast.error(
+        `Could not move the image: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setMoving(false);
+    }
+  };
+
+  const origin = sidecar.origin;
+  const channel = findChannel(channelId);
+  const regenerateBlocked = (() => {
+    if (!channelId) return "This repository isn't bound to a channel";
+    if (!channel?.isMember) return "Join the channel to regenerate";
+    if (
+      target &&
+      !channel.memberPubkeys.some(
+        (pubkey) => pubkey.toLowerCase() === target.agent.pubkey.toLowerCase(),
+      )
+    ) {
+      return `${target.agent.name} isn't in #${channel.name}`;
+    }
+    return null;
+  })();
+  const [regenerating, setRegenerating] = React.useState(false);
+  const regenerate = async () => {
+    if (!origin || !target || !channel || !sidecar.prompt) return;
+    setRegenerating(true);
+    try {
+      const saved = await fetchLocation().catch(() => null);
+      const { agent, harness } = target;
+      const state = stateFromSidecar(
+        harness.composer,
+        sidecar.values,
+        saved ? repoValueFor(saved) : null,
+        origin.mode,
+      );
+      const outgoing = regenerateMessage({
+        agentName: agent.name,
+        prompt: sidecar.prompt,
+        source: origin.mode === "edit" ? origin.source : null,
+      });
+      await sendMessage.mutateAsync({
+        channelId: channel.id,
+        content: outgoing.content,
+        mentionPubkeys: [agent.pubkey],
+        mediaTags: [
+          ...(outgoing.mediaTags ?? []),
+          composerTag(
+            harness.harnessId,
+            composerPayload(state, harness.composer),
+          ),
+        ],
+      });
+      toast.success(`Regenerating in #${channel.name}`);
+    } catch (error) {
+      toast.error(
+        `Could not regenerate: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setRegenerating(false);
+    }
+  };
+
+  return {
+    location: {
+      data: location.data,
+      folder: location.data ? folderOf(location.data.imagePath) : null,
+      isLoading: location.isFetching && location.data === undefined,
+      isError: location.isError,
+    },
+    moving,
+    regenerate:
+      context && canRegenerate(origin) && target && sidecar.prompt
+        ? { blocked: regenerateBlocked, regenerating, run: regenerate }
+        : null,
+    relocate,
+    repositories,
+    requestLocation: () => setLocationWanted(true),
+  };
+}

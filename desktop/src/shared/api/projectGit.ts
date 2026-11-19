@@ -40,6 +40,7 @@ type RawProjectRepoFile = {
   preview_content: string | null;
   last_changed_at: number | null;
   latest_commit: RawProjectRepoCommit | null;
+  created_at?: number | null;
 };
 
 type RawProjectRepoContributor = {
@@ -137,6 +138,7 @@ function fromRawProjectRepoSnapshot(
       latestCommit: file.latest_commit
         ? fromRawProjectRepoCommit(file.latest_commit)
         : null,
+      createdAt: file.created_at ?? null,
     })),
     contributors: (snapshot.contributors ?? []).map((contributor) => ({
       name: contributor.name,

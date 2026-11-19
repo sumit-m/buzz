@@ -18,6 +18,9 @@ pub struct ProjectRepoFileInfo {
     pub preview_content: Option<String>,
     pub last_changed_at: Option<i64>,
     pub latest_commit: Option<ProjectRepoCommitInfo>,
+    /// LOCAL DIVERGENCE: a generated image's sidecar date, else the first
+    /// commit at this path (`project_git_file_dates`).
+    pub created_at: Option<i64>,
 }
 
 #[derive(Serialize)]

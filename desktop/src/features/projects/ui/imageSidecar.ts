@@ -8,11 +8,31 @@ export type SidecarField = {
   value: string;
 };
 
+/** The upload an edit started from, as its imeta fields. */
+export type SidecarSource = {
+  url: string;
+  m?: string;
+  x?: string;
+  size?: string;
+  dim?: string;
+};
+
+/**
+ * What mage-agent adds as `buzz`: how the image was made and the repo it was
+ * saved to (`<owner>/<repo>`). Older sidecars have none.
+ */
+export type ImageOrigin = {
+  mode: "generate" | "edit";
+  source: SidecarSource | null;
+  repo: string | null;
+};
+
 export type ImageSidecar = {
   prompt: string | null;
   fields: SidecarField[];
   /** Every scalar value by its key, for starting an edit from this image. */
   values: Record<string, string>;
+  origin: ImageOrigin | null;
 };
 
 /** Shown elsewhere (file name, prompt, dimensions) or not wanted in the sidebar. */
@@ -113,5 +133,27 @@ export function parseImageSidecar(text: string): ImageSidecar | null {
     if (value) fields.push({ label: titleCase(key), value });
   }
 
-  return { prompt: scalarText(record.prompt), fields, values };
+  return {
+    prompt: scalarText(record.prompt),
+    fields,
+    values,
+    origin: parseOrigin(record.buzz),
+  };
+}
+
+function parseOrigin(raw: unknown): ImageOrigin | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const origin = raw as Record<string, unknown>;
+  if (origin.mode !== "generate" && origin.mode !== "edit") return null;
+  let source: SidecarSource | null = null;
+  const rawSource = origin.source as Record<string, unknown> | undefined;
+  const url = scalarText(rawSource?.url);
+  if (url && /^https?:\/\//.test(url)) {
+    source = { url };
+    for (const key of ["m", "x", "size", "dim"] as const) {
+      const value = scalarText(rawSource?.[key]);
+      if (value) source[key] = value;
+    }
+  }
+  return { mode: origin.mode, source, repo: scalarText(origin.repo) };
 }

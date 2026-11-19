@@ -27,11 +27,14 @@ export function RepositoryImageView({
   file,
   fileContentSource,
   files,
+  onOpenPath,
   url,
 }: {
   file: ProjectRepoFile;
   fileContentSource?: RepositoryFileContentSource;
   files: ProjectRepoFile[];
+  /** Follows the image after the sidebar moves it. */
+  onOpenPath?: (path: string) => void;
   url: string;
 }) {
   const sidecarPath = sidecarPathFor(file.path);
@@ -95,7 +98,17 @@ export function RepositoryImageView({
           src={url}
         />
       </div>
-      {sidecar ? <ImageInfoSidebar onEdit={onEdit} sidecar={sidecar} /> : null}
+      {sidecar ? (
+        <ImageInfoSidebar
+          context={
+            repository
+              ? { kind: "repo", repository, path: file.path, onOpenPath }
+              : undefined
+          }
+          onEdit={onEdit}
+          sidecar={sidecar}
+        />
+      ) : null}
     </div>
   );
 }

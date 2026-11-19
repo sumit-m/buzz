@@ -84,8 +84,14 @@ export function ImageSidecarFrame({
       >
         <span className="block min-w-0 max-w-full">{children}</span>
         {sidecar.data ? (
-          <span className="block min-w-0 max-w-[350px] flex-1 basis-64">
-            <ImageInfoSidebar onEdit={onEdit} sidecar={sidecar.data} />
+          <span className="block min-w-0 max-w-[400px] flex-1 basis-64">
+            <ImageInfoSidebar
+              context={
+                src ? { kind: "chat", imageUrl: src, sidecarUrl } : undefined
+              }
+              onEdit={onEdit}
+              sidecar={sidecar.data}
+            />
           </span>
         ) : null}
       </span>

@@ -585,6 +585,8 @@ pub fn run() {
             get_project_repo_file_bytes,
             get_project_repo_thumbnails,
             get_project_repo_folders,
+            find_project_repo_files,
+            commit_project_repo_files,
             list_harness_composers,
             refresh_harness_control,
             get_project_repo_diff,

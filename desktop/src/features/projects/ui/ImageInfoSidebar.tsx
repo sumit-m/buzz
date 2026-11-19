@@ -1,5 +1,12 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Copy, Globe, Pencil } from "lucide-react";
+import {
+  Copy,
+  GitBranch,
+  Globe,
+  LoaderCircle,
+  Pencil,
+  RotateCw,
+} from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 
@@ -9,26 +16,42 @@ import {
   PromptAssets,
   useHarnessAssetIndex,
 } from "@/features/messages/ui/HarnessAssets";
+import { ComposerRepoFolderPopup } from "@/features/messages/ui/ComposerRepoFolderPopup";
+import { folderLabel } from "@/features/projects/lib/generatedImage";
 import { cn } from "@/shared/lib/cn";
 import { copyTextToClipboard } from "@/shared/lib/clipboard";
+import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Button } from "@/shared/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import type { ImageSidecar } from "./imageSidecar";
+import {
+  type GeneratedImageContext,
+  useGeneratedImageActions,
+} from "./useGeneratedImageActions";
 
 /**
  * An image's prompt (with Copy Prompt, Edit where the caller supports it, and
  * a globe opening the generator's link to the image) and labelled fields from
  * its sidecar. Characters and references the prompt names (`@handle`) show
- * above it while a harness lists assets.
+ * above it while a harness lists assets. With a `context`, it also offers
+ * Regenerate and the repo button (where the image is saved; picking another
+ * folder moves or copies it), and an edit shows the image it started from.
  */
 export function ImageInfoSidebar({
+  context,
   onEdit,
   sidecar,
 }: {
+  context?: GeneratedImageContext;
   onEdit?: (button: HTMLElement) => void;
   sidecar: ImageSidecar;
 }) {
   const { prompt } = sidecar;
   const assets = useHarnessAssetIndex();
+  const rootRef = React.useRef<HTMLElement>(null);
+  const actions = useGeneratedImageActions({ context, rootRef, sidecar });
+  const source =
+    sidecar.origin?.mode === "edit" ? (sidecar.origin.source ?? null) : null;
   const parsedExpiry = sidecar.values.expires_at
     ? new Date(sidecar.values.expires_at)
     : null;
@@ -43,8 +66,9 @@ export function ImageInfoSidebar({
     : "Open in browser";
   return (
     <aside
-      className="w-full shrink-0 space-y-4 lg:w-[350px]"
+      className="w-full shrink-0 space-y-4 lg:w-[400px]"
       data-testid="project-repository-image-info"
+      ref={rootRef}
     >
       {prompt ? (
         <div className="space-y-4 rounded-xl border border-border/60 bg-muted/20 p-4">
@@ -52,7 +76,7 @@ export function ImageInfoSidebar({
             <PromptAssets index={assets} prompt={prompt} />
           ) : null}
           <CollapsiblePrompt assets={assets} prompt={prompt} />
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1">
             <Button
               onClick={() => copyTextToClipboard(prompt, "Prompt copied")}
               size="sm"
@@ -73,6 +97,30 @@ export function ImageInfoSidebar({
                 <Pencil />
                 Edit
               </Button>
+            ) : null}
+            {actions.regenerate ? (
+              <Button
+                aria-label="Regenerate"
+                data-testid="image-info-regenerate"
+                disabled={
+                  actions.regenerate.blocked !== null ||
+                  actions.regenerate.regenerating
+                }
+                onClick={() => void actions.regenerate?.run()}
+                size="icon"
+                title={actions.regenerate.blocked ?? undefined}
+                type="button"
+                variant="outline"
+              >
+                {actions.regenerate.regenerating ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <RotateCw />
+                )}
+              </Button>
+            ) : null}
+            {context && actions.repositories.length > 0 ? (
+              <ImageRepoButton actions={actions} />
             ) : null}
             {link ? (
               <Button
@@ -98,7 +146,7 @@ export function ImageInfoSidebar({
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 px-1">
           {sidecar.fields.map((field) => (
             <div className="min-w-0" key={field.label}>
-              <dt className="text-xs text-muted-foreground">{field.label}</dt>
+              <dt className="text-sm text-muted-foreground/75">{field.label}</dt>
               <dd
                 className="break-words text-sm font-medium text-foreground"
                 title={field.value}
@@ -109,7 +157,82 @@ export function ImageInfoSidebar({
           ))}
         </dl>
       ) : null}
+      {source ? (
+        <dl className="px-1">
+          <dt className="text-sm text-muted-foreground/75">Image</dt>
+          <dd className="mt-1.5">
+            <img
+              alt="Source"
+              className="max-h-48 max-w-[168px] rounded-md object-cover"
+              data-testid="image-info-source"
+              loading="lazy"
+              src={rewriteRelayUrl(source.url)}
+            />
+          </dd>
+        </dl>
+      ) : null}
     </aside>
+  );
+}
+
+/** Where the image is saved (repo and folder); a pick moves or copies it. */
+function ImageRepoButton({
+  actions,
+}: {
+  actions: ReturnType<typeof useGeneratedImageActions>;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const { data, folder, isError, isLoading } = actions.location;
+  const where = isLoading
+    ? "Finding the image…"
+    : isError
+      ? "Couldn't look up the image"
+      : data
+        ? `${data.repository.name}: ${folderLabel(folder ?? "")}`
+        : data === null
+          ? "Not saved to a repository"
+          : "";
+  return (
+    <Popover
+      onOpenChange={(next) => {
+        if (next) actions.requestLocation();
+        setOpen(next);
+      }}
+      open={open}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          aria-label="Repository location"
+          data-testid="image-info-repo"
+          disabled={actions.moving}
+          size="icon"
+          type="button"
+          variant="outline"
+        >
+          {actions.moving ? (
+            <LoaderCircle className="animate-spin" />
+          ) : (
+            <GitBranch />
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-auto p-3" side="bottom">
+        <p
+          className="mb-2 max-w-64 truncate text-xs text-muted-foreground"
+          data-testid="image-info-repo-location"
+        >
+          {where}
+        </p>
+        <ComposerRepoFolderPopup
+          defaultFolder={folder ?? undefined}
+          onPick={(value) => {
+            setOpen(false);
+            void actions.relocate(value);
+          }}
+          repositories={actions.repositories}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 

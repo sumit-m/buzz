@@ -62,6 +62,8 @@ import {
   RepositoryViewModeToggle,
   useRepositoryViewMode,
 } from "./RepositoryFileTiles";
+import { RepositorySortMenu, useRepositorySort } from "./RepositorySortMenu";
+import { sortRepositoryEntries } from "./repositorySort";
 import {
   type RepositoryFilesContext,
   useRepositoryFilesNavigation,
@@ -604,6 +606,7 @@ function FileContentPanel({
           file={file}
           fileContentSource={fileContentSource}
           files={files}
+          onOpenPath={onOpenPath}
           url={image.url}
         />
       ) : fileContent.content ? (
@@ -672,9 +675,11 @@ export function RepositoryFilesPanel({
     onContextChange,
     pageSize: REPOSITORY_ENTRY_PAGE_SIZE,
   });
+  const [sort, setSort] = useRepositorySort();
   const entries = React.useMemo(
-    () => repositoryEntries(files, currentPath),
-    [currentPath, files],
+    () =>
+      sortRepositoryEntries(repositoryEntries(files, currentPath), files, sort),
+    [currentPath, files, sort],
   );
   const [viewMode, setViewMode] = useRepositoryViewMode();
   const visibleEntries = entries.slice(0, visibleEntryCount);
@@ -912,8 +917,12 @@ export function RepositoryFilesPanel({
                         </span>
                       </p>
                     </div>
-                    <RepositoryViewModeToggle
+                    <RepositorySortMenu
                       className="ml-auto"
+                      onChange={setSort}
+                      sort={sort}
+                    />
+                    <RepositoryViewModeToggle
                       mode={viewMode}
                       onChange={setViewMode}
                     />

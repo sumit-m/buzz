@@ -14,6 +14,8 @@ export type ProjectRepoFile = {
   previewContent: string | null;
   lastChangedAt: number | null;
   latestCommit: ProjectRepoCommit | null;
+  /** LOCAL DIVERGENCE: a generated image's sidecar date, else its first commit. */
+  createdAt?: number | null;
 };
 
 export type ProjectRepoContributor = {

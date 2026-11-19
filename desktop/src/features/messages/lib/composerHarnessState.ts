@@ -165,9 +165,23 @@ export function editStateFromSidecar(
   values: Record<string, string>,
   repo: string | null,
 ): ComposerPanelState {
+  return stateFromSidecar(spec, values, repo, "edit");
+}
+
+/**
+ * The panel as an image's sidecar describes it, in its image mode (`edit`) or
+ * its first mode without one (`generate`): what Regenerate sends again.
+ */
+export function stateFromSidecar(
+  spec: ComposerSpec,
+  values: Record<string, string>,
+  repo: string | null,
+  kind: "generate" | "edit",
+): ComposerPanelState {
   const mode =
-    spec.modes.find((candidate) => candidate.requiresImage)?.id ??
-    defaultMode(spec);
+    spec.modes.find((candidate) =>
+      kind === "edit" ? candidate.requiresImage : !candidate.requiresImage,
+    )?.id ?? defaultMode(spec);
   const picks: Record<string, string> = {};
   for (const control of valueControls(spec)) {
     const value = control.sidecarKey ? values[control.sidecarKey] : undefined;

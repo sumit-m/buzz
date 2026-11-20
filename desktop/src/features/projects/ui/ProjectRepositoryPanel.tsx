@@ -59,6 +59,7 @@ import { useRepositoryImagePreview } from "./useRepositoryImagePreview";
 import { RepositoryImageView } from "./RepositoryImageView";
 import {
   RepositoryFileTiles,
+  usePrefetchChangedThumbnails,
   RepositoryViewModeToggle,
   useRepositoryViewMode,
 } from "./RepositoryFileTiles";
@@ -675,6 +676,7 @@ export function RepositoryFilesPanel({
     onContextChange,
     pageSize: REPOSITORY_ENTRY_PAGE_SIZE,
   });
+  usePrefetchChangedThumbnails(files, fileContentSource);
   const [sort, setSort] = useRepositorySort();
   const entries = React.useMemo(
     () =>

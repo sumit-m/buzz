@@ -1,18 +1,17 @@
 import * as React from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { LayoutGrid, List } from "lucide-react";
 
 import type { ProjectRepoFile } from "@/features/projects/hooks";
-import { REPOSITORY_ENTRY_PAGE_SIZE } from "@/features/projects/lib/projectsViewHelpers";
 import type { ProjectRepoThumbnail } from "@/shared/api/projectGit";
 import { cn } from "@/shared/lib/cn";
 import {
-  imagePathsByPage,
   type RepositoryViewMode,
   readRepositoryViewMode,
   splitTileEntries,
   writeRepositoryViewMode,
 } from "./repositoryTiles";
+import { changedImages, thumbnailQuery } from "./repositoryThumbnails";
 import type { RepositoryFileContentSource } from "./useRepositoryFileContent";
 
 type TileEntry = {
@@ -77,34 +76,47 @@ export function RepositoryViewModeToggle({
   );
 }
 
-/** One thumbnail request per listing page; `pending` holds paths still loading. */
-function useThumbnails(
-  pages: string[][],
+/** Cached per image; `pending` holds paths still loading. */
+function useThumbnails<T extends TileEntry>(
+  images: T[],
   source: RepositoryFileContentSource | undefined,
 ) {
-  const loadThumbnails = source?.loadThumbnails;
   const results = useQueries({
-    queries: pages.map((paths) => ({
-      enabled: Boolean(loadThumbnails),
-      queryKey: [
-        "project-repository-thumbnails",
-        ...(source?.cacheKey ?? []),
-        ...paths,
-      ],
-      queryFn: () => (loadThumbnails ? loadThumbnails(paths) : []),
-      staleTime: 5 * 60_000,
-      retry: 1,
-    })),
+    queries: images.map((entry) => thumbnailQuery(source, entry)),
   });
   const byPath = new Map<string, ProjectRepoThumbnail>();
   const pending = new Set<string>();
   results.forEach((result, index) => {
-    if (result.isLoading && result.fetchStatus !== "idle") {
-      for (const path of pages[index]) pending.add(path);
-    }
-    for (const thumb of result.data ?? []) byPath.set(thumb.path, thumb);
+    const path = images[index].path;
+    if (result.isLoading && result.fetchStatus !== "idle") pending.add(path);
+    if (result.data) byPath.set(path, result.data);
   });
   return { byPath, pending };
+}
+
+/**
+ * Thumbnails for the images a refresh added or changed, made in the
+ * background so they are ready when the user browses back to the tiles.
+ */
+export function usePrefetchChangedThumbnails(
+  files: ProjectRepoFile[],
+  source: RepositoryFileContentSource | undefined,
+) {
+  const queryClient = useQueryClient();
+  const previous = React.useRef<{
+    files: ProjectRepoFile[];
+    sourceKey: string;
+  } | null>(null);
+  React.useEffect(() => {
+    if (!source?.loadThumbnails || files.length === 0) return;
+    const sourceKey = JSON.stringify(source.cacheKey);
+    const before = previous.current;
+    previous.current = { files, sourceKey };
+    if (!before || before.sourceKey !== sourceKey) return;
+    for (const file of changedImages(before.files, files)) {
+      void queryClient.prefetchQuery(thumbnailQuery(source, file));
+    }
+  }, [files, queryClient, source]);
 }
 
 function IconTile<T extends TileEntry>({
@@ -197,11 +209,7 @@ export function RepositoryFileTiles<T extends TileEntry>({
     () => splitTileEntries(entries),
     [entries],
   );
-  const pages = React.useMemo(
-    () => imagePathsByPage(entries, REPOSITORY_ENTRY_PAGE_SIZE),
-    [entries],
-  );
-  const thumbnails = useThumbnails(pages, fileContentSource);
+  const thumbnails = useThumbnails(images, fileContentSource);
   const hasTile = (entry: T) =>
     thumbnails.pending.has(entry.path) || thumbnails.byPath.has(entry.path);
   const shownImages = images.filter(hasTile);

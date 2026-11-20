@@ -3329,6 +3329,91 @@ async fn deleting_a_repo_coordinate_takes_its_satellite_events() {
     );
 }
 
+/// LOCAL DIVERGENCE: hard-deleting a channel takes its members and read
+/// frontiers too. Both used to cascade from `channels`; migrations 0102–0104
+/// dropped those foreign keys, so the delete names them itself.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn hard_deleting_a_channel_leaves_no_members_or_read_frontiers() {
+    use crate::channel::{ChannelType, ChannelVisibility};
+
+    let db = setup_db().await;
+    let community = CommunityId::from_uuid(make_community(&db.pool).await);
+    let owner = vec![7_u8; 32];
+    let channel = db
+        .create_channel(
+            community,
+            "doomed",
+            ChannelType::Stream,
+            ChannelVisibility::Open,
+            None,
+            &owner,
+            None,
+        )
+        .await
+        .expect("create channel")
+        .id;
+    sqlx::query("INSERT INTO personal_read_accounts (community_id, actor) VALUES ($1, $2)")
+        .bind(community.as_uuid())
+        .bind(&owner)
+        .execute(&db.pool)
+        .await
+        .expect("seed read account");
+    let mut writer = db
+        .begin_event_write_transaction(community)
+        .await
+        .expect("admit child seed");
+    sqlx::query(
+        "INSERT INTO channel_members (community_id, channel_id, pubkey) VALUES ($1, $2, $3) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(community.as_uuid())
+    .bind(channel)
+    .bind(&owner)
+    .execute(writer.conn())
+    .await
+    .expect("seed channel member");
+    sqlx::query(
+        "INSERT INTO personal_read_frontiers \
+         (community_id, actor, channel_id, through_timestamp) VALUES ($1, $2, $3, now())",
+    )
+    .bind(community.as_uuid())
+    .bind(&owner)
+    .bind(channel)
+    .execute(writer.conn())
+    .await
+    .expect("seed read frontier");
+    writer.commit().await.expect("commit seeded children");
+
+    db.hard_delete_channel_events(community, channel)
+        .await
+        .expect("hard delete");
+
+    for (table, count) in [
+        (
+            "channels",
+            "SELECT count(*) FROM channels WHERE community_id = $1 AND id = $2",
+        ),
+        (
+            "channel_members",
+            "SELECT count(*) FROM channel_members WHERE community_id = $1 AND channel_id = $2",
+        ),
+        (
+            "personal_read_frontiers",
+            "SELECT count(*) FROM personal_read_frontiers \
+             WHERE community_id = $1 AND channel_id = $2",
+        ),
+    ] {
+        let left: i64 = sqlx::query_scalar(count)
+            .bind(community.as_uuid())
+            .bind(channel)
+            .fetch_one(&db.pool)
+            .await
+            .expect("count");
+        assert_eq!(left, 0, "{table} rows left behind");
+    }
+}
+
 // ---- Statement-deadline cancellation vs. replica fallback ----------------
 //
 // A replica read cancelled by `statement_timeout` (SQLSTATE 57014) must be

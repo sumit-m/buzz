@@ -146,7 +146,9 @@ export function ImageInfoSidebar({
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 px-1">
           {sidecar.fields.map((field) => (
             <div className="min-w-0" key={field.label}>
-              <dt className="text-sm text-muted-foreground/75">{field.label}</dt>
+              <dt className="text-sm text-muted-foreground/75">
+                {field.label}
+              </dt>
               <dd
                 className="break-words text-sm font-medium text-foreground"
                 title={field.value}

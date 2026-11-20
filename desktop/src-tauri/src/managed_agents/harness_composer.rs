@@ -35,6 +35,8 @@ const MAX_ASSET_OPTIONS: usize = 200;
 const MAX_URL: usize = 2048;
 const MAX_TEXT: usize = 64;
 const MAX_REFRESH_ARGS: usize = 4;
+/// Size variants of one option (models × resolutions).
+const MAX_SIZES: usize = 32;
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 /// A menu refresh may ask a service (mage lists assets over the network).
 const CONTROL_REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
@@ -118,11 +120,31 @@ pub struct ComposerOption {
     /// Secondary text shown beside the label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Offered only while each named earlier control has one of these values
+    /// (Resolution's 4K only for the models that have it).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub when: BTreeMap<String, Vec<String>>,
+    /// The size shown for the first variant whose `when` matches, ahead of
+    /// `size` × the resolution's `scale`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sizes: Vec<SizeVariant>,
+    /// While this option is picked, the value each named control falls back to
+    /// when its own pick isn't offered (a model's default aspect and resolution).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub defaults: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct SizeVariant {
+    #[serde(default)]
+    pub when: BTreeMap<String, Vec<String>>,
+    pub size: [u32; 2],
 }
 
 /// An option may be written as a bare string (`"1K"`) or as an object.
 #[derive(Deserialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)] // lives only while deserializing
 enum RawOption {
     Plain(String),
     Full {
@@ -141,6 +163,12 @@ enum RawOption {
         image: Option<String>,
         #[serde(default)]
         hint: Option<String>,
+        #[serde(default)]
+        when: BTreeMap<String, Vec<String>>,
+        #[serde(default)]
+        sizes: Vec<SizeVariant>,
+        #[serde(default)]
+        defaults: BTreeMap<String, String>,
     },
 }
 
@@ -156,6 +184,9 @@ impl From<RawOption> for ComposerOption {
                 modes: Vec::new(),
                 image: None,
                 hint: None,
+                when: BTreeMap::new(),
+                sizes: Vec::new(),
+                defaults: BTreeMap::new(),
             },
             RawOption::Full {
                 value,
@@ -166,6 +197,9 @@ impl From<RawOption> for ComposerOption {
                 modes,
                 image,
                 hint,
+                when,
+                sizes,
+                defaults,
             } => ComposerOption {
                 label: label.unwrap_or_else(|| value.clone()),
                 value,
@@ -175,6 +209,9 @@ impl From<RawOption> for ComposerOption {
                 modes,
                 image,
                 hint,
+                when,
+                sizes,
+                defaults,
             },
         }
     }
@@ -202,6 +239,38 @@ fn check_text(what: &str, text: &str) -> Result<(), String> {
         return Err(format!("{what} must be 1-{MAX_TEXT} characters"));
     }
     Ok(())
+}
+
+/// `when` names value controls by id, with 1-[`MAX_OPTIONS`] valid values each.
+fn check_when(
+    control: &str,
+    when: &BTreeMap<String, Vec<String>>,
+    allowed: &HashSet<&str>,
+) -> Result<(), String> {
+    for (id, values) in when {
+        if !allowed.contains(id.as_str()) {
+            return Err(format!(
+                "{control}: when names {id:?}, which it can't follow"
+            ));
+        }
+        if values.is_empty()
+            || values.len() > MAX_OPTIONS
+            || values.iter().any(|value| !is_value(value))
+        {
+            return Err(format!(
+                "{control}: when {id:?} needs 1-{MAX_OPTIONS} valid values"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_TEXT
+        && !value
+            .chars()
+            .any(|c| c.is_whitespace() || c == '"' || c == '\'')
 }
 
 fn check_refresh(args: &[String]) -> Result<(), String> {
@@ -236,6 +305,15 @@ pub(crate) fn validate(spec: &ComposerSpec) -> Result<(), String> {
     if control_ids.len() != spec.controls.len() {
         return Err("control ids must be unique".into());
     }
+    let value_ids: HashSet<&str> = spec
+        .controls
+        .iter()
+        .filter(|c| matches!(c.kind.as_str(), "list" | "shapes" | "segmented"))
+        .map(|c| c.id.as_str())
+        .collect();
+    // An option's `when` follows earlier controls only, so values resolve in
+    // order; a size is shown once every value is known, so it may follow any.
+    let mut earlier: HashSet<&str> = HashSet::new();
     for control in &spec.controls {
         if !is_id(&control.id) {
             return Err(format!("control id {:?} is invalid", control.id));
@@ -268,13 +346,7 @@ pub(crate) fn validate(spec: &ComposerSpec) -> Result<(), String> {
         }
         for option in &control.options {
             check_text("option label", &option.label)?;
-            if option.value.is_empty()
-                || option.value.len() > MAX_TEXT
-                || option
-                    .value
-                    .chars()
-                    .any(|c| c.is_whitespace() || c == '"' || c == '\'')
-            {
+            if !is_value(&option.value) {
                 return Err(format!(
                     "{}: option value {:?} is invalid",
                     control.id, option.value
@@ -306,6 +378,26 @@ pub(crate) fn validate(spec: &ComposerSpec) -> Result<(), String> {
                     control.id
                 ));
             }
+            check_when(&control.id, &option.when, &earlier)?;
+            if option.sizes.len() > MAX_SIZES {
+                return Err(format!("{}: at most {MAX_SIZES} sizes", control.id));
+            }
+            for variant in &option.sizes {
+                check_when(&control.id, &variant.when, &value_ids)?;
+            }
+            if let Some((id, value)) = option
+                .defaults
+                .iter()
+                .find(|(id, value)| !value_ids.contains(id.as_str()) || !is_value(value))
+            {
+                return Err(format!(
+                    "{}: default {value:?} for {id:?} is invalid",
+                    control.id
+                ));
+            }
+        }
+        if value_ids.contains(control.id.as_str()) {
+            earlier.insert(control.id.as_str());
         }
     }
     Ok(())
@@ -714,5 +806,38 @@ mod tests {
             .map(|i| serde_json::json!({ "id": format!("c{i}"), "kind": "list", "label": "x" }))
             .collect();
         assert!(validate(&spec(serde_json::json!({ "controls": many }))).is_err());
+    }
+
+    #[test]
+    fn options_may_follow_earlier_controls() {
+        let spec =
+            |value: serde_json::Value| serde_json::from_value::<ComposerSpec>(value).unwrap();
+        let mut composer = mage_composer();
+        composer["controls"][0]["options"][0]["defaults"] = serde_json::json!({ "res": "2K" });
+        composer["controls"][1]["options"][2]["when"] =
+            serde_json::json!({ "model": ["mango-v4"] });
+        composer["controls"][1]["options"][1]["sizes"] = serde_json::json!([
+            { "when": { "model": ["mango-v2"], "res": ["1K"] }, "size": [896, 1152] }
+        ]);
+        let parsed = spec(composer.clone());
+        assert!(validate(&parsed).is_ok());
+        assert_eq!(parsed.controls[1].options[1].sizes[0].size, [896, 1152]);
+
+        let mut later = composer.clone();
+        later["controls"][0]["options"][0]["when"] = serde_json::json!({ "res": ["1K"] });
+        assert!(validate(&spec(later)).is_err());
+
+        let mut not_a_value = composer.clone();
+        not_a_value["controls"][1]["options"][2]["when"] =
+            serde_json::json!({ "preset": ["logo"] });
+        assert!(validate(&spec(not_a_value)).is_err());
+
+        let mut empty = composer.clone();
+        empty["controls"][1]["options"][2]["when"] = serde_json::json!({ "model": [] });
+        assert!(validate(&spec(empty)).is_err());
+
+        let mut bad_default = composer;
+        bad_default["controls"][0]["options"][0]["defaults"] = serde_json::json!({ "repo": "x" });
+        assert!(validate(&spec(bad_default)).is_err());
     }
 }

@@ -1891,9 +1891,10 @@ pub async fn purge_deleted_event(
 /// Everything in the channel goes regardless of author: messages, replies,
 /// thread metadata, and reactions written by anyone.
 ///
-/// Ordering is dictated by the foreign keys into `channels`: only
-/// `channel_members` cascades, so `thread_metadata`, `moderation_reports` and
-/// `moderation_actions` must be cleared before the channel row can go.
+/// Migrations 0102–0104 dropped the foreign keys into `channels`, cascades
+/// included, so every dependent row is deleted here explicitly:
+/// `thread_metadata`, `moderation_reports`, `moderation_actions`, and the two
+/// that used to cascade, `channel_members` and `personal_read_frontiers`.
 /// `workflows.channel_id` is nulled rather than deleted — a workflow outlives
 /// the channel it happened to post into.
 ///
@@ -1927,6 +1928,8 @@ pub async fn hard_delete_channel_events(
         "DELETE FROM thread_metadata WHERE community_id = $1 AND channel_id = $2",
         "DELETE FROM moderation_reports WHERE community_id = $1 AND channel_id = $2",
         "DELETE FROM moderation_actions WHERE community_id = $1 AND channel_id = $2",
+        "DELETE FROM channel_members WHERE community_id = $1 AND channel_id = $2",
+        "DELETE FROM personal_read_frontiers WHERE community_id = $1 AND channel_id = $2",
         "UPDATE workflows SET channel_id = NULL \
          WHERE community_id = $1 AND channel_id = $2",
     ] {
@@ -1983,7 +1986,6 @@ pub async fn hard_delete_channel_events(
         .await?
         .rows_affected();
 
-    // channel_members cascades from this.
     sqlx::query("DELETE FROM channels WHERE community_id = $1 AND id = $2")
         .bind(community_id.as_uuid())
         .bind(channel_id)

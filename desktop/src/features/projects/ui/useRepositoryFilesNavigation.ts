@@ -2,6 +2,13 @@ import * as React from "react";
 
 import type { ProjectRepoFile } from "@/features/projects/hooks";
 
+import {
+  existingFolder,
+  freshFile,
+  isFolderPath,
+  parentPath,
+} from "./repositoryNavigation";
+
 export type RepositoryFilesContext = {
   kind: "file" | "folder";
   onBack?: () => void;
@@ -23,13 +30,24 @@ export function useRepositoryFilesNavigation({
   const [selectedFile, setSelectedFile] =
     React.useState<ProjectRepoFile | null>(null);
   const [visibleEntryCount, setVisibleEntryCount] = React.useState(pageSize);
+  // LOCAL DIVERGENCE: a file path not in the list yet (an image just moved
+  // from the sidebar) opens once a refresh brings it in.
+  const [pendingFilePath, setPendingFilePath] = React.useState<string | null>(
+    null,
+  );
   const openPath = React.useCallback(
     (path: string) => {
-      setCurrentPath(path);
-      setSelectedFile(null);
+      const file = files.find((entry) => entry.path === path);
+      if (!file && !isFolderPath(files, path)) {
+        setPendingFilePath(path);
+        return;
+      }
+      setPendingFilePath(null);
+      setCurrentPath(file ? parentPath(path) : path);
+      setSelectedFile(file ?? null);
       setVisibleEntryCount(pageSize);
     },
-    [pageSize],
+    [files, pageSize],
   );
   const contextBack = React.useMemo(() => {
     if (selectedFile) return () => setSelectedFile(null);
@@ -59,15 +77,38 @@ export function useRepositoryFilesNavigation({
         : null,
     [files, initialPath],
   );
+  // LOCAL DIVERGENCE: the initial path applies once per initialPath, not on
+  // every file-list change; see repositoryNavigation.ts.
+  const appliedInitialPath = React.useRef<{ path?: string } | null>(null);
   React.useEffect(() => {
     if (!filesKey) return;
+    if (appliedInitialPath.current?.path === initialPath) return;
+    appliedInitialPath.current = { path: initialPath };
     const initialDirectory = initialFile
       ? initialFile.path.split("/").slice(0, -1).join("/")
       : (initialPath ?? "");
     setCurrentPath(initialDirectory);
     setSelectedFile(initialFile);
     setVisibleEntryCount(pageSize);
-  }, [filesKey, initialFile, initialPath, pageSize]);
+    if (!initialFile && initialPath && !isFolderPath(files, initialPath)) {
+      setPendingFilePath(initialPath);
+    }
+  }, [files, filesKey, initialFile, initialPath, pageSize]);
+
+  React.useEffect(() => {
+    if (!files.length) return;
+    const pending = pendingFilePath
+      ? files.find((file) => file.path === pendingFilePath)
+      : undefined;
+    if (pending) {
+      setPendingFilePath(null);
+      setCurrentPath(parentPath(pending.path));
+      setSelectedFile(pending);
+      return;
+    }
+    setSelectedFile((current) => freshFile(files, current));
+    setCurrentPath((path) => existingFolder(files, path));
+  }, [files, pendingFilePath]);
 
   return {
     currentPath,

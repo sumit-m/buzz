@@ -1,28 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { imagePathsByPage, splitTileEntries } from "./repositoryTiles.ts";
+import { splitTileEntries } from "./repositoryTiles.ts";
 
 const file = (name) => ({ name, path: `assets/${name}`, type: "file" });
 const dir = (name) => ({ name, path: `assets/${name}`, type: "directory" });
-
-test("imagePathsByPage groups image paths by listing page", () => {
-  const entries = [
-    dir("old"),
-    file("a.jpg"),
-    file("a.json"),
-    file("b.png"),
-    file("c.jpg"),
-    file("notes.md"),
-    file("d.webp"),
-  ];
-  assert.deepEqual(imagePathsByPage(entries, 3), [
-    ["assets/a.jpg"],
-    ["assets/b.png", "assets/c.jpg"],
-    ["assets/d.webp"],
-  ]);
-  assert.deepEqual(imagePathsByPage([dir("x"), file("y.md")], 3), []);
-});
 
 test("splitTileEntries puts images in the grid and hides their sidecars", () => {
   const { images, others } = splitTileEntries([

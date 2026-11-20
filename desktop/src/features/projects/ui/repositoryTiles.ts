@@ -24,23 +24,6 @@ export function writeRepositoryViewMode(mode: RepositoryViewMode) {
 
 type TileEntryShape = { name: string; type: "directory" | "file" };
 
-/**
- * Image paths grouped by the listing page they appear on, so each "Show next"
- * fetches thumbnails for its own page only and earlier pages stay cached.
- */
-export function imagePathsByPage<T extends TileEntryShape & { path: string }>(
-  entries: T[],
-  pageSize: number,
-): string[][] {
-  const pages = new Map<number, string[]>();
-  entries.forEach((entry, index) => {
-    if (entry.type !== "file" || imageMimeForPath(entry.name) === null) return;
-    const page = Math.floor(index / pageSize);
-    pages.set(page, [...(pages.get(page) ?? []), entry.path]);
-  });
-  return [...pages.values()];
-}
-
 function stem(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(0, dot) : name;

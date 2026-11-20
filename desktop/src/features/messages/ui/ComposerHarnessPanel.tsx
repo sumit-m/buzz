@@ -18,12 +18,11 @@ import {
   type ComposerControl,
   type ComposerPanelState,
   type ComposerSpec,
-  effectiveOption,
-  effectiveValue,
   optionsFor,
   pickValue,
   presetControl,
   repoControl,
+  resolvePanel,
   scaledSize,
   setMode,
   setRepo,
@@ -119,14 +118,19 @@ function ControlPopup({
 }
 
 function ListRows({
+  hintBelow = false,
   options,
   selected,
   onPick,
 }: {
+  /** The hint as a line under the label (a model's speed), keeping the check. */
+  hintBelow?: boolean;
   options: { value: string; label: string; hint?: string }[];
   selected: string | null;
   onPick: (value: string | null) => void;
 }) {
+  const check = (value: string) =>
+    selected === value ? <Check className="h-3.5 w-3.5" /> : null;
   return (
     <div className="flex flex-col">
       {options.map((option) => (
@@ -139,12 +143,22 @@ function ListRows({
           onClick={() => onPick(option.value || null)}
           type="button"
         >
-          <span>{option.label}</span>
+          {hintBelow ? (
+            <span className="flex flex-col">
+              {option.label}
+              {option.hint ? (
+                <span className="text-xs text-muted-foreground">
+                  {option.hint}
+                </span>
+              ) : null}
+            </span>
+          ) : (
+            <span>{option.label}</span>
+          )}
           <span className="text-xs text-muted-foreground">
-            {option.hint ??
-              (selected === option.value ? (
-                <Check className="h-3.5 w-3.5" />
-              ) : null)}
+            {hintBelow
+              ? check(option.value)
+              : (option.hint ?? check(option.value))}
           </span>
         </button>
       ))}
@@ -162,7 +176,7 @@ export function ComposerHarnessControls({
   onChange,
   onControlOpen,
   onInsertHandle,
-  onPresetsOpen,
+  onMenuOpen,
   refreshingId,
   repositories,
   spec,
@@ -174,7 +188,8 @@ export function ComposerHarnessControls({
   onControlOpen?: (controlId: string) => void;
   /** An `assets` pick: puts `@handle` in the prompt. */
   onInsertHandle?: (handle: string) => void;
-  onPresetsOpen?: () => void;
+  /** A model, aspect, resolution or preset menu opened: re-read the panel. */
+  onMenuOpen?: () => void;
   refreshingId?: string | null;
   repositories: ChannelRepository[];
   spec: ComposerSpec;
@@ -189,19 +204,26 @@ export function ComposerHarnessControls({
     onChange(next);
     setOpenId(null);
   };
+  const resolved = resolvePanel(state, spec);
+  const pick = (control: ComposerControl, value: string) =>
+    close(pickValue(state, spec, control.id, value));
 
   const renderValueControl = (control: ComposerControl) => {
-    const current = effectiveOption(state, control);
-    const value = effectiveValue(state, control);
-    const options = optionsFor(control, state.mode);
+    const current = resolved.options[control.id] ?? null;
+    const value = resolved.values[control.id] ?? "";
+    const options = optionsFor(control, state.mode, resolved.values);
     const Icon = control.icon ? ICONS[control.icon] : undefined;
     const testId = `composer-control-${control.id}`;
+    const onOpenChange = (open: boolean) => {
+      if (open) onMenuOpen?.();
+      openChange(control.id)(open);
+    };
     if (control.kind === "shapes") {
       return (
         <ControlPopup
           key={control.id}
           label={control.label}
-          onOpenChange={openChange(control.id)}
+          onOpenChange={onOpenChange}
           open={openId === control.id}
           testId={testId}
           trigger={
@@ -213,7 +235,7 @@ export function ComposerHarnessControls({
         >
           <div className="grid grid-cols-3 gap-1.5">
             {options.map((option) => {
-              const size = scaledSize(option, state, spec);
+              const size = scaledSize(option, resolved, spec);
               return (
                 <button
                   className={cn(
@@ -221,9 +243,7 @@ export function ComposerHarnessControls({
                     value === option.value && "bg-muted/70 text-foreground",
                   )}
                   key={option.value}
-                  onClick={() =>
-                    close(pickValue(state, control.id, option.value))
-                  }
+                  onClick={() => pick(control, option.value)}
                   type="button"
                 >
                   <Shape max={30} size={option.size} />
@@ -245,7 +265,7 @@ export function ComposerHarnessControls({
         <ControlPopup
           key={control.id}
           label={control.label}
-          onOpenChange={openChange(control.id)}
+          onOpenChange={onOpenChange}
           open={openId === control.id}
           testId={testId}
           trigger={current?.label ?? value}
@@ -258,9 +278,7 @@ export function ComposerHarnessControls({
                   value === option.value && "bg-muted/70 text-foreground",
                 )}
                 key={option.value}
-                onClick={() =>
-                  close(pickValue(state, control.id, option.value))
-                }
+                onClick={() => pick(control, option.value)}
                 type="button"
               >
                 {option.label}
@@ -274,7 +292,7 @@ export function ComposerHarnessControls({
       <ControlPopup
         key={control.id}
         label={control.label}
-        onOpenChange={openChange(control.id)}
+        onOpenChange={onOpenChange}
         open={openId === control.id}
         testId={testId}
         trigger={
@@ -285,9 +303,8 @@ export function ComposerHarnessControls({
         }
       >
         <ListRows
-          onPick={(picked) =>
-            picked ? close(pickValue(state, control.id, picked)) : undefined
-          }
+          hintBelow
+          onPick={(picked) => (picked ? pick(control, picked) : undefined)}
           options={options}
           selected={value}
         />
@@ -319,7 +336,7 @@ export function ComposerHarnessControls({
           <ControlPopup
             label={preset.label}
             onOpenChange={(open) => {
-              if (open) onPresetsOpen?.();
+              if (open) onMenuOpen?.();
               openChange(preset.id)(open);
             }}
             open={openId === preset.id}

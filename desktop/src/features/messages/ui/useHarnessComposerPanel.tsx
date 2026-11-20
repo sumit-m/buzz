@@ -294,7 +294,7 @@ export function useHarnessComposerPanel({
           onChange={setState}
           onControlOpen={(controlId) => void handles.refreshControl(controlId)}
           onInsertHandle={handles.insertHandle}
-          onPresetsOpen={() => void refetchComposers()}
+          onMenuOpen={() => void refetchComposers()}
           refreshingId={handles.refreshingId}
           repositories={repositories}
           spec={spec}

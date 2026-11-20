@@ -16,6 +16,12 @@ export type ComposerOption = {
   /** `https` thumbnail of an `assets` option. */
   image?: string;
   hint?: string;
+  /** Offered only while each named earlier control has one of these values. */
+  when?: Record<string, string[]>;
+  /** The size shown for the first variant whose `when` matches. */
+  sizes?: { when?: Record<string, string[]>; size: [number, number] }[];
+  /** While picked, what other controls fall back to when their pick isn't offered. */
+  defaults?: Record<string, string>;
 };
 
 export type ComposerControl = {
@@ -85,42 +91,144 @@ export function repoControl(spec: ComposerSpec): ComposerControl | null {
   return spec.controls.find((control) => control.kind === "repoFolder") ?? null;
 }
 
-export function optionsFor(
-  control: ComposerControl,
-  mode: string,
-): ComposerOption[] {
-  return control.options.filter(
-    (option) => !option.modes?.length || option.modes.includes(mode),
+/** A `when` holds while each control it names (and knows) has a listed value. */
+function matches(
+  when: Record<string, string[]> | undefined,
+  values: Record<string, string>,
+): boolean {
+  return Object.entries(when ?? {}).every(
+    ([id, allowed]) => values[id] === undefined || allowed.includes(values[id]),
   );
 }
 
-function defaultFor(control: ComposerControl, mode: string): string {
-  const options = optionsFor(control, mode);
-  const declared = control.defaultByMode?.[mode] ?? control.default;
-  if (declared && options.some((option) => option.value === declared)) {
-    return declared;
-  }
-  return options[0]?.value ?? "";
+/** A control's options in `mode`, given the values of the controls before it. */
+export function optionsFor(
+  control: ComposerControl,
+  mode: string,
+  values: Record<string, string> = {},
+): ComposerOption[] {
+  return control.options.filter(
+    (option) =>
+      (!option.modes?.length || option.modes.includes(mode)) &&
+      matches(option.when, values),
+  );
 }
 
-/** The value a control shows and sends in the current mode. */
+/**
+ * The mode's default, then the control's default, then what an earlier pick
+ * asks for (a model's own aspect and resolution, when the control's default
+ * isn't one it has), then the first option.
+ */
+function defaultFor(
+  control: ComposerControl,
+  mode: string,
+  offered: ComposerOption[],
+  chosen: ComposerOption[],
+): string {
+  const candidates = [
+    control.defaultByMode?.[mode],
+    control.default,
+    ...chosenDefaults(control, chosen),
+  ];
+  return firstOffered(candidates, offered) ?? offered[0]?.value ?? "";
+}
+
+function chosenDefaults(
+  control: ComposerControl,
+  chosen: ComposerOption[],
+): (string | undefined)[] {
+  return chosen.map((option) => option.defaults?.[control.id]);
+}
+
+function firstOffered(
+  candidates: (string | undefined)[],
+  offered: ComposerOption[],
+): string | undefined {
+  return candidates.find(
+    (candidate) =>
+      candidate && offered.some((option) => option.value === candidate),
+  );
+}
+
+export type ResolvedPanel = {
+  values: Record<string, string>;
+  options: Record<string, ComposerOption | null>;
+};
+
+/**
+ * Every value control's value, in order: its pick while still offered,
+ * otherwise its default for the mode and the earlier values.
+ */
+function resolve(
+  spec: ComposerSpec,
+  mode: string,
+  pickFor: (
+    control: ComposerControl,
+    offered: ComposerOption[],
+    chosen: ComposerOption[],
+  ) => ComposerOption | undefined,
+): ResolvedPanel {
+  const values: Record<string, string> = {};
+  const options: Record<string, ComposerOption | null> = {};
+  const chosen: ComposerOption[] = [];
+  for (const control of valueControls(spec)) {
+    const offered = optionsFor(control, mode, values);
+    const value =
+      pickFor(control, offered, chosen)?.value ??
+      defaultFor(control, mode, offered, chosen);
+    const option = offered.find((candidate) => candidate.value === value);
+    values[control.id] = value;
+    options[control.id] = option ?? null;
+    if (option) chosen.push(option);
+  }
+  return { values, options };
+}
+
+export function resolvePanel(
+  state: ComposerPanelState,
+  spec: ComposerSpec,
+): ResolvedPanel {
+  return resolve(spec, state.mode, (control, offered) =>
+    offered.find((option) => option.value === state.picks[control.id]),
+  );
+}
+
+/** The value a control shows and sends. */
 export function effectiveValue(
   state: ComposerPanelState,
   control: ComposerControl,
+  spec: ComposerSpec,
 ): string {
-  const pick = state.picks[control.id];
-  if (pick && optionsFor(control, state.mode).some((o) => o.value === pick)) {
-    return pick;
-  }
-  return defaultFor(control, state.mode);
+  return resolvePanel(state, spec).values[control.id] ?? "";
 }
 
-export function effectiveOption(
+/**
+ * A pick a change left unoffered (4K after switching to a model without it)
+ * becomes the new pick's default for it (the model's own resolution), or is
+ * dropped, so switching back doesn't revive it. Picks the mode alone hides
+ * (Edit's Auto) are dropped too.
+ */
+function withoutStalePicks(
   state: ComposerPanelState,
-  control: ComposerControl,
-): ComposerOption | null {
-  const value = effectiveValue(state, control);
-  return control.options.find((option) => option.value === value) ?? null;
+  spec: ComposerSpec,
+): ComposerPanelState {
+  const picks: Record<string, string> = {};
+  resolve(spec, state.mode, (control, offered, chosen) => {
+    const pick = state.picks[control.id];
+    if (!pick) return undefined;
+    const kept = offered.find((option) => option.value === pick);
+    const inMode = optionsFor(control, state.mode).some(
+      (option) => option.value === pick,
+    );
+    const value =
+      kept?.value ??
+      (inMode
+        ? firstOffered(chosenDefaults(control, chosen), offered)
+        : undefined);
+    if (value) picks[control.id] = value;
+    return offered.find((option) => option.value === value);
+  });
+  return { ...state, picks };
 }
 
 export function defaultMode(spec: ComposerSpec): string {
@@ -183,15 +291,16 @@ export function stateFromSidecar(
       kind === "edit" ? candidate.requiresImage : !candidate.requiresImage,
     )?.id ?? defaultMode(spec);
   const picks: Record<string, string> = {};
-  for (const control of valueControls(spec)) {
+  resolve(spec, mode, (control, offered) => {
     const value = control.sidecarKey ? values[control.sidecarKey] : undefined;
     const option = value
-      ? optionsFor(control, mode).find(
+      ? offered.find(
           (candidate) => candidate.value.toLowerCase() === value.toLowerCase(),
         )
       : undefined;
     if (option) picks[control.id] = option.value;
-  }
+    return option;
+  });
   return {
     mode,
     picks,
@@ -202,10 +311,14 @@ export function stateFromSidecar(
 
 export function pickValue(
   state: ComposerPanelState,
+  spec: ComposerSpec,
   controlId: string,
   value: string,
 ): ComposerPanelState {
-  return { ...state, picks: { ...state.picks, [controlId]: value } };
+  return withoutStalePicks(
+    { ...state, picks: { ...state.picks, [controlId]: value } },
+    spec,
+  );
 }
 
 /** A preset sets every control it names; "None" (null) leaves them as is. */
@@ -219,11 +332,14 @@ export function applyPreset(
     (candidate) => candidate.value === presetValue,
   );
   if (!option) return state;
-  return {
-    ...state,
-    preset: presetValue,
-    picks: { ...state.picks, ...(option.sets ?? {}) },
-  };
+  return withoutStalePicks(
+    {
+      ...state,
+      preset: presetValue,
+      picks: { ...state.picks, ...(option.sets ?? {}) },
+    },
+    spec,
+  );
 }
 
 export function setMode(
@@ -284,10 +400,9 @@ export function composerPayload(
   state: ComposerPanelState,
   spec: ComposerSpec,
 ): ComposerPayload {
-  const controls: Record<string, string> = {};
-  for (const control of valueControls(spec)) {
-    controls[control.id] = effectiveValue(state, control);
-  }
+  const controls: Record<string, string> = {
+    ...resolvePanel(state, spec).values,
+  };
   const preset = presetControl(spec);
   if (
     preset &&
@@ -320,17 +435,24 @@ export function toSavedState(
   };
 }
 
-/** `[w, h]` of a `shapes` option at the resolution control's current scale. */
+/**
+ * `[w, h]` of a `shapes` option: its size variant for the current values,
+ * else its size at the resolution control's current scale.
+ */
 export function scaledSize(
   option: ComposerOption,
-  state: ComposerPanelState,
+  resolved: ResolvedPanel,
   spec: ComposerSpec,
 ): [number, number] | null {
+  const variant = option.sizes?.find((candidate) =>
+    matches(candidate.when, resolved.values),
+  );
+  if (variant) return variant.size;
   if (!option.size) return null;
   let scale = 1;
   for (const control of valueControls(spec)) {
     if (control.kind !== "segmented") continue;
-    const current = effectiveOption(state, control);
+    const current = resolved.options[control.id];
     if (current?.scale) scale = current.scale;
   }
   return [option.size[0] * scale, option.size[1] * scale];

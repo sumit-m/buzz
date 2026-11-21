@@ -11,11 +11,14 @@ import {
   type ComposerPanelState,
   composerPayload,
   composerTag,
+  controlShown,
   editStateFromSidecar,
   editTargetFor,
   followAttachments,
   harnessComposerForAgent,
+  imageRules,
   initialPanelState,
+  resolvePanel,
   sendBlockReason,
   toSavedState,
 } from "@/features/messages/lib/composerHarnessState";
@@ -24,6 +27,11 @@ import {
   onHarnessEditRequest,
   takeHarnessEditRequest,
 } from "@/features/messages/lib/harnessEditRequest";
+import {
+  type AttachedImage,
+  imageRefContent,
+  syncImageRefsTransaction,
+} from "@/features/messages/lib/harnessImageRefNode";
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { DraftMentionRef } from "@/features/messages/lib/useDrafts";
 import { useProjectsQuery } from "@/features/projects/hooks";
@@ -65,6 +73,7 @@ export function useHarnessComposerPanel({
   enabled,
   extraRepositoryAddresses,
   imageCount,
+  images,
   loadDraft,
   mentionNames,
   mentionPubkeys,
@@ -78,6 +87,8 @@ export function useHarnessComposerPanel({
   /** Repos listed in the picker besides the channel's own (by address). */
   extraRepositoryAddresses?: readonly string[];
   imageCount: number;
+  /** The draft's uploaded images, in attachment order, by original URL. */
+  images: readonly AttachedImage[];
   /** Mentions this agent and attaches this image in place of the draft's. */
   loadDraft: (draft: {
     image: ImetaMedia | File;
@@ -161,7 +172,6 @@ export function useHarnessComposerPanel({
     const initial = followAttachments(
       initialPanelState(spec, saved),
       spec,
-      0,
       imageCountRef.current,
     );
     statesRef.current.set(panelKey, initial);
@@ -242,12 +252,11 @@ export function useHarnessComposerPanel({
     return onHarnessEditRequest(take);
   }, [draftKey, editReady]);
 
-  // Attachments drive the mode.
+  // Attachments drive Auto, the image limit and (in a file with one) the mode.
+  imageCountRef.current = imageCount;
   React.useEffect(() => {
-    const previous = imageCountRef.current;
-    imageCountRef.current = imageCount;
-    if (!spec || !state || previous === imageCount) return;
-    setState(followAttachments(state, spec, previous, imageCount));
+    if (!spec || !state || state.images === imageCount) return;
+    setState(followAttachments(state, spec, imageCount));
   }, [imageCount, setState, spec, state]);
 
   const extraAddressKey = (extraRepositoryAddresses ?? []).join(" ");
@@ -269,14 +278,56 @@ export function useHarnessComposerPanel({
     return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [channelId, editRepositories, extraAddressKey, projects.data]);
 
+  // Image references follow the attachments: renumbered, or gone with their upload.
+  React.useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const tr = syncImageRefsTransaction(editor.state, images);
+    if (tr) editor.view.dispatch(tr);
+  }, [editor, images]);
+
   const visible = Boolean(spec && state);
+  const imageRefsOn = Boolean(
+    spec && state && imageRules(state, spec).refs && images.length > 0,
+  );
+  // Menus a model lacks (Character on FLUX 2) leave the autocomplete too.
+  const shownSpec = React.useMemo(() => {
+    if (!spec || !state) return null;
+    const resolved = resolvePanel(state, spec);
+    return {
+      ...spec,
+      controls: spec.controls.filter((control) =>
+        controlShown(control, resolved),
+      ),
+    };
+  }, [spec, state]);
   const handles = useHarnessHandles({
     editor,
     harnessId,
+    images: imageRefsOn ? images : [],
     mentionNames,
-    spec: visible ? spec : null,
+    spec: visible ? shownSpec : null,
     text,
   });
+
+  const insertImage = (url: string) => {
+    if (!editor || editor.isDestroyed) return;
+    const at = images.findIndex((image) => image.url === url);
+    if (at === -1) return;
+    const { $from } = editor.state.selection;
+    const before = $from.parent.textBetween(
+      Math.max(0, $from.parentOffset - 1),
+      $from.parentOffset,
+      undefined,
+      "\ufffc",
+    );
+    const lead =
+      before && !/\s/.test(before) ? [{ type: "text", text: " " }] : [];
+    editor
+      .chain()
+      .focus()
+      .insertContent([...lead, ...imageRefContent(images, at)])
+      .run();
+  };
 
   return {
     modeToggle:
@@ -301,12 +352,16 @@ export function useHarnessComposerPanel({
           state={state}
         />
       ) : null,
-    /** Asset chips above the prompt and the `@` autocomplete. */
-    promptExtras: handles.promptExtras,
+    /** The `@` autocomplete, above the prompt. */
+    promptExtras: handles.autocomplete,
+    /** Tiles for the prompt's `@handles`, beside the attachment thumbnails. */
+    handleTiles: handles.tiles,
+    /** Inserts an attached image's reference; null when the model takes none. */
+    insertImage: imageRefsOn ? insertImage : null,
     /** False (with the reason shown in the panel) when the request can't go. */
     checkSend: () => {
       if (!spec || !state) return true;
-      const reason = sendBlockReason(state, spec, imageCount);
+      const reason = sendBlockReason(state, spec);
       setError(reason);
       return reason === null;
     },

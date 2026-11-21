@@ -5,8 +5,11 @@ import {
   assetIndex,
   findHandles,
   handleQueryAtEnd,
+  IMAGES_CONTROL,
+  imageEntries,
   matchAssets,
   uniqueHandles,
+  withEntries,
 } from "./promptHandles.ts";
 
 const handles = (text, skip) => findHandles(text, skip).map((s) => s.handle);
@@ -80,4 +83,25 @@ test("assetIndex and matchAssets", () => {
   );
   assert.deepEqual(matchAssets("zzz", index), []);
   assert.equal(matchAssets("", index, 2).length, 2);
+});
+
+test("image entries name each image in order and join an asset index", () => {
+  const entries = imageEntries(
+    ["https://r/a.png", "https://r/b.png"],
+    "source",
+  );
+  assert.deepEqual(
+    entries.map((entry) => [entry.option.value, entry.option.label]),
+    [
+      ["image1", "Image 1"],
+      ["image2", "Image 2"],
+    ],
+  );
+  const assets = new Map([
+    ["ryan", { control: { id: "character" }, option: { value: "ryan" } }],
+  ]);
+  const index = withEntries(assets, entries);
+  assert.equal(index.get("image2").control, IMAGES_CONTROL);
+  assert.equal(index.get("ryan").control.id, "character");
+  assert.equal(withEntries(assets, []), assets);
 });

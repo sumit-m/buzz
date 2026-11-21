@@ -225,7 +225,8 @@ export function planRelocation({
 /** Whether the sidecar says enough to make the same request again. */
 export function canRegenerate(origin: ImageOrigin | null): boolean {
   if (!origin) return false;
-  return origin.mode === "generate" || Boolean(origin.source?.x);
+  if (origin.sources.length > 0) return origin.sources.every((s) => s.x);
+  return origin.mode === "generate";
 }
 
 export function imetaFromSource(source: SidecarSource): ImetaMedia {
@@ -245,18 +246,18 @@ export function repoValueFor(location: ImageLocation): string {
   return `${repository.owner}/${repository.dtag}:${folderOf(imagePath)}`;
 }
 
-/** The message Regenerate posts: the mention and prompt, plus the edit's source. */
+/** The message Regenerate posts: the mention and prompt, plus every source in order. */
 export function regenerateMessage({
   agentName,
   prompt,
-  source,
+  sources,
 }: {
   agentName: string;
   prompt: string;
-  source: SidecarSource | null;
+  sources: readonly SidecarSource[];
 }) {
   return buildOutgoingMessage(
     `@${agentName} ${prompt.replace(/\s+/g, " ").trim()}`,
-    source ? [imetaFromSource(source)] : [],
+    sources.map(imetaFromSource),
   );
 }

@@ -14,6 +14,7 @@ import {
   type AssetIndex,
   assetIndex,
   findHandles,
+  IMAGES_CONTROL,
   KNOWN_HANDLE_CLASS,
   UNKNOWN_HANDLE_CLASS,
   uniqueHandles,
@@ -24,6 +25,7 @@ import {
   POPOVER_SHADOW_STYLE,
   POPOVER_SURFACE_CLASS,
 } from "@/shared/ui/popoverSurface";
+import { COMPOSER_MEDIA_REMOVE_CLASS } from "./ComposerAttachments";
 
 /** Every asset the installed harnesses list, by lowercased handle. */
 export function useHarnessAssetIndex(): AssetIndex {
@@ -106,7 +108,11 @@ export function AssetRow({
   );
 }
 
-export function HandleChip({
+/**
+ * A prompt `@handle` as a tile in the composer's attachment row, the size of
+ * an attachment thumbnail: the asset's image, or a dashed "Not found".
+ */
+export function HandleTile({
   entry,
   handle,
   onRemove,
@@ -115,45 +121,70 @@ export function HandleChip({
   handle: string;
   onRemove: () => void;
 }) {
+  const title = entry
+    ? `${assetSubtitle(entry.option)} · ${entry.option.label}`
+    : `@${handle} · not found`;
   return (
-    <span
-      className={cn(
-        "inline-flex h-7 items-center gap-1.5 rounded-full border bg-background pr-1 text-sm",
-        entry ? "border-border/60 pl-0.5" : "border-dashed border-border pl-2",
-      )}
+    <div
+      className="group relative h-[64px] w-[64px] shrink-0"
       data-testid={`composer-handle-chip-${handle}`}
+      title={title}
     >
-      {entry ? <AssetThumb className="h-6 w-6" option={entry.option} /> : null}
-      <span className={entry ? "text-foreground" : "text-muted-foreground"}>
-        @{handle}
-      </span>
-      {entry?.option.hint ? (
-        <span className="text-xs text-muted-foreground">
-          {entry.option.hint}
+      <div
+        className={cn(
+          "flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-2xl border",
+          entry
+            ? "border-border/70"
+            : "border-dashed border-border bg-muted/40 px-1 text-center",
+        )}
+      >
+        {entry ? (
+          <AssetThumb
+            className="h-full w-full rounded-none"
+            option={entry.option}
+          />
+        ) : (
+          <>
+            <span className="max-w-full truncate text-2xs font-medium text-muted-foreground">
+              @{handle}
+            </span>
+            <span className="text-3xs text-muted-foreground/80">Not found</span>
+          </>
+        )}
+      </div>
+      {entry ? (
+        <span className="absolute inset-x-0 bottom-0 truncate rounded-b-2xl bg-background/80 px-1 text-center text-3xs text-foreground">
+          @{handle}
         </span>
       ) : null}
-      {entry ? null : (
-        <span className="text-xs text-muted-foreground">Not found</span>
-      )}
       <button
         aria-label={`Remove @${handle}`}
-        className="flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+        className={COMPOSER_MEDIA_REMOVE_CLASS}
         onClick={onRemove}
         onMouseDown={(event) => event.preventDefault()}
         type="button"
       >
-        <X className="h-3.5 w-3.5" />
+        <X className="h-2.5 w-2.5" />
       </button>
-    </span>
+    </div>
   );
 }
 
+/** The menu's width (`w-72`), for keeping it inside the composer. */
+export const HANDLE_AUTOCOMPLETE_WIDTH_PX = 288;
+
+/**
+ * The `@` autocomplete, opening above `at` (px from the prompt box's top-left:
+ * the `@`'s line and position, clamped to fit).
+ */
 export function HandleAutocomplete({
+  at,
   highlighted,
   matches,
   onHighlight,
   onSelect,
 }: {
+  at: { left: number; top: number };
   highlighted: number;
   matches: AssetEntry[];
   onHighlight: (index: number) => void;
@@ -161,8 +192,9 @@ export function HandleAutocomplete({
 }) {
   return (
     <div
-      className="absolute bottom-full left-0 z-50 mb-1 px-3 sm:px-4"
+      className="absolute z-50 -translate-y-full pb-1"
       data-testid="composer-handle-autocomplete"
+      style={{ left: at.left, top: at.top }}
     >
       {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only guard keeps the editor focused while a row is pressed. */}
       <div
@@ -230,7 +262,8 @@ export function HighlightedHandles({
 
 /**
  * The assets an image's prompt names, grouped by menu (Character, Reference),
- * then handles no installed harness lists.
+ * then handles no installed harness lists. Image references (`@image1`) are
+ * left out: the sidebar shows those sources itself.
  */
 export function PromptAssets({
   index,
@@ -247,6 +280,7 @@ export function PromptAssets({
       missing.push(handle);
       continue;
     }
+    if (entry.control === IMAGES_CONTROL) continue;
     const group = groups.get(entry.control.id) ?? {
       label: entry.control.label,
       entries: [],

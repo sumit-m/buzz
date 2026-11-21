@@ -5,10 +5,13 @@ import {
   applyPreset,
   composerPayload,
   composerTag,
+  controlShown,
   editStateFromSidecar,
   effectiveValue,
   followAttachments,
   harnessComposerForAgent,
+  IMAGES_KEY,
+  imageRules,
   initialPanelState,
   optionsFor,
   pickValue,
@@ -17,6 +20,7 @@ import {
   sendBlockReason,
   setMode,
   setRepo,
+  takesImages,
   toSavedState,
 } from "./composerHarnessState.ts";
 
@@ -107,19 +111,95 @@ test("explicit picks survive a mode switch; Auto falls back in Generate", () => 
 
 test("attachments drive the mode", () => {
   let state = initialPanelState(spec);
-  state = followAttachments(state, spec, 0, 1);
+  state = followAttachments(state, spec, 1);
   assert.equal(state.mode, "edit");
-  state = followAttachments(state, spec, 1, 2);
+  assert.equal(state.images, 1);
+  state = followAttachments(state, spec, 2);
   assert.equal(state.mode, "edit");
-  state = followAttachments(state, spec, 2, 0);
+  state = followAttachments(state, spec, 0);
   assert.equal(state.mode, "generate");
+  assert.equal(state.images, 0);
 });
 
 test("Edit without an image is blocked", () => {
   const edit = setMode(initialPanelState(spec), "edit");
-  assert.equal(sendBlockReason(edit, spec, 0), "Attach an image to edit");
-  assert.equal(sendBlockReason(edit, spec, 1), null);
-  assert.equal(sendBlockReason(initialPanelState(spec), spec, 0), null);
+  assert.equal(sendBlockReason(edit, spec), "Attach an image to edit");
+  assert.equal(sendBlockReason({ ...edit, images: 1 }, spec), null);
+  assert.equal(sendBlockReason(initialPanelState(spec), spec), null);
+});
+
+const imageSpec = {
+  modes: [{ id: "image", label: "Image" }],
+  controls: [
+    {
+      id: "model",
+      kind: "list",
+      label: "Model",
+      default: "mango-v4",
+      options: [
+        { value: "mango-v4", label: "Mango 4", maxImages: 3, imageRefs: true },
+        { value: "z-image-turbo", label: "Z-Image Turbo", maxImages: 1 },
+      ],
+    },
+    {
+      id: "aspect",
+      kind: "shapes",
+      label: "Aspect",
+      default: "portrait",
+      defaultWithImages: "auto",
+      options: [
+        { value: "auto", label: "Auto", when: { [IMAGES_KEY]: ["attached"] } },
+        { value: "portrait", label: "Portrait" },
+      ],
+    },
+    {
+      id: "character",
+      kind: "assets",
+      label: "Character",
+      when: { model: ["mango-v4"] },
+      options: [],
+    },
+  ],
+};
+
+test("Auto follows the attachments, not a mode", () => {
+  let state = initialPanelState(imageSpec);
+  const aspect = imageSpec.controls[1];
+  assert.equal(effectiveValue(state, aspect, imageSpec), "portrait");
+  assert.deepEqual(
+    optionsFor(aspect, state.mode, resolvePanel(state, imageSpec).values).map(
+      (o) => o.value,
+    ),
+    ["portrait"],
+  );
+  state = followAttachments(state, imageSpec, 2);
+  assert.equal(state.mode, "image");
+  assert.equal(effectiveValue(state, aspect, imageSpec), "auto");
+  assert.equal(composerPayload(state, imageSpec).controls.aspect, "auto");
+  assert.equal(IMAGES_KEY in composerPayload(state, imageSpec).controls, false);
+  state = pickValue(state, imageSpec, "aspect", "auto");
+  state = followAttachments(state, imageSpec, 0);
+  assert.equal(effectiveValue(state, aspect, imageSpec), "portrait");
+});
+
+test("the picked model sets the image limit, image references and menus", () => {
+  let state = followAttachments(initialPanelState(imageSpec), imageSpec, 3);
+  assert.deepEqual(imageRules(state, imageSpec), {
+    refs: true,
+    max: { count: 3, label: "Mango 4" },
+  });
+  assert.equal(sendBlockReason(state, imageSpec), null);
+  const character = imageSpec.controls[2];
+  assert.equal(controlShown(character, resolvePanel(state, imageSpec)), true);
+  state = pickValue(state, imageSpec, "model", "z-image-turbo");
+  assert.equal(imageRules(state, imageSpec).refs, false);
+  assert.equal(
+    sendBlockReason(state, imageSpec),
+    "Z-Image Turbo takes up to 1 image; remove 2",
+  );
+  assert.equal(controlShown(character, resolvePanel(state, imageSpec)), false);
+  assert.equal(takesImages(imageSpec), true);
+  assert.equal(takesImages({ modes: [], controls: [] }), false);
 });
 
 test("a preset sets every control it names, a later pick wins", () => {
@@ -301,7 +381,13 @@ const byModel = {
   ],
 };
 const at = (id) => byModel.controls.find((c) => c.id === id);
-const values = (state) => resolvePanel(state, byModel).values;
+const values = (state) => {
+  const { [IMAGES_KEY]: _images, ...controls } = resolvePanel(
+    state,
+    byModel,
+  ).values;
+  return controls;
+};
 
 test("a model switch keeps what the new model offers", () => {
   const untouched = pickValue(

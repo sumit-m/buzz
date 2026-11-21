@@ -83,6 +83,12 @@ pub struct ComposerControl {
     pub default: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub default_by_mode: BTreeMap<String, String>,
+    /// The default while images are attached (an image's own Auto size).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_with_images: Option<String>,
+    /// Shown only while each named control has one of these values.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub when: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub options: Vec<ComposerOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -132,6 +138,12 @@ pub struct ComposerOption {
     /// when its own pick isn't offered (a model's default aspect and resolution).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub defaults: BTreeMap<String, String>,
+    /// While picked, sending is blocked above this many attached images.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_images: Option<u32>,
+    /// While picked, attached images can be inserted into the prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub image_refs: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -169,6 +181,10 @@ enum RawOption {
         sizes: Vec<SizeVariant>,
         #[serde(default)]
         defaults: BTreeMap<String, String>,
+        #[serde(default, rename = "maxImages")]
+        max_images: Option<u32>,
+        #[serde(default, rename = "imageRefs")]
+        image_refs: bool,
     },
 }
 
@@ -187,6 +203,8 @@ impl From<RawOption> for ComposerOption {
                 when: BTreeMap::new(),
                 sizes: Vec::new(),
                 defaults: BTreeMap::new(),
+                max_images: None,
+                image_refs: false,
             },
             RawOption::Full {
                 value,
@@ -200,6 +218,8 @@ impl From<RawOption> for ComposerOption {
                 when,
                 sizes,
                 defaults,
+                max_images,
+                image_refs,
             } => ComposerOption {
                 label: label.unwrap_or_else(|| value.clone()),
                 value,
@@ -212,6 +232,8 @@ impl From<RawOption> for ComposerOption {
                 when,
                 sizes,
                 defaults,
+                max_images,
+                image_refs,
             },
         }
     }
@@ -241,13 +263,28 @@ fn check_text(what: &str, text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `when` names value controls by id, with 1-[`MAX_OPTIONS`] valid values each.
+/// The `when` key that follows the attachments rather than a control.
+const IMAGES_KEY: &str = "@images";
+const IMAGES_VALUES: [&str; 2] = ["none", "attached"];
+/// The most images one request may declare (`maxImages`).
+const MAX_IMAGES: u32 = 50;
+
+/// `when` names value controls by id, with 1-[`MAX_OPTIONS`] valid values each,
+/// or `@images` with `none` / `attached`.
 fn check_when(
     control: &str,
     when: &BTreeMap<String, Vec<String>>,
     allowed: &HashSet<&str>,
 ) -> Result<(), String> {
     for (id, values) in when {
+        if id == IMAGES_KEY {
+            if values.is_empty() || values.iter().any(|v| !IMAGES_VALUES.contains(&v.as_str())) {
+                return Err(format!(
+                    "{control}: when {IMAGES_KEY:?} takes \"none\" and/or \"attached\""
+                ));
+            }
+            continue;
+        }
         if !allowed.contains(id.as_str()) {
             return Err(format!(
                 "{control}: when names {id:?}, which it can't follow"
@@ -344,6 +381,16 @@ pub(crate) fn validate(spec: &ComposerSpec) -> Result<(), String> {
                 ));
             }
         }
+        if let Some(value) = &control.default_with_images {
+            if !is_value(value) {
+                return Err(format!(
+                    "{}: defaultWithImages {value:?} is invalid",
+                    control.id
+                ));
+            }
+        }
+        // A control is shown once every value is known, so it may follow any.
+        check_when(&control.id, &control.when, &value_ids)?;
         for option in &control.options {
             check_text("option label", &option.label)?;
             if !is_value(&option.value) {
@@ -379,6 +426,12 @@ pub(crate) fn validate(spec: &ComposerSpec) -> Result<(), String> {
                 ));
             }
             check_when(&control.id, &option.when, &earlier)?;
+            if option.max_images.is_some_and(|n| n == 0 || n > MAX_IMAGES) {
+                return Err(format!(
+                    "{}: maxImages must be 1-{MAX_IMAGES}",
+                    control.id
+                ));
+            }
             if option.sizes.len() > MAX_SIZES {
                 return Err(format!("{}: at most {MAX_SIZES} sizes", control.id));
             }
@@ -839,5 +892,41 @@ mod tests {
         let mut bad_default = composer;
         bad_default["controls"][0]["options"][0]["defaults"] = serde_json::json!({ "repo": "x" });
         assert!(validate(&spec(bad_default)).is_err());
+    }
+
+    #[test]
+    fn image_rules_follow_attachments_and_the_model() {
+        let spec =
+            |value: serde_json::Value| serde_json::from_value::<ComposerSpec>(value).unwrap();
+        let mut composer = mage_composer();
+        composer["controls"][0]["options"][0]["maxImages"] = serde_json::json!(10);
+        composer["controls"][0]["options"][0]["imageRefs"] = serde_json::json!(true);
+        composer["controls"][1]["defaultWithImages"] = serde_json::json!("auto");
+        composer["controls"][1]["options"][0]["when"] =
+            serde_json::json!({ "@images": ["attached"] });
+        composer["controls"][2]["when"] = serde_json::json!({ "model": ["mango-v4"] });
+        let parsed = spec(composer.clone());
+        assert!(validate(&parsed).is_ok());
+        assert_eq!(parsed.controls[0].options[0].max_images, Some(10));
+        assert!(parsed.controls[0].options[0].image_refs);
+        assert!(!parsed.controls[0].options[1].image_refs);
+        assert_eq!(parsed.controls[1].default_with_images.as_deref(), Some("auto"));
+        let written = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(written["controls"][0]["options"][0]["maxImages"], 10);
+        assert_eq!(written["controls"][0]["options"][0]["imageRefs"], true);
+        assert!(written["controls"][0]["options"][1].get("imageRefs").is_none());
+
+        let mut bad_images = composer.clone();
+        bad_images["controls"][1]["options"][0]["when"] =
+            serde_json::json!({ "@images": ["some"] });
+        assert!(validate(&spec(bad_images)).is_err());
+
+        let mut zero = composer.clone();
+        zero["controls"][0]["options"][0]["maxImages"] = serde_json::json!(0);
+        assert!(validate(&spec(zero)).is_err());
+
+        let mut unknown = composer;
+        unknown["controls"][2]["when"] = serde_json::json!({ "repo": ["x"] });
+        assert!(validate(&spec(unknown)).is_err());
     }
 }

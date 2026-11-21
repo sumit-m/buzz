@@ -16,6 +16,7 @@ import * as React from "react";
 import {
   applyPreset,
   type ComposerControl,
+  controlShown,
   type ComposerPanelState,
   type ComposerSpec,
   optionsFor,
@@ -372,63 +373,65 @@ export function ComposerHarnessControls({
             />
           </ControlPopup>
         ) : null}
-        {assetControls(spec).map((control) => {
-          const Icon = (control.icon && ICONS[control.icon]) || UserPlus;
-          return (
-            <ControlPopup
-              heading={
-                <>
-                  {control.title ?? control.label}
-                  {refreshingId === control.id ? (
-                    <LoaderCircle
-                      aria-label="Refreshing"
-                      className="h-3 w-3 animate-spin"
-                    />
-                  ) : null}
-                </>
-              }
-              keepEditorFocus
-              key={control.id}
-              label={control.label}
-              onOpenChange={(open) => {
-                if (open && control.refresh?.length) {
-                  onControlOpen?.(control.id);
+        {assetControls(spec)
+          .filter((control) => controlShown(control, resolved))
+          .map((control) => {
+            const Icon = (control.icon && ICONS[control.icon]) || UserPlus;
+            return (
+              <ControlPopup
+                heading={
+                  <>
+                    {control.title ?? control.label}
+                    {refreshingId === control.id ? (
+                      <LoaderCircle
+                        aria-label="Refreshing"
+                        className="h-3 w-3 animate-spin"
+                      />
+                    ) : null}
+                  </>
                 }
-                openChange(control.id)(open);
-              }}
-              open={openId === control.id}
-              testId={`composer-control-${control.id}`}
-              trigger={
-                <>
-                  <Icon className="h-4 w-4" />
-                  {control.label}
-                </>
-              }
-            >
-              {control.options.length === 0 ? (
-                <p className="px-2 py-1.5 text-sm text-muted-foreground">
-                  {refreshingId === control.id ? "Loading…" : "None found"}
-                </p>
-              ) : (
-                <div className="-mx-1 flex max-h-80 min-w-64 flex-col overflow-y-auto">
-                  {control.options.map((option) => (
-                    <button
-                      className="rounded-lg px-2 py-2 hover:bg-muted/60"
-                      key={option.value}
-                      onClick={() => {
-                        onInsertHandle?.(option.value);
-                        setOpenId(null);
-                      }}
-                      type="button"
-                    >
-                      <AssetRow large option={option} />
-                    </button>
-                  ))}
-                </div>
-              )}
-            </ControlPopup>
-          );
-        })}
+                keepEditorFocus
+                key={control.id}
+                label={control.label}
+                onOpenChange={(open) => {
+                  if (open && control.refresh?.length) {
+                    onControlOpen?.(control.id);
+                  }
+                  openChange(control.id)(open);
+                }}
+                open={openId === control.id}
+                testId={`composer-control-${control.id}`}
+                trigger={
+                  <>
+                    <Icon className="h-4 w-4" />
+                    {control.label}
+                  </>
+                }
+              >
+                {control.options.length === 0 ? (
+                  <p className="px-2 py-1.5 text-sm text-muted-foreground">
+                    {refreshingId === control.id ? "Loading…" : "None found"}
+                  </p>
+                ) : (
+                  <div className="-mx-1 flex max-h-80 min-w-64 flex-col overflow-y-auto">
+                    {control.options.map((option) => (
+                      <button
+                        className="rounded-lg px-2 py-2 hover:bg-muted/60"
+                        key={option.value}
+                        onClick={() => {
+                          onInsertHandle?.(option.value);
+                          setOpenId(null);
+                        }}
+                        type="button"
+                      >
+                        <AssetRow large option={option} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </ControlPopup>
+            );
+          })}
         {repo && (repositories.length > 0 || state.repo) ? (
           <span className="inline-flex items-center">
             <ControlPopup
@@ -483,7 +486,7 @@ export function ComposerHarnessModeToggle({
   spec: ComposerSpec;
   state: ComposerPanelState;
 }) {
-  if (spec.modes.length < 2) return null;
+  if (spec.modes.length === 0) return null;
   return (
     <div
       className="flex shrink-0 rounded-full bg-muted/60 p-0.5"

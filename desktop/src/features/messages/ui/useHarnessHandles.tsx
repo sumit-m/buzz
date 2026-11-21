@@ -12,15 +12,26 @@ import {
   removeHandleTransaction,
 } from "@/features/messages/lib/harnessHandlesPlugin";
 import {
+  type AttachedImage,
+  imageRefContent,
+} from "@/features/messages/lib/harnessImageRefNode";
+import {
   type AssetEntry,
   assetControls,
   assetIndex,
   findHandles,
+  IMAGES_CONTROL,
+  imageEntries,
   matchAssets,
   uniqueHandles,
+  withEntries,
 } from "@/features/messages/lib/promptHandles";
 import { refreshHarnessControl } from "@/shared/api/harnessComposer";
-import { HandleAutocomplete, HandleChip } from "./HarnessAssets";
+import {
+  HANDLE_AUTOCOMPLETE_WIDTH_PX,
+  HandleAutocomplete,
+  HandleTile,
+} from "./HarnessAssets";
 
 function sameQuery(a: HandleQuery | null, b: HandleQuery | null) {
   return a?.query === b?.query && a?.from === b?.from && a?.to === b?.to;
@@ -29,27 +40,41 @@ function sameQuery(a: HandleQuery | null, b: HandleQuery | null) {
 /**
  * LOCAL DIVERGENCE: `@handle` words in a harness panel's prompt — colouring,
  * the `@` autocomplete, the chips above the prompt, and menu picks. Only for
- * a panel with `assets` menus. The prompt text stays the source of truth: a
- * pick inserts `@handle`, a chip's ✕ deletes it.
+ * a panel with `assets` menus, or one taking image references. The prompt
+ * text stays the source of truth: a pick inserts `@handle`, a chip's ✕
+ * deletes it. An attached image's entry inserts its inline reference.
  */
 export function useHarnessHandles({
   editor,
   harnessId,
+  images,
   mentionNames,
   spec,
   text,
 }: {
   editor: Editor | null;
   harnessId: string | null;
+  /** Attached images the prompt may name, in order (none when off). */
+  images: readonly AttachedImage[];
   /** Buzz mention names in the draft, which are never handles. */
   mentionNames: readonly string[];
   spec: ComposerSpec | null;
   text: string;
 }) {
   const queryClient = useQueryClient();
-  const index = React.useMemo(() => assetIndex(spec ? [spec] : []), [spec]);
+  const index = React.useMemo(
+    () =>
+      withEntries(
+        assetIndex(spec ? [spec] : []),
+        imageEntries(
+          images.map((image) => image.thumb),
+          "attached",
+        ),
+      ),
+    [images, spec],
+  );
   const menus = spec ? assetControls(spec) : [];
-  const enabled = Boolean(editor && menus.length > 0);
+  const enabled = Boolean(editor && (menus.length > 0 || images.length > 0));
   const indexRef = React.useRef(index);
   indexRef.current = index;
   const namesRef = React.useRef(mentionNames);
@@ -109,6 +134,19 @@ export function useHarnessHandles({
 
   const open = enabled && query !== null && query.from !== dismissedFrom;
   const matches = open && query ? matchAssets(query.query, index) : [];
+  // The menu opens above the `@`'s line, starting at the `@`, kept inside
+  // the prompt's (scrolling) box.
+  const menuAt = { left: 0, top: 0 };
+  if (open && query && editor && !editor.isDestroyed) {
+    const dom = editor.view.dom;
+    const box = (
+      dom.closest('[data-testid="message-input-scroll"]') ?? dom
+    ).getBoundingClientRect();
+    const caret = editor.view.coordsAtPos(query.from);
+    const room = box.width - HANDLE_AUTOCOMPLETE_WIDTH_PX;
+    menuAt.left = Math.max(0, Math.min(caret.left - box.left, room));
+    menuAt.top = Math.max(0, caret.top - box.top);
+  }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new query starts at its first match
   React.useEffect(() => {
@@ -132,12 +170,19 @@ export function useHarnessHandles({
 
   const select = (entry: AssetEntry) => {
     if (!editor || !query) return;
+    const range = { from: query.from, to: query.to };
+    const at =
+      entry.control === IMAGES_CONTROL
+        ? images.findIndex((_, i) => `image${i + 1}` === entry.option.value)
+        : -1;
     editor
       .chain()
       .focus()
       .insertContentAt(
-        { from: query.from, to: query.to },
-        { type: "text", text: `@${entry.option.value} ` },
+        range,
+        at >= 0
+          ? imageRefContent(images, at)
+          : { type: "text", text: `@${entry.option.value} ` },
       )
       .run();
   };
@@ -186,39 +231,37 @@ export function useHarnessHandles({
     editor.commands.focus();
   };
 
-  const handles = enabled ? uniqueHandles(findHandles(text, mentionNames)) : [];
+  // Image references show inline, so they get no chip above the prompt.
+  const handles = enabled
+    ? uniqueHandles(findHandles(text, mentionNames)).filter(
+        (handle) => index.get(handle.toLowerCase())?.control !== IMAGES_CONTROL,
+      )
+    : [];
 
   return {
     enabled,
     insertHandle,
     refreshControl,
     refreshingId,
-    promptExtras: enabled ? (
-      <>
-        {open ? (
-          <HandleAutocomplete
-            highlighted={highlighted}
-            matches={matches}
-            onHighlight={setHighlighted}
-            onSelect={select}
-          />
-        ) : null}
-        {handles.length > 0 ? (
-          <div
-            className="mb-2 flex flex-wrap gap-1.5"
-            data-testid="composer-handle-chips"
-          >
-            {handles.map((handle) => (
-              <HandleChip
-                entry={index.get(handle.toLowerCase())}
-                handle={handle}
-                key={handle.toLowerCase()}
-                onRemove={() => removeHandle(handle)}
-              />
-            ))}
-          </div>
-        ) : null}
-      </>
-    ) : null,
+    /** The `@` autocomplete, above the prompt. */
+    autocomplete:
+      enabled && open ? (
+        <HandleAutocomplete
+          highlighted={highlighted}
+          at={menuAt}
+          matches={matches}
+          onHighlight={setHighlighted}
+          onSelect={select}
+        />
+      ) : null,
+    /** A tile per prompt handle, for the attachment row. */
+    tiles: handles.map((handle) => (
+      <HandleTile
+        entry={index.get(handle.toLowerCase())}
+        handle={handle}
+        key={handle.toLowerCase()}
+        onRemove={() => removeHandle(handle)}
+      />
+    )),
   };
 }

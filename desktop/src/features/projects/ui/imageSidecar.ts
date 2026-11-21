@@ -18,12 +18,13 @@ export type SidecarSource = {
 };
 
 /**
- * What mage-agent adds as `buzz`: how the image was made and the repo it was
- * saved to (`<owner>/<repo>`). Older sidecars have none.
+ * What mage-agent adds as `buzz`: how the image was made, the uploads it was
+ * made from (in order), and the repo it was saved to (`<owner>/<repo>`).
+ * Older sidecars have none, or a single `source`.
  */
 export type ImageOrigin = {
   mode: "generate" | "edit";
-  source: SidecarSource | null;
+  sources: SidecarSource[];
   repo: string | null;
 };
 
@@ -145,15 +146,27 @@ function parseOrigin(raw: unknown): ImageOrigin | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const origin = raw as Record<string, unknown>;
   if (origin.mode !== "generate" && origin.mode !== "edit") return null;
-  let source: SidecarSource | null = null;
-  const rawSource = origin.source as Record<string, unknown> | undefined;
-  const url = scalarText(rawSource?.url);
-  if (url && /^https?:\/\//.test(url)) {
-    source = { url };
-    for (const key of ["m", "x", "size", "dim"] as const) {
-      const value = scalarText(rawSource?.[key]);
-      if (value) source[key] = value;
-    }
+  const listed = Array.isArray(origin.sources)
+    ? origin.sources
+    : origin.source
+      ? [origin.source]
+      : [];
+  const sources = listed.flatMap((raw) => {
+    const source = parseSource(raw);
+    return source ? [source] : [];
+  });
+  return { mode: origin.mode, sources, repo: scalarText(origin.repo) };
+}
+
+function parseSource(raw: unknown): SidecarSource | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const fields = raw as Record<string, unknown>;
+  const url = scalarText(fields.url);
+  if (!url || !/^https?:\/\//.test(url)) return null;
+  const source: SidecarSource = { url };
+  for (const key of ["m", "x", "size", "dim"] as const) {
+    const value = scalarText(fields[key]);
+    if (value) source[key] = value;
   }
-  return { mode: origin.mode, source, repo: scalarText(origin.repo) };
+  return source;
 }

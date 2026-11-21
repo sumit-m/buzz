@@ -2,6 +2,7 @@ import * as React from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import {
+  AtSign,
   Bot,
   FileText,
   HatGlasses,
@@ -51,8 +52,17 @@ import { AudioMessageAttachment } from "./AudioMessageAttachment";
 const COMPOSER_MEDIA_REVEAL_CLASS =
   "pointer-events-none opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100";
 
+/**
+ * LOCAL DIVERGENCE: corner "insert into prompt" badge on a composer image,
+ * shown while a harness panel takes image references.
+ */
+const COMPOSER_MEDIA_INSERT_CLASS = cn(
+  "absolute -bottom-1 -left-1 z-10 flex h-5 items-center gap-0.5 rounded-full bg-foreground px-1.5 text-2xs font-medium text-background",
+  COMPOSER_MEDIA_REVEAL_CLASS,
+);
+
 /** Corner "remove attachment" badge on a composer thumbnail. */
-const COMPOSER_MEDIA_REMOVE_CLASS = cn(
+export const COMPOSER_MEDIA_REMOVE_CLASS = cn(
   "absolute -right-1 -top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-foreground text-background",
   COMPOSER_MEDIA_REVEAL_CLASS,
 );
@@ -97,6 +107,8 @@ type ComposerAttachmentsProps = {
   uploadingPreviews?: UploadingAttachmentPreview[];
   /** Upload annotated bytes as a replacement for the attachment at `url`. */
   onEditSave?: (url: string, bytes: Uint8Array) => Promise<void>;
+  /** Puts an image's reference in the prompt, by its original URL. */
+  onInsertImage?: (url: string) => void;
   onRemove: (url: string) => void;
   /** Restore the pre-edit original for an annotated attachment. */
   onRevert?: (url: string) => void;
@@ -216,8 +228,8 @@ function ComposerSnapshotCard({
 const LIGHTBOX_BUTTON_CLASS =
   "rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-hidden focus:ring-2 focus:ring-white/30";
 
-const COMPOSER_MEDIA_HEIGHT_PX = 55;
-const COMPOSER_MEDIA_WIDTH_PX = 55;
+const COMPOSER_MEDIA_HEIGHT_PX = 64;
+const COMPOSER_MEDIA_WIDTH_PX = 64;
 
 function composerMediaStyle(): React.CSSProperties {
   return {
@@ -230,6 +242,7 @@ type MediaAttachmentItemProps = {
   attachment: ImetaMedia;
   isSpoilered: boolean;
   onEditSave?: (url: string, bytes: Uint8Array) => Promise<void>;
+  onInsert?: () => void;
   onRemove: (url: string) => void;
   onRevert?: (url: string) => void;
   onToggleSpoiler?: (url: string) => void;
@@ -255,6 +268,7 @@ const MediaAttachmentItem = React.forwardRef<
     attachment,
     isSpoilered,
     onEditSave,
+    onInsert,
     onRemove,
     onRevert,
     onToggleSpoiler,
@@ -351,7 +365,7 @@ const MediaAttachmentItem = React.forwardRef<
       className="group relative"
     >
       <div
-        className="relative h-[55px] max-w-[55px]"
+        className="relative h-[64px] max-w-[64px]"
         style={composerMediaStyle()}
       >
         <DialogPrimitive.Root open={open} onOpenChange={handleOpenChange}>
@@ -543,6 +557,24 @@ const MediaAttachmentItem = React.forwardRef<
           </TooltipTrigger>
           <TooltipContent>Remove attachment</TooltipContent>
         </Tooltip>
+        {onInsert && !isVideo ? (
+          <Tooltip disableHoverableContent>
+            <TooltipTrigger asChild>
+              <button
+                aria-label={`Insert ${mediaLabel} into the prompt`}
+                className={COMPOSER_MEDIA_INSERT_CLASS}
+                data-testid="composer-attachment-insert"
+                onClick={onInsert}
+                onMouseDown={(event) => event.preventDefault()}
+                type="button"
+              >
+                <AtSign className="h-2.5 w-2.5" />
+                Insert
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Insert into the prompt</TooltipContent>
+          </Tooltip>
+        ) : null}
         {canEdit ? (
           <Tooltip disableHoverableContent>
             <TooltipTrigger asChild>
@@ -598,6 +630,7 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
   onToggleQueuedSpoiler,
   queuedPreviews = [],
   onEditSave,
+  onInsertImage,
   onRemove,
   onRevert,
   originalUrlByUrl,
@@ -740,6 +773,11 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
                 // (which would close its open lightbox dialog).
                 key={originalUrl ?? attachment.url}
                 onEditSave={onEditSave}
+                onInsert={
+                  onInsertImage
+                    ? () => onInsertImage(originalUrl ?? attachment.url)
+                    : undefined
+                }
                 onRemove={onRemove}
                 onRevert={onRevert}
                 onToggleSpoiler={onToggleSpoiler}
@@ -800,7 +838,7 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
               >
                 {isMedia ? (
                   <div
-                    className="relative h-[55px] max-w-[55px]"
+                    className="relative h-[64px] max-w-[64px]"
                     style={composerMediaStyle()}
                   >
                     <div className="h-full w-full overflow-hidden rounded-2xl border border-border/70 bg-muted">
@@ -883,7 +921,7 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
                 className="group relative"
               >
                 <div
-                  className="relative h-[55px] max-w-[55px]"
+                  className="relative h-[64px] max-w-[64px]"
                   style={composerMediaStyle()}
                 >
                   <div className="h-full w-full overflow-hidden rounded-2xl border border-border/70 bg-muted">

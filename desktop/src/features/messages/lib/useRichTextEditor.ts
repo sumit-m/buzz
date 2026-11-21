@@ -35,6 +35,7 @@ import {
 } from "./macEmacsTextShortcuts";
 import type { MentionIdentity } from "./mentionClipboard";
 import { CUSTOM_EMOJI_NODE_NAME } from "./customEmojiNode";
+import { HarnessImageRefNode } from "./harnessImageRefNode";
 import { useComposerCustomEmoji } from "./useComposerCustomEmoji";
 import { buildPlainTextProjection } from "./plainTextProjection";
 import { parseSnapshotClipboardHtml } from "./agentSnapshotClipboard";
@@ -335,6 +336,7 @@ export function useRichTextEditor({
         PastedMentionOccurrencesExtension,
         customEmojiWiring.extension,
         messageLinkWiring.extension,
+        HarnessImageRefNode,
         Placeholder.configure({
           placeholder: () => placeholderRef.current ?? "Write a message…",
         }),

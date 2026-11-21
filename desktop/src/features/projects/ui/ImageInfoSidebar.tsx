@@ -10,7 +10,11 @@ import {
 import * as React from "react";
 import { toast } from "sonner";
 
-import type { AssetIndex } from "@/features/messages/lib/promptHandles";
+import {
+  type AssetIndex,
+  imageEntries,
+  withEntries,
+} from "@/features/messages/lib/promptHandles";
 import {
   HighlightedHandles,
   PromptAssets,
@@ -50,8 +54,19 @@ export function ImageInfoSidebar({
   const assets = useHarnessAssetIndex();
   const rootRef = React.useRef<HTMLElement>(null);
   const actions = useGeneratedImageActions({ context, rootRef, sidecar });
-  const source =
-    sidecar.origin?.mode === "edit" ? (sidecar.origin.source ?? null) : null;
+  const sources = sidecar.origin?.sources ?? [];
+  // `@image1…` in the prompt name the sources, so they're known handles here.
+  const handles = React.useMemo(
+    () =>
+      withEntries(
+        assets,
+        imageEntries(
+          sources.map((source) => rewriteRelayUrl(source.url)),
+          "source",
+        ),
+      ),
+    [assets, sources],
+  );
   const parsedExpiry = sidecar.values.expires_at
     ? new Date(sidecar.values.expires_at)
     : null;
@@ -72,10 +87,10 @@ export function ImageInfoSidebar({
     >
       {prompt ? (
         <div className="space-y-4 rounded-xl border border-border/60 bg-muted/20 p-4">
-          {assets.size > 0 ? (
-            <PromptAssets index={assets} prompt={prompt} />
+          {handles.size > 0 ? (
+            <PromptAssets index={handles} prompt={prompt} />
           ) : null}
-          <CollapsiblePrompt assets={assets} prompt={prompt} />
+          <CollapsiblePrompt assets={handles} prompt={prompt} />
           <div className="flex flex-wrap gap-1">
             <Button
               onClick={() => copyTextToClipboard(prompt, "Prompt copied")}
@@ -159,17 +174,34 @@ export function ImageInfoSidebar({
           ))}
         </dl>
       ) : null}
-      {source ? (
+      {sources.length > 0 ? (
         <dl className="px-1">
-          <dt className="text-sm text-muted-foreground/75">Image</dt>
-          <dd className="mt-1.5">
-            <img
-              alt="Source"
-              className="max-h-48 max-w-[168px] rounded-md object-cover"
-              data-testid="image-info-source"
-              loading="lazy"
-              src={rewriteRelayUrl(source.url)}
-            />
+          <dt className="text-sm text-muted-foreground/75">
+            {sources.length === 1 ? "Image" : "Images"}
+          </dt>
+          <dd className="mt-1.5 flex flex-wrap gap-2">
+            {sources.map((source, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed, ordered list that may repeat an upload
+              <figure className="space-y-1" key={index}>
+                <img
+                  alt={`Source ${index + 1}`}
+                  className={cn(
+                    "rounded-md object-cover",
+                    sources.length === 1
+                      ? "max-h-48 max-w-[168px]"
+                      : "h-20 w-20",
+                  )}
+                  data-testid="image-info-source"
+                  loading="lazy"
+                  src={rewriteRelayUrl(source.url)}
+                />
+                {sources.length > 1 ? (
+                  <figcaption className="text-xs text-muted-foreground">
+                    Image {index + 1}
+                  </figcaption>
+                ) : null}
+              </figure>
+            ))}
           </dd>
         </dl>
       ) : null}

@@ -11,6 +11,10 @@ import { applyImetaUpdate, compactImetaSlots } from "./imetaSlots";
 import { isVoiceNoteFile } from "./audioAttachment";
 import { useFilePicker } from "./useFilePicker";
 import { isVideoFile, videoMimeForFile } from "./videoFileType";
+import { createUploadLimiter, MAX_PARALLEL_UPLOADS } from "./uploadLimiter";
+
+/** Shared by every composer: the relay counts uploads per pubkey. */
+const limitUploads = createUploadLimiter(MAX_PARALLEL_UPLOADS);
 
 /**
  * First 4 hex chars of the sha256 — used as a short display name.
@@ -604,8 +608,11 @@ export function useMediaUpload({
         const file = files[index];
         const slotIndex = baseIndex + index;
         const previewId = reserveUploadingPreview(file, slotIndex);
-        // Fire-and-forget each upload concurrently — slot preserves order.
-        void (async () => {
+        // Fire-and-forget each upload, at most MAX_PARALLEL_UPLOADS at a time
+        // (LOCAL DIVERGENCE) — slot preserves order.
+        void limitUploads(async () => {
+          // Canceled, or its draft replaced, while it waited its turn.
+          if (isUploadCanceled(previewId) || isUploadStale(epoch)) return;
           try {
             const descriptor = await uploadMediaFile(
               file,
@@ -615,10 +622,17 @@ export function useMediaUpload({
           } catch (err) {
             onUploadError(err, previewId);
           }
-        })();
+        });
       }
     },
-    [fillSlot, onUploadError, reserveSlots, reserveUploadingPreview],
+    [
+      fillSlot,
+      isUploadCanceled,
+      isUploadStale,
+      onUploadError,
+      reserveSlots,
+      reserveUploadingPreview,
+    ],
   );
 
   const openFilePicker = useFilePicker();
@@ -764,17 +778,22 @@ export function useMediaUpload({
       const previewId = reserveUploadingPreview(file);
       setUploadingCount((c) => c + 1);
       const epoch = uploadEpochRef.current;
-      try {
-        const descriptor = await uploadMediaFile(
-          file,
-          uploadProgressId(previewId),
-        );
-        onUploaded(descriptor, previewId, epoch);
-      } catch (err) {
-        onUploadError(err, previewId);
-      }
+      await limitUploads(async () => {
+        if (isUploadCanceled(previewId) || isUploadStale(epoch)) return;
+        try {
+          const descriptor = await uploadMediaFile(
+            file,
+            uploadProgressId(previewId),
+          );
+          onUploaded(descriptor, previewId, epoch);
+        } catch (err) {
+          onUploadError(err, previewId);
+        }
+      });
     },
     [
+      isUploadCanceled,
+      isUploadStale,
       onUploaded,
       onUploadError,
       queueFiles,

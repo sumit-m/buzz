@@ -51,6 +51,7 @@ import { NonMemberMentionDialog } from "./NonMemberMentionDialog";
 import { useComposerVoiceNote } from "./useComposerVoiceNote";
 import { useMentionSendFlow } from "./useMentionSendFlow";
 import { useHarnessComposerPanel } from "./useHarnessComposerPanel";
+import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useAgentAddressLockPicker } from "./useAgentAddressLockPicker";
 import { useAddressMentionPulse } from "./useAddressMentionPulse";
 import { useAlwaysAddressShortcut } from "./useAlwaysAddressShortcut";
@@ -336,6 +337,16 @@ function MessageComposerImpl({
       rootTags: audienceContext?.rootTags ?? [],
       scope: audienceScope,
     });
+  const attachedImages = React.useMemo(
+    () =>
+      media.pendingImeta
+        .filter((m) => m.type.startsWith("image/"))
+        .map((m) => ({
+          url: media.originalUrlByUrl.get(m.url) ?? m.url,
+          thumb: rewriteRelayUrl(m.thumb ?? m.url),
+        })),
+    [media.pendingImeta, media.originalUrlByUrl],
+  );
   const harnessPanel = useHarnessComposerPanel({
     addressedPubkeys: persistentAudience.pubkeys,
     channelId,
@@ -347,6 +358,7 @@ function MessageComposerImpl({
       ...media.pendingImeta.map((m) => m.type),
       ...media.queuedAttachments.map((a) => a.file.type),
     ].filter((type) => type.startsWith("image/")).length,
+    images: attachedImages,
     loadDraft: ({ image, mention }) => {
       onHarnessEditAgent?.(mention.pubkey);
       mentions.restoreDraftMentionRefs([mention]);
@@ -962,7 +974,8 @@ function MessageComposerImpl({
             ) : null}
             {(media.pendingImeta.length > 0 ||
               media.queuedAttachments.length > 0 ||
-              media.isUploading) && (
+              media.isUploading ||
+              harnessPanel.handleTiles.length > 0) && (
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 {media.pendingImeta.length > 0 ||
                 media.queuedAttachments.length > 0 ||
@@ -980,13 +993,16 @@ function MessageComposerImpl({
                     onRemove={handleRemoveAttachment}
                     onRevert={handleAttachmentRevert}
                     originalUrlByUrl={media.originalUrlByUrl}
+                    onInsertImage={harnessPanel.insertImage ?? undefined}
                     onToggleSpoiler={handleToggleAttachmentSpoiler}
                     spoileredUrls={spoileredAttachmentUrls}
                   />
                 ) : null}
+                {harnessPanel.handleTiles}
               </div>
             )}
-            {harnessPanel.promptExtras}
+            {/* LOCAL DIVERGENCE: anchors the harness `@` menu just above the prompt. */}
+            <div className="relative">{harnessPanel.promptExtras}</div>
             {/* biome-ignore lint/a11y/noStaticElementInteractions: keydown handler bridges Tiptap editor to autocomplete and submit */}
             <div
               className="rich-text-composer relative max-h-32 overflow-y-auto"

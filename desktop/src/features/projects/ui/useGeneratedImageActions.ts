@@ -313,12 +313,12 @@ export function useGeneratedImageActions({
         harness.composer,
         sidecar.values,
         saved ? repoValueFor(saved) : null,
-        origin.mode,
+        origin.sources.length,
       );
       const outgoing = regenerateMessage({
         agentName: agent.name,
         prompt: sidecar.prompt,
-        source: origin.mode === "edit" ? origin.source : null,
+        sources: origin.sources,
       });
       await sendMessage.mutateAsync({
         channelId: channel.id,

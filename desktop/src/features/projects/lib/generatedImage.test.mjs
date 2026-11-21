@@ -160,20 +160,17 @@ test("planRelocation copies a chat image's uploads when it isn't saved", () => {
   );
 });
 
-test("regenerate needs an origin, and an edit its source upload", () => {
+test("regenerate needs an origin, and each source's upload", () => {
   assert.equal(canRegenerate(null), false);
   assert.equal(
-    canRegenerate({ mode: "generate", source: null, repo: null }),
+    canRegenerate({ mode: "generate", sources: [], repo: null }),
     true,
   );
-  assert.equal(
-    canRegenerate({ mode: "edit", source: null, repo: null }),
-    false,
-  );
+  assert.equal(canRegenerate({ mode: "edit", sources: [], repo: null }), false);
   assert.equal(
     canRegenerate({
       mode: "edit",
-      source: { url: "https://r/m/a" },
+      sources: [{ url: "https://r/m/a", x: "ab" }, { url: "https://r/m/b" }],
       repo: null,
     }),
     false,
@@ -181,7 +178,10 @@ test("regenerate needs an origin, and an edit its source upload", () => {
   assert.equal(
     canRegenerate({
       mode: "edit",
-      source: { url: "https://r/m/a", x: "ab" },
+      sources: [
+        { url: "https://r/m/a", x: "ab" },
+        { url: "https://r/m/b", x: "cd" },
+      ],
       repo: null,
     }),
     true,
@@ -190,26 +190,25 @@ test("regenerate needs an origin, and an edit its source upload", () => {
   const plain = regenerateMessage({
     agentName: "Mage",
     prompt: " a red\n fox ",
-    source: null,
+    sources: [],
   });
   assert.equal(plain.content, "@Mage a red fox");
   assert.equal(plain.mediaTags, undefined);
 
   const edit = regenerateMessage({
     agentName: "Mage",
-    prompt: "remove the ball",
-    source: {
-      url: "https://r/media/a.png",
-      m: "image/png",
-      x: "ab",
-      dim: "9x9",
-    },
+    prompt: "the fox from @image1 on @image2",
+    sources: [
+      { url: "https://r/media/a.png", m: "image/png", x: "ab", dim: "9x9" },
+      { url: "https://r/media/b.png", m: "image/png", x: "cd" },
+    ],
   });
   assert.equal(
     edit.content,
-    "@Mage remove the ball\n![image](https://r/media/a.png)",
+    "@Mage the fox from @image1 on @image2\n![image](https://r/media/a.png)\n![image](https://r/media/b.png)",
   );
   assert.deepEqual(edit.mediaTags, [
     ["imeta", "url https://r/media/a.png", "m image/png", "x ab", "dim 9x9"],
+    ["imeta", "url https://r/media/b.png", "m image/png", "x cd"],
   ]);
 });

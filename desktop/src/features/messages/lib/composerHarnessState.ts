@@ -22,6 +22,10 @@ export type ComposerOption = {
   sizes?: { when?: Record<string, string[]>; size: [number, number] }[];
   /** While picked, what other controls fall back to when their pick isn't offered. */
   defaults?: Record<string, string>;
+  /** While picked, sending is blocked above this many attached images. */
+  maxImages?: number;
+  /** While picked, attached images can be inserted into the prompt. */
+  imageRefs?: boolean;
 };
 
 export type ComposerControl = {
@@ -31,6 +35,10 @@ export type ComposerControl = {
   icon?: string;
   default?: string;
   defaultByMode?: Record<string, string>;
+  /** The default while images are attached (an image's own Auto size). */
+  defaultWithImages?: string;
+  /** Shown only while it matches (a menu only some models support). */
+  when?: Record<string, string[]>;
   options: ComposerOption[];
   defaultFolder?: string;
   /** The image sidecar key holding this control's value. */
@@ -64,8 +72,13 @@ const VALUE_KINDS = new Set(["list", "shapes", "segmented"]);
 
 export const COMPOSER_TAG = "buzz-composer";
 
+/** The `when` key that follows the attachments: `none` or `attached`. */
+export const IMAGES_KEY = "@images";
+
 export type ComposerPanelState = {
   mode: string;
+  /** Images attached to the draft. */
+  images: number;
   /** Explicit picks only; untouched controls follow the mode's default. */
   picks: Record<string, string>;
   preset: string | null;
@@ -122,11 +135,13 @@ export function optionsFor(
 function defaultFor(
   control: ComposerControl,
   mode: string,
+  images: number,
   offered: ComposerOption[],
   chosen: ComposerOption[],
 ): string {
   const candidates = [
     control.defaultByMode?.[mode],
+    images > 0 ? control.defaultWithImages : undefined,
     control.default,
     ...chosenDefaults(control, chosen),
   ];
@@ -155,27 +170,33 @@ export type ResolvedPanel = {
   options: Record<string, ComposerOption | null>;
 };
 
+function imagesValue(images: number): string {
+  return images > 0 ? "attached" : "none";
+}
+
 /**
  * Every value control's value, in order: its pick while still offered,
- * otherwise its default for the mode and the earlier values.
+ * otherwise its default for the mode and the earlier values. `values` also
+ * holds `@images`, which `when` may follow; it's never sent.
  */
 function resolve(
   spec: ComposerSpec,
   mode: string,
+  images: number,
   pickFor: (
     control: ComposerControl,
     offered: ComposerOption[],
     chosen: ComposerOption[],
   ) => ComposerOption | undefined,
 ): ResolvedPanel {
-  const values: Record<string, string> = {};
+  const values: Record<string, string> = { [IMAGES_KEY]: imagesValue(images) };
   const options: Record<string, ComposerOption | null> = {};
   const chosen: ComposerOption[] = [];
   for (const control of valueControls(spec)) {
     const offered = optionsFor(control, mode, values);
     const value =
       pickFor(control, offered, chosen)?.value ??
-      defaultFor(control, mode, offered, chosen);
+      defaultFor(control, mode, images, offered, chosen);
     const option = offered.find((candidate) => candidate.value === value);
     values[control.id] = value;
     options[control.id] = option ?? null;
@@ -188,7 +209,7 @@ export function resolvePanel(
   state: ComposerPanelState,
   spec: ComposerSpec,
 ): ResolvedPanel {
-  return resolve(spec, state.mode, (control, offered) =>
+  return resolve(spec, state.mode, state.images, (control, offered) =>
     offered.find((option) => option.value === state.picks[control.id]),
   );
 }
@@ -205,19 +226,20 @@ export function effectiveValue(
 /**
  * A pick a change left unoffered (4K after switching to a model without it)
  * becomes the new pick's default for it (the model's own resolution), or is
- * dropped, so switching back doesn't revive it. Picks the mode alone hides
- * (Edit's Auto) are dropped too.
+ * dropped, so switching back doesn't revive it. Picks the mode or the
+ * attachments alone hide (Auto with no image) are dropped too.
  */
 function withoutStalePicks(
   state: ComposerPanelState,
   spec: ComposerSpec,
 ): ComposerPanelState {
   const picks: Record<string, string> = {};
-  resolve(spec, state.mode, (control, offered, chosen) => {
+  const attachments = { [IMAGES_KEY]: imagesValue(state.images) };
+  resolve(spec, state.mode, state.images, (control, offered, chosen) => {
     const pick = state.picks[control.id];
     if (!pick) return undefined;
     const kept = offered.find((option) => option.value === pick);
-    const inMode = optionsFor(control, state.mode).some(
+    const inMode = optionsFor(control, state.mode, attachments).some(
       (option) => option.value === pick,
     );
     const value =
@@ -257,6 +279,7 @@ export function initialPanelState(
       false);
   return {
     mode: defaultMode(spec),
+    images: 0,
     picks,
     preset: presetValid ? preset : null,
     repo: repoControl(spec) ? (saved?.repo ?? null) : null,
@@ -264,34 +287,35 @@ export function initialPanelState(
 }
 
 /**
- * "Edit" on a generated image: the image mode with each control set from the
- * image's sidecar where it names an option of that mode, saving to `repo`.
- * No preset, since the values already came from one.
+ * "Edit" on a generated image: the image (attached to the draft) with each
+ * control set from its sidecar where it names an offered option, saving to
+ * `repo`. No preset, since the values already came from one.
  */
 export function editStateFromSidecar(
   spec: ComposerSpec,
   values: Record<string, string>,
   repo: string | null,
 ): ComposerPanelState {
-  return stateFromSidecar(spec, values, repo, "edit");
+  return stateFromSidecar(spec, values, repo, 1);
 }
 
 /**
- * The panel as an image's sidecar describes it, in its image mode (`edit`) or
- * its first mode without one (`generate`): what Regenerate sends again.
+ * The panel as an image's sidecar describes it, with `images` attached:
+ * what Regenerate sends again. A file with Generate / Edit modes uses the
+ * image mode when images are attached.
  */
 export function stateFromSidecar(
   spec: ComposerSpec,
   values: Record<string, string>,
   repo: string | null,
-  kind: "generate" | "edit",
+  images: number,
 ): ComposerPanelState {
   const mode =
     spec.modes.find((candidate) =>
-      kind === "edit" ? candidate.requiresImage : !candidate.requiresImage,
+      images > 0 ? candidate.requiresImage : !candidate.requiresImage,
     )?.id ?? defaultMode(spec);
   const picks: Record<string, string> = {};
-  resolve(spec, mode, (control, offered) => {
+  resolve(spec, mode, images, (control, offered) => {
     const value = control.sidecarKey ? values[control.sidecarKey] : undefined;
     const option = value
       ? offered.find(
@@ -303,6 +327,7 @@ export function stateFromSidecar(
   });
   return {
     mode,
+    images,
     picks,
     preset: null,
     repo: repoControl(spec) ? repo : null,
@@ -357,36 +382,66 @@ export function setRepo(
 }
 
 /**
- * Attaching the first image switches to the image mode; removing the last
- * one switches back to the default mode.
+ * Records the attached image count. In a file with an image mode
+ * (`autoOnImage`), the first image switches to it and removing the last one
+ * switches back to the default mode.
  */
 export function followAttachments(
   state: ComposerPanelState,
   spec: ComposerSpec,
-  previousImages: number,
   images: number,
 ): ComposerPanelState {
-  if (previousImages === 0 && images > 0) {
+  const next = { ...state, images };
+  if (state.images === 0 && images > 0) {
     const imageMode = spec.modes.find((mode) => mode.autoOnImage);
-    return imageMode ? setMode(state, imageMode.id) : state;
+    return imageMode ? setMode(next, imageMode.id) : next;
   }
-  if (previousImages > 0 && images === 0) {
-    return setMode(state, defaultMode(spec));
+  if (state.images > 0 && images === 0) {
+    return setMode(next, defaultMode(spec));
   }
-  return state;
+  return next;
+}
+
+/** The picked options' rules for attached images. */
+export function imageRules(
+  state: ComposerPanelState,
+  spec: ComposerSpec,
+): { refs: boolean; max: { count: number; label: string } | null } {
+  let refs = false;
+  let max: { count: number; label: string } | null = null;
+  for (const option of Object.values(resolvePanel(state, spec).options)) {
+    if (!option) continue;
+    if (option.imageRefs) refs = true;
+    if (option.maxImages && (!max || option.maxImages < max.count)) {
+      max = { count: option.maxImages, label: option.label };
+    }
+  }
+  return { refs, max };
 }
 
 /** Why sending is blocked, or null. */
 export function sendBlockReason(
   state: ComposerPanelState,
   spec: ComposerSpec,
-  images: number,
 ): string | null {
   const mode = spec.modes.find((candidate) => candidate.id === state.mode);
-  if (mode?.requiresImage && images === 0) {
+  if (mode?.requiresImage && state.images === 0) {
     return `Attach an image to ${mode.label.toLowerCase()}`;
   }
+  const { max } = imageRules(state, spec);
+  if (max && state.images > max.count) {
+    const images = max.count === 1 ? "1 image" : `${max.count} images`;
+    return `${max.label} takes up to ${images}; remove ${state.images - max.count}`;
+  }
   return null;
+}
+
+/** Whether a control with a `when` (a menu only some models have) shows. */
+export function controlShown(
+  control: ComposerControl,
+  resolved: ResolvedPanel,
+): boolean {
+  return matches(control.when, resolved.values);
 }
 
 export type ComposerPayload = {
@@ -403,6 +458,7 @@ export function composerPayload(
   const controls: Record<string, string> = {
     ...resolvePanel(state, spec).values,
   };
+  delete controls[IMAGES_KEY];
   const preset = presetControl(spec);
   if (
     preset &&
@@ -475,15 +531,23 @@ export function editTargetFor<
 ): { agent: Agent; harness: HarnessComposer } | null {
   const targets = agents.flatMap((agent) => {
     const harness = harnessComposerForAgent(composers, agent);
-    return harness?.composer.modes.some((mode) => mode.requiresImage)
-      ? [{ agent, harness }]
-      : [];
+    return harness && takesImages(harness.composer) ? [{ agent, harness }] : [];
   });
   const author = authorPubkey?.toLowerCase();
   return (
     targets.find((target) => target.agent.pubkey.toLowerCase() === author) ??
     targets[0] ??
     null
+  );
+}
+
+/** An image mode, or a model that takes attached images. */
+export function takesImages(spec: ComposerSpec): boolean {
+  return (
+    spec.modes.some((mode) => mode.requiresImage) ||
+    spec.controls.some((control) =>
+      control.options.some((option) => option.maxImages),
+    )
   );
 }
 

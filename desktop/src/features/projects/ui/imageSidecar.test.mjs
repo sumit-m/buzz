@@ -79,24 +79,46 @@ test("parseImageSidecar reads mage-agent's origin block", () => {
   );
   assert.deepEqual(sidecar.origin, {
     mode: "edit",
-    source: {
-      url: "https://relay/media/ab.png",
-      m: "image/png",
-      x: "ab",
-      dim: "896x1152",
-    },
+    sources: [
+      {
+        url: "https://relay/media/ab.png",
+        m: "image/png",
+        x: "ab",
+        dim: "896x1152",
+      },
+    ],
     repo: "owner/site",
   });
   assert.equal(sidecar.fields.length, 0);
-  assert.equal(
-    parseImageSidecar('{"buzz":{"mode":"generate"}}').origin.source,
-    null,
+  assert.deepEqual(
+    parseImageSidecar('{"buzz":{"mode":"generate"}}').origin.sources,
+    [],
   );
   assert.equal(parseImageSidecar('{"buzz":{"mode":"later"}}').origin, null);
-  assert.equal(
+  assert.deepEqual(
     parseImageSidecar(
       '{"buzz":{"mode":"edit","source":{"url":"file:///c/a.png"}}}',
-    ).origin.source,
-    null,
+    ).origin.sources,
+    [],
+  );
+});
+
+test("parseImageSidecar lists every source in order, ahead of the single one", () => {
+  const origin = parseImageSidecar(
+    JSON.stringify({
+      buzz: {
+        mode: "edit",
+        sources: [
+          { url: "https://relay/media/a.png", x: "aa" },
+          { url: "file:///c/skip.png" },
+          { url: "https://relay/media/b.png", x: "bb" },
+        ],
+        source: { url: "https://relay/media/a.png", x: "aa" },
+      },
+    }),
+  ).origin;
+  assert.deepEqual(
+    origin.sources.map((source) => source.url),
+    ["https://relay/media/a.png", "https://relay/media/b.png"],
   );
 });

@@ -26,6 +26,42 @@ const BEFORE_HANDLE = /[\s([{"'“‘￼]/u;
 const TRAILING_PUNCTUATION = /[.-]/;
 const QUERY_AT_END = /(?:^|[\s([{"'“‘￼])@([\p{L}\p{N}_.-]{0,64})$/u;
 
+/** The pseudo-menu of a prompt's image references (`@image1`, `@image2`…). */
+export const IMAGES_CONTROL: ComposerControl = {
+  id: "@images",
+  kind: "images",
+  label: "Image",
+  options: [],
+};
+
+/** Entries for `@image1…`, one per image in order, with its thumbnail. */
+export function imageEntries(
+  thumbs: readonly string[],
+  hint: string,
+): AssetEntry[] {
+  return thumbs.map((thumb, at) => ({
+    control: IMAGES_CONTROL,
+    option: {
+      value: `image${at + 1}`,
+      label: `Image ${at + 1}`,
+      image: thumb,
+      hint,
+    },
+  }));
+}
+
+/** `index` plus `entries`, which win on a clash. */
+export function withEntries(
+  index: AssetIndex,
+  entries: readonly AssetEntry[],
+): AssetIndex {
+  if (entries.length === 0) return index;
+  const all = new Map<string, AssetEntry>();
+  for (const entry of entries) all.set(entry.option.value.toLowerCase(), entry);
+  for (const [key, entry] of index) if (!all.has(key)) all.set(key, entry);
+  return all;
+}
+
 export function assetControls(spec: ComposerSpec): ComposerControl[] {
   return spec.controls.filter((control) => control.kind === "assets");
 }

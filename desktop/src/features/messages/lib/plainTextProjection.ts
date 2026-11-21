@@ -2,6 +2,10 @@ import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 
 import { CUSTOM_EMOJI_NODE_NAME } from "./customEmojiNode";
 import { COMPOSER_MESSAGE_LINK_NODE_NAME } from "./composerMessageLinkNode";
+import {
+  HARNESS_IMAGE_REF_NODE_NAME,
+  imageRefText,
+} from "./harnessImageRefNode";
 
 /**
  * Plain-text projection of a ProseMirror document.
@@ -177,12 +181,15 @@ export function buildPlainTextProjection(
     // math and autocomplete offsets see the shortcode at its natural width.
     if (
       node.type.name === CUSTOM_EMOJI_NODE_NAME ||
-      node.type.name === COMPOSER_MESSAGE_LINK_NODE_NAME
+      node.type.name === COMPOSER_MESSAGE_LINK_NODE_NAME ||
+      node.type.name === HARNESS_IMAGE_REF_NODE_NAME
     ) {
       const projected =
         node.type.name === CUSTOM_EMOJI_NODE_NAME
           ? `:${String(node.attrs.shortcode ?? "")}:`
-          : String(node.attrs.href ?? "");
+          : node.type.name === HARNESS_IMAGE_REF_NODE_NAME
+            ? imageRefText(Number(node.attrs.index) || 1)
+            : String(node.attrs.href ?? "");
       segments.push({
         kind: "atom",
         pmFrom: pos,

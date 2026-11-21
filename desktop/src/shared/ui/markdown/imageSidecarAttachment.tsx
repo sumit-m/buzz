@@ -24,6 +24,9 @@ import { useMarkdownRuntime } from "./runtimeContext";
  * button starts an edit of the image in the nearest message composer.
  */
 
+/** A message video's inset, matching the other inset media. */
+export const VIDEO_INSET_CLASS = "mx-1.5 max-w-[calc(100%-0.75rem)]";
+
 /**
  * The block-media wrapper of a message image. With a sidecar attached, the
  * image and its info sidebar sit side by side (stacked when narrow).

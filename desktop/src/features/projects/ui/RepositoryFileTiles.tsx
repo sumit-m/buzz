@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, List } from "lucide-react";
+import { LayoutGrid, List, Play } from "lucide-react";
 
 import type { ProjectRepoFile } from "@/features/projects/hooks";
 import type { ProjectRepoThumbnail } from "@/shared/api/projectGit";
@@ -12,6 +12,7 @@ import {
   writeRepositoryViewMode,
 } from "./repositoryTiles";
 import { changedImages, thumbnailQuery } from "./repositoryThumbnails";
+import { videoMimeForPath } from "./repositoryVideo";
 import type { RepositoryFileContentSource } from "./useRepositoryFileContent";
 
 type TileEntry = {
@@ -176,6 +177,14 @@ function ImageTile<T extends TileEntry>({
       ) : (
         <span className="block h-full w-full animate-pulse bg-muted/50" />
       )}
+      {videoMimeForPath(entry.path) ? (
+        <span
+          className="pointer-events-none absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white"
+          data-testid="project-repository-video-badge"
+        >
+          <Play className="ml-px h-3 w-3 fill-current" />
+        </span>
+      ) : null}
       <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-2.5 pt-6 pb-2 opacity-0 transition-opacity group-hover/tile:opacity-100 group-focus-visible/tile:opacity-100">
         <span className="block truncate text-xs font-medium text-white">
           {entry.name}
@@ -191,8 +200,9 @@ function ImageTile<T extends TileEntry>({
 }
 
 /**
- * Folders and non-image files as icon tiles, then the folder's images in a
- * masonry grid that keeps each image's shape. Image sidecars are hidden.
+ * Folders and other files as icon tiles, then the folder's images and videos
+ * in a masonry grid that keeps each one's shape (a video marked with a play
+ * badge). Their sidecars are hidden.
  */
 export function RepositoryFileTiles<T extends TileEntry>({
   entries,

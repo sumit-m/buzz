@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use super::custom_harnesses::load_custom_harnesses;
 
 const MAX_MODES: usize = 3;
-const MAX_CONTROLS: usize = 8;
+const MAX_CONTROLS: usize = 16;
 const MAX_OPTIONS: usize = 50;
 /// An `assets` menu lists the user's own characters or references.
 const MAX_ASSET_OPTIONS: usize = 200;
@@ -72,9 +72,9 @@ pub struct ComposerMode {
 #[serde(rename_all = "camelCase")]
 pub struct ComposerControl {
     pub id: String,
-    /// `list`, `shapes`, `segmented`, `preset`, `assets` or `repoFolder`.
-    /// Other kinds are kept and ignored by the renderer, so a newer file
-    /// still loads.
+    /// `list`, `shapes`, `segmented`, `number`, `imagePick`, `preset`,
+    /// `assets` or `repoFolder`. Other kinds are kept and ignored by the
+    /// renderer, so a newer file still loads.
     pub kind: String,
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,6 +89,17 @@ pub struct ComposerControl {
     /// Shown only while each named control has one of these values.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub when: BTreeMap<String, Vec<String>>,
+    /// Shown, and sent, only in these modes (all when empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<String>,
+    /// A `number` control's range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u32>,
+    /// Text after a `number` control's value (`s`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
     #[serde(default)]
     pub options: Vec<ComposerOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -263,25 +274,30 @@ fn check_text(what: &str, text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The `when` key that follows the attachments rather than a control.
-const IMAGES_KEY: &str = "@images";
-const IMAGES_VALUES: [&str; 2] = ["none", "attached"];
+/// The `when` keys that follow the attachments rather than a control, with
+/// the values each takes (`attached` is any number of images).
+const ATTACHMENT_KEYS: [(&str, &[&str]); 2] = [
+    ("@images", &["none", "attached", "one", "several"]),
+    ("@videos", &["none", "attached"]),
+];
 /// The most images one request may declare (`maxImages`).
 const MAX_IMAGES: u32 = 50;
+/// The widest range a `number` control may offer.
+const MAX_NUMBER_SPAN: u32 = 100;
+/// Controls holding one value, which `when` may follow.
+const VALUE_KINDS: [&str; 5] = ["list", "shapes", "segmented", "number", "imagePick"];
 
 /// `when` names value controls by id, with 1-[`MAX_OPTIONS`] valid values each,
-/// or `@images` with `none` / `attached`.
+/// or an attachment key with its own values.
 fn check_when(
     control: &str,
     when: &BTreeMap<String, Vec<String>>,
     allowed: &HashSet<&str>,
 ) -> Result<(), String> {
     for (id, values) in when {
-        if id == IMAGES_KEY {
-            if values.is_empty() || values.iter().any(|v| !IMAGES_VALUES.contains(&v.as_str())) {
-                return Err(format!(
-                    "{control}: when {IMAGES_KEY:?} takes \"none\" and/or \"attached\""
-                ));
+        if let Some((key, takes)) = ATTACHMENT_KEYS.iter().find(|(key, _)| key == id) {
+            if values.is_empty() || values.iter().any(|v| !takes.contains(&v.as_str())) {
+                return Err(format!("{control}: when {key:?} takes {takes:?}"));
             }
             continue;
         }
@@ -345,7 +361,7 @@ pub(crate) fn validate(spec: &ComposerSpec) -> Result<(), String> {
     let value_ids: HashSet<&str> = spec
         .controls
         .iter()
-        .filter(|c| matches!(c.kind.as_str(), "list" | "shapes" | "segmented"))
+        .filter(|c| VALUE_KINDS.contains(&c.kind.as_str()))
         .map(|c| c.id.as_str())
         .collect();
     // An option's `when` follows earlier controls only, so values resolve in
@@ -391,6 +407,19 @@ pub(crate) fn validate(spec: &ComposerSpec) -> Result<(), String> {
         }
         // A control is shown once every value is known, so it may follow any.
         check_when(&control.id, &control.when, &value_ids)?;
+        if let Some(mode) = control
+            .modes
+            .iter()
+            .find(|m| !mode_ids.contains(m.as_str()))
+        {
+            return Err(format!("{}: names unknown mode {mode:?}", control.id));
+        }
+        if let Some(unit) = &control.unit {
+            check_text("control unit", unit)?;
+        }
+        if control.kind == "number" {
+            check_number(control)?;
+        }
         for option in &control.options {
             check_text("option label", &option.label)?;
             if !is_value(&option.value) {
@@ -427,10 +456,7 @@ pub(crate) fn validate(spec: &ComposerSpec) -> Result<(), String> {
             }
             check_when(&control.id, &option.when, &earlier)?;
             if option.max_images.is_some_and(|n| n == 0 || n > MAX_IMAGES) {
-                return Err(format!(
-                    "{}: maxImages must be 1-{MAX_IMAGES}",
-                    control.id
-                ));
+                return Err(format!("{}: maxImages must be 1-{MAX_IMAGES}", control.id));
             }
             if option.sizes.len() > MAX_SIZES {
                 return Err(format!("{}: at most {MAX_SIZES} sizes", control.id));
@@ -451,6 +477,32 @@ pub(crate) fn validate(spec: &ComposerSpec) -> Result<(), String> {
         }
         if value_ids.contains(control.id.as_str()) {
             earlier.insert(control.id.as_str());
+        }
+    }
+    Ok(())
+}
+
+/// A `number` control needs `min` ≤ `max` within [`MAX_NUMBER_SPAN`], and a
+/// default inside that range.
+fn check_number(control: &ComposerControl) -> Result<(), String> {
+    let (Some(min), Some(max)) = (control.min, control.max) else {
+        return Err(format!("{}: a number needs min and max", control.id));
+    };
+    if min > max || max - min >= MAX_NUMBER_SPAN {
+        return Err(format!(
+            "{}: min..max must span 1-{MAX_NUMBER_SPAN} values",
+            control.id
+        ));
+    }
+    if let Some(default) = &control.default {
+        if !default
+            .parse::<u32>()
+            .is_ok_and(|n| (min..=max).contains(&n))
+        {
+            return Err(format!(
+                "{}: default {default:?} is outside {min}-{max}",
+                control.id
+            ));
         }
     }
     Ok(())
@@ -855,7 +907,7 @@ mod tests {
         duplicate["controls"][1]["id"] = "model".into();
         assert!(validate(&spec(duplicate)).is_err());
 
-        let many: Vec<_> = (0..9)
+        let many: Vec<_> = (0..17)
             .map(|i| serde_json::json!({ "id": format!("c{i}"), "kind": "list", "label": "x" }))
             .collect();
         assert!(validate(&spec(serde_json::json!({ "controls": many }))).is_err());
@@ -910,11 +962,16 @@ mod tests {
         assert_eq!(parsed.controls[0].options[0].max_images, Some(10));
         assert!(parsed.controls[0].options[0].image_refs);
         assert!(!parsed.controls[0].options[1].image_refs);
-        assert_eq!(parsed.controls[1].default_with_images.as_deref(), Some("auto"));
+        assert_eq!(
+            parsed.controls[1].default_with_images.as_deref(),
+            Some("auto")
+        );
         let written = serde_json::to_value(&parsed).unwrap();
         assert_eq!(written["controls"][0]["options"][0]["maxImages"], 10);
         assert_eq!(written["controls"][0]["options"][0]["imageRefs"], true);
-        assert!(written["controls"][0]["options"][1].get("imageRefs").is_none());
+        assert!(written["controls"][0]["options"][1]
+            .get("imageRefs")
+            .is_none());
 
         let mut bad_images = composer.clone();
         bad_images["controls"][1]["options"][0]["when"] =
@@ -928,5 +985,54 @@ mod tests {
         let mut unknown = composer;
         unknown["controls"][2]["when"] = serde_json::json!({ "repo": ["x"] });
         assert!(validate(&spec(unknown)).is_err());
+    }
+
+    fn video_composer() -> serde_json::Value {
+        serde_json::json!({
+            "modes": [{ "id": "image", "label": "Image" }, { "id": "video", "label": "Video" }],
+            "controls": [
+                { "id": "action", "kind": "segmented", "label": "Action", "modes": ["video"],
+                  "when": { "@videos": ["attached"] }, "options": ["extend", "edit"] },
+                { "id": "frame", "kind": "imagePick", "label": "Frame", "icon": "image-play",
+                  "modes": ["video"], "default": "1" },
+                { "id": "res", "kind": "segmented", "label": "Resolution",
+                  "options": ["720p", { "value": "1080p",
+                    "when": { "@images": ["none", "one"], "frame": ["1"] } }] },
+                { "id": "count", "kind": "number", "label": "Images", "icon": "layers",
+                  "modes": ["image"], "min": 1, "max": 10, "default": "1" },
+                { "id": "duration", "kind": "number", "label": "Duration", "modes": ["video"],
+                  "min": 1, "max": 15, "default": "8", "unit": "s" }
+            ]
+        })
+    }
+
+    #[test]
+    fn video_rules_numbers_picks_and_modes() {
+        let spec =
+            |value: serde_json::Value| serde_json::from_value::<ComposerSpec>(value).unwrap();
+        let parsed = spec(video_composer());
+        assert!(validate(&parsed).is_ok());
+        assert_eq!(parsed.controls[4].unit.as_deref(), Some("s"));
+        assert_eq!(parsed.controls[0].modes, ["video"]);
+
+        let mut bad_mode = video_composer();
+        bad_mode["controls"][0]["modes"] = serde_json::json!(["audio"]);
+        assert!(validate(&spec(bad_mode)).is_err());
+
+        let mut bad_videos = video_composer();
+        bad_videos["controls"][0]["when"] = serde_json::json!({ "@videos": ["one"] });
+        assert!(validate(&spec(bad_videos)).is_err());
+
+        let mut no_range = video_composer();
+        no_range["controls"][3]["max"] = serde_json::Value::Null;
+        assert!(validate(&spec(no_range)).is_err());
+
+        let mut wide = video_composer();
+        wide["controls"][3]["max"] = serde_json::json!(200);
+        assert!(validate(&spec(wide)).is_err());
+
+        let mut outside = video_composer();
+        outside["controls"][4]["default"] = "20".into();
+        assert!(validate(&spec(outside)).is_err());
     }
 }

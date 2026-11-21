@@ -3,7 +3,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
-import { useChannelsQuery } from "@/features/channels/hooks";
+import { useChannelsQuery, useOpenDmMutation } from "@/features/channels/hooks";
 import {
   composerPayload,
   composerTag,
@@ -16,6 +16,7 @@ import {
   type CommitAdd,
   candidateRepositories,
   canRegenerate,
+  regenerateSetup,
   fileName,
   folderLabel,
   folderOf,
@@ -78,7 +79,8 @@ async function resolveAdd(add: CommitAdd): Promise<RepoFileAdd> {
 /**
  * LOCAL DIVERGENCE: the image info sidebar's repo button and Regenerate. The
  * image's repo location is looked up by file name in the repos it may be in
- * (only when asked), so a move made anywhere is still found.
+ * (only when asked), so a move made anywhere is still found. Regenerate goes
+ * to the message's channel, or for a repository file to a DM with the agent.
  */
 export function useGeneratedImageActions({
   context,
@@ -95,6 +97,7 @@ export function useGeneratedImageActions({
   const agents = useManagedAgentsQuery();
   const identity = useIdentityQuery();
   const sendMessage = useSendMessageMutation(null, identity.data);
+  const openDm = useOpenDmMutation();
   const composers = useQuery({
     queryKey: ["harness-composers"],
     queryFn: listHarnessComposers,
@@ -177,6 +180,7 @@ export function useGeneratedImageActions({
     composers.data ?? [],
     agents.data ?? [],
     message.authorPubkey,
+    sidecar.values,
   );
   const findChannel = (id: string | null | undefined) =>
     id
@@ -288,9 +292,11 @@ export function useGeneratedImageActions({
   };
 
   const origin = sidecar.origin;
+  const inDm = context?.kind === "repo";
   const channel = findChannel(channelId);
   const regenerateBlocked = (() => {
-    if (!channelId) return "This repository isn't bound to a channel";
+    if (inDm) return null;
+    if (!channelId) return "This message isn't in a channel";
     if (!channel?.isMember) return "Join the channel to regenerate";
     if (
       target &&
@@ -304,24 +310,30 @@ export function useGeneratedImageActions({
   })();
   const [regenerating, setRegenerating] = React.useState(false);
   const regenerate = async () => {
-    if (!origin || !target || !channel || !sidecar.prompt) return;
+    if (!origin || !target || !sidecar.prompt || (!inDm && !channel)) return;
     setRegenerating(true);
     try {
       const saved = await fetchLocation().catch(() => null);
       const { agent, harness } = target;
+      const { images, options } = regenerateSetup(origin);
       const state = stateFromSidecar(
         harness.composer,
         sidecar.values,
         saved ? repoValueFor(saved) : null,
-        origin.sources.length,
+        images,
+        options,
       );
       const outgoing = regenerateMessage({
         agentName: agent.name,
         prompt: sidecar.prompt,
         sources: origin.sources,
       });
+      const destination = inDm
+        ? await openDm.mutateAsync({ pubkeys: [agent.pubkey] })
+        : channel;
+      if (!destination) return;
       await sendMessage.mutateAsync({
-        channelId: channel.id,
+        channelId: destination.id,
         content: outgoing.content,
         mentionPubkeys: [agent.pubkey],
         mediaTags: [
@@ -332,7 +344,11 @@ export function useGeneratedImageActions({
           ),
         ],
       });
-      toast.success(`Regenerating in #${channel.name}`);
+      toast.success(
+        inDm
+          ? `Regenerating in your DM with ${agent.name}`
+          : `Regenerating in #${destination.name}`,
+      );
     } catch (error) {
       toast.error(
         `Could not regenerate: ${error instanceof Error ? error.message : String(error)}`,

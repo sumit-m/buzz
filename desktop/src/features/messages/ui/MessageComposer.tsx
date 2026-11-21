@@ -368,6 +368,10 @@ function MessageComposerImpl({
     },
     mentionNames: mentions.knownNames,
     mentionPubkeys: mentions.extractMentionPubkeys(previewContent),
+    videoCount: [
+      ...media.pendingImeta.map((m) => m.type),
+      ...media.queuedAttachments.map((a) => a.file.type),
+    ].filter((type) => type.startsWith("video/")).length,
     text: previewContent,
   });
   const harnessPanelRef = React.useRef(harnessPanel);
@@ -994,6 +998,7 @@ function MessageComposerImpl({
                     onRevert={handleAttachmentRevert}
                     originalUrlByUrl={media.originalUrlByUrl}
                     onInsertImage={harnessPanel.insertImage ?? undefined}
+                    imageTag={harnessPanel.imageTag}
                     onToggleSpoiler={handleToggleAttachmentSpoiler}
                     spoileredUrls={spoileredAttachmentUrls}
                   />

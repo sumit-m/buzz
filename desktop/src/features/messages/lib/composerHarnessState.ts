@@ -39,6 +39,12 @@ export type ComposerControl = {
   defaultWithImages?: string;
   /** Shown only while it matches (a menu only some models support). */
   when?: Record<string, string[]>;
+  /** Shown, and sent, only in these modes (all when unset). */
+  modes?: string[];
+  /** A `number` control's range and the text after its value. */
+  min?: number;
+  max?: number;
+  unit?: string;
   options: ComposerOption[];
   defaultFolder?: string;
   /** The image sidecar key holding this control's value. */
@@ -67,18 +73,36 @@ export type HarnessComposer = {
   composer: ComposerSpec;
 };
 
-/** `list`, `shapes` and `segmented` controls: one value from a fixed set. */
-const VALUE_KINDS = new Set(["list", "shapes", "segmented"]);
+/**
+ * Controls with one value: `list`, `shapes` and `segmented` from a fixed set,
+ * `number` from its range, `imagePick` from the attached images.
+ */
+const VALUE_KINDS = new Set([
+  "list",
+  "shapes",
+  "segmented",
+  "number",
+  "imagePick",
+]);
 
 export const COMPOSER_TAG = "buzz-composer";
 
-/** The `when` key that follows the attachments: `none` or `attached`. */
+/**
+ * The `when` key that follows the attached images: `none`, `one` or
+ * `several`; `attached` matches either of the last two.
+ */
 export const IMAGES_KEY = "@images";
+/** The `when` key that follows attached videos: `none` or `attached`. */
+export const VIDEOS_KEY = "@videos";
+/** An `imagePick` control's value with no image picked. */
+export const NO_IMAGE = "none";
 
 export type ComposerPanelState = {
   mode: string;
   /** Images attached to the draft. */
   images: number;
+  /** Videos attached to the draft. */
+  videos: number;
   /** Explicit picks only; untouched controls follow the mode's default. */
   picks: Record<string, string>;
   preset: string | null;
@@ -86,6 +110,7 @@ export type ComposerPanelState = {
 };
 
 export type SavedComposerState = {
+  mode?: string;
   picks?: Record<string, string>;
   preset?: string | null;
   repo?: string | null;
@@ -100,6 +125,28 @@ export function presetControl(spec: ComposerSpec): ComposerControl | null {
   return spec.controls.find((control) => control.kind === "preset") ?? null;
 }
 
+/** The presets for `mode` (a preset naming no modes is for every mode). */
+export function presetOptions(
+  spec: ComposerSpec,
+  mode: string,
+): ComposerOption[] {
+  return (presetControl(spec)?.options ?? []).filter((option) =>
+    inMode(option, mode),
+  );
+}
+
+/** The picked preset, while it's one for the current mode. */
+export function activePreset(
+  state: ComposerPanelState,
+  spec: ComposerSpec,
+): string | null {
+  return presetOptions(spec, state.mode).some(
+    (option) => option.value === state.preset,
+  )
+    ? state.preset
+    : null;
+}
+
 export function repoControl(spec: ComposerSpec): ComposerControl | null {
   return spec.controls.find((control) => control.kind === "repoFolder") ?? null;
 }
@@ -109,9 +156,39 @@ function matches(
   when: Record<string, string[]> | undefined,
   values: Record<string, string>,
 ): boolean {
-  return Object.entries(when ?? {}).every(
-    ([id, allowed]) => values[id] === undefined || allowed.includes(values[id]),
-  );
+  return Object.entries(when ?? {}).every(([id, allowed]) => {
+    const value = values[id];
+    if (value === undefined || allowed.includes(value)) return true;
+    return (
+      id === IMAGES_KEY && value !== "none" && allowed.includes("attached")
+    );
+  });
+}
+
+function inMode(item: { modes?: string[] }, mode: string): boolean {
+  return !item.modes?.length || item.modes.includes(mode);
+}
+
+/** A `number` control's values, as options labelled with its unit. */
+function numberOptions(control: ComposerControl): ComposerOption[] {
+  const min = control.min ?? 1;
+  const max = Math.max(min, control.max ?? min);
+  return Array.from({ length: max - min + 1 }, (_, i) => ({
+    value: String(min + i),
+    label: `${min + i}${control.unit ?? ""}`,
+  }));
+}
+
+/** An `imagePick` control's options: None, then each attached image. */
+function imagePickOptions(images: number): ComposerOption[] {
+  if (images === 0) return [];
+  return [
+    { value: NO_IMAGE, label: "None" },
+    ...Array.from({ length: images }, (_, i) => ({
+      value: String(i + 1),
+      label: `Image ${i + 1}`,
+    })),
+  ];
 }
 
 /** A control's options in `mode`, given the values of the controls before it. */
@@ -119,11 +196,12 @@ export function optionsFor(
   control: ComposerControl,
   mode: string,
   values: Record<string, string> = {},
+  images = 0,
 ): ComposerOption[] {
+  if (control.kind === "number") return numberOptions(control);
+  if (control.kind === "imagePick") return imagePickOptions(images);
   return control.options.filter(
-    (option) =>
-      (!option.modes?.length || option.modes.includes(mode)) &&
-      matches(option.when, values),
+    (option) => inMode(option, mode) && matches(option.when, values),
   );
 }
 
@@ -166,34 +244,53 @@ function firstOffered(
 }
 
 export type ResolvedPanel = {
+  mode: string;
   values: Record<string, string>;
   options: Record<string, ComposerOption | null>;
 };
 
+type Attachments = { images: number; videos: number };
+
 function imagesValue(images: number): string {
-  return images > 0 ? "attached" : "none";
+  if (images === 0) return "none";
+  return images === 1 ? "one" : "several";
+}
+
+function attachmentValues({
+  images,
+  videos,
+}: Attachments): Record<string, string> {
+  return {
+    [IMAGES_KEY]: imagesValue(images),
+    [VIDEOS_KEY]: videos > 0 ? "attached" : "none",
+  };
 }
 
 /**
  * Every value control's value, in order: its pick while still offered,
- * otherwise its default for the mode and the earlier values. `values` also
- * holds `@images`, which `when` may follow; it's never sent.
+ * otherwise its default for the mode and the earlier values. A control in
+ * other modes, or with nothing to offer (a pick of no images), has none.
+ * `values` also holds `@images` and `@videos`, which `when` may follow;
+ * they're never sent.
  */
 function resolve(
   spec: ComposerSpec,
   mode: string,
-  images: number,
+  attachments: Attachments,
   pickFor: (
     control: ComposerControl,
     offered: ComposerOption[],
     chosen: ComposerOption[],
   ) => ComposerOption | undefined,
 ): ResolvedPanel {
-  const values: Record<string, string> = { [IMAGES_KEY]: imagesValue(images) };
+  const images = attachments.images;
+  const values: Record<string, string> = attachmentValues(attachments);
   const options: Record<string, ComposerOption | null> = {};
   const chosen: ComposerOption[] = [];
   for (const control of valueControls(spec)) {
-    const offered = optionsFor(control, mode, values);
+    if (!inMode(control, mode)) continue;
+    const offered = optionsFor(control, mode, values, images);
+    if (offered.length === 0 && control.kind === "imagePick") continue;
     const value =
       pickFor(control, offered, chosen)?.value ??
       defaultFor(control, mode, images, offered, chosen);
@@ -202,14 +299,14 @@ function resolve(
     options[control.id] = option ?? null;
     if (option) chosen.push(option);
   }
-  return { values, options };
+  return { mode, values, options };
 }
 
 export function resolvePanel(
   state: ComposerPanelState,
   spec: ComposerSpec,
 ): ResolvedPanel {
-  return resolve(spec, state.mode, state.images, (control, offered) =>
+  return resolve(spec, state.mode, state, (control, offered) =>
     offered.find((option) => option.value === state.picks[control.id]),
   );
 }
@@ -233,18 +330,27 @@ function withoutStalePicks(
   state: ComposerPanelState,
   spec: ComposerSpec,
 ): ComposerPanelState {
-  const picks: Record<string, string> = {};
-  const attachments = { [IMAGES_KEY]: imagesValue(state.images) };
-  resolve(spec, state.mode, state.images, (control, offered, chosen) => {
+  // Picks for controls of other modes are kept for when the mode returns.
+  const picks: Record<string, string> = Object.fromEntries(
+    Object.entries(state.picks).filter(([id]) => {
+      const control = spec.controls.find((candidate) => candidate.id === id);
+      return control !== undefined && !inMode(control, state.mode);
+    }),
+  );
+  const attachments = attachmentValues(state);
+  resolve(spec, state.mode, state, (control, offered, chosen) => {
     const pick = state.picks[control.id];
     if (!pick) return undefined;
     const kept = offered.find((option) => option.value === pick);
-    const inMode = optionsFor(control, state.mode, attachments).some(
-      (option) => option.value === pick,
-    );
+    const offeredInMode = optionsFor(
+      control,
+      state.mode,
+      attachments,
+      state.images,
+    ).some((option) => option.value === pick);
     const value =
       kept?.value ??
-      (inMode
+      (offeredInMode
         ? firstOffered(chosenDefaults(control, chosen), offered)
         : undefined);
     if (value) picks[control.id] = value;
@@ -253,13 +359,25 @@ function withoutStalePicks(
   return { ...state, picks };
 }
 
+/** Whether `value` is one the control can ever hold. */
+function isValueOf(control: ComposerControl, value: string): boolean {
+  if (control.kind === "number") {
+    return numberOptions(control).some((option) => option.value === value);
+  }
+  if (control.kind === "imagePick") {
+    return value === NO_IMAGE || /^[1-9]\d?$/.test(value);
+  }
+  return control.options.some((option) => option.value === value);
+}
+
 export function defaultMode(spec: ComposerSpec): string {
   return spec.modes[0]?.id ?? "";
 }
 
 /**
  * Restores the channel's last request. Values that are no longer options are
- * dropped; the mode always starts at the default (it follows attachments).
+ * dropped. Its mode comes back unless that mode follows attachments (Edit),
+ * which then starts at the default.
  */
 export function initialPanelState(
   spec: ComposerSpec,
@@ -268,18 +386,21 @@ export function initialPanelState(
   const picks: Record<string, string> = {};
   for (const control of valueControls(spec)) {
     const value = saved?.picks?.[control.id];
-    if (value && control.options.some((option) => option.value === value)) {
-      picks[control.id] = value;
-    }
+    if (value && isValueOf(control, value)) picks[control.id] = value;
   }
   const preset = saved?.preset ?? null;
   const presetValid =
     preset !== null &&
     (presetControl(spec)?.options.some((option) => option.value === preset) ??
       false);
+  const savedMode = spec.modes.find((mode) => mode.id === saved?.mode);
   return {
-    mode: defaultMode(spec),
+    mode:
+      savedMode && !savedMode.autoOnImage && !savedMode.requiresImage
+        ? savedMode.id
+        : defaultMode(spec),
     images: 0,
+    videos: 0,
     picks,
     preset: presetValid ? preset : null,
     repo: repoControl(spec) ? (saved?.repo ?? null) : null,
@@ -287,36 +408,53 @@ export function initialPanelState(
 }
 
 /**
- * "Edit" on a generated image: the image (attached to the draft) with each
- * control set from its sidecar where it names an offered option, saving to
- * `repo`. No preset, since the values already came from one.
+ * "Edit" on a generated image or video: the file (attached to the draft) with
+ * each control set from its sidecar where it names an offered option, saving
+ * to `repo`. No preset, since the values already came from one. A video opens
+ * in Video mode, where an attached video is extended or edited.
  */
 export function editStateFromSidecar(
   spec: ComposerSpec,
   values: Record<string, string>,
   repo: string | null,
+  video = false,
 ): ComposerPanelState {
-  return stateFromSidecar(spec, values, repo, 1);
+  return video
+    ? stateFromSidecar(spec, values, repo, 0, { mode: VIDEO_MODE, videos: 1 })
+    : stateFromSidecar(spec, values, repo, 1);
 }
 
+/** The mode a harness makes videos in. */
+export const VIDEO_MODE = "video";
+
 /**
- * The panel as an image's sidecar describes it, with `images` attached:
+ * The panel as a sidecar describes it, with `images` (and `videos`) attached:
  * what Regenerate sends again. A file with Generate / Edit modes uses the
- * image mode when images are attached.
+ * image mode when images are attached; `mode` names one outright (Video), and
+ * `picks` sets controls the sidecar keeps elsewhere (a video's first frame).
  */
 export function stateFromSidecar(
   spec: ComposerSpec,
   values: Record<string, string>,
   repo: string | null,
   images: number,
+  {
+    mode: wanted,
+    picks: given = {},
+    videos = 0,
+  }: { mode?: string; picks?: Record<string, string>; videos?: number } = {},
 ): ComposerPanelState {
   const mode =
+    spec.modes.find((candidate) => candidate.id === wanted)?.id ??
     spec.modes.find((candidate) =>
       images > 0 ? candidate.requiresImage : !candidate.requiresImage,
-    )?.id ?? defaultMode(spec);
+    )?.id ??
+    defaultMode(spec);
   const picks: Record<string, string> = {};
-  resolve(spec, mode, images, (control, offered) => {
-    const value = control.sidecarKey ? values[control.sidecarKey] : undefined;
+  resolve(spec, mode, { images, videos }, (control, offered) => {
+    const value =
+      given[control.id] ??
+      (control.sidecarKey ? values[control.sidecarKey] : undefined);
     const option = value
       ? offered.find(
           (candidate) => candidate.value.toLowerCase() === value.toLowerCase(),
@@ -328,6 +466,7 @@ export function stateFromSidecar(
   return {
     mode,
     images,
+    videos,
     picks,
     preset: null,
     repo: repoControl(spec) ? repo : null,
@@ -382,7 +521,7 @@ export function setRepo(
 }
 
 /**
- * Records the attached image count. In a file with an image mode
+ * Records the attached image and video counts. In a file with an image mode
  * (`autoOnImage`), the first image switches to it and removing the last one
  * switches back to the default mode.
  */
@@ -390,8 +529,9 @@ export function followAttachments(
   state: ComposerPanelState,
   spec: ComposerSpec,
   images: number,
+  videos = state.videos,
 ): ComposerPanelState {
-  const next = { ...state, images };
+  const next = { ...state, images, videos };
   if (state.images === 0 && images > 0) {
     const imageMode = spec.modes.find((mode) => mode.autoOnImage);
     return imageMode ? setMode(next, imageMode.id) : next;
@@ -428,6 +568,9 @@ export function sendBlockReason(
   if (mode?.requiresImage && state.images === 0) {
     return `Attach an image to ${mode.label.toLowerCase()}`;
   }
+  if (state.images > 0 && state.videos > 0 && followsVideos(spec)) {
+    return "Attach images or a video, not both";
+  }
   const { max } = imageRules(state, spec);
   if (max && state.images > max.count) {
     const images = max.count === 1 ? "1 image" : `${max.count} images`;
@@ -436,11 +579,28 @@ export function sendBlockReason(
   return null;
 }
 
-/** Whether a control with a `when` (a menu only some models have) shows. */
+/** A panel with rules for attached videos takes images or a video. */
+function followsVideos(spec: ComposerSpec): boolean {
+  const names = (when?: Record<string, string[]>) => VIDEOS_KEY in (when ?? {});
+  return spec.controls.some(
+    (control) =>
+      names(control.when) ||
+      control.options.some((option) => names(option.when)),
+  );
+}
+
+/**
+ * Whether a control shows: in its modes, while its `when` holds (a menu only
+ * some models have), and, for a pick of images, while any are attached.
+ */
 export function controlShown(
   control: ComposerControl,
   resolved: ResolvedPanel,
 ): boolean {
+  if (!inMode(control, resolved.mode)) return false;
+  if (VALUE_KINDS.has(control.kind) && !(control.id in resolved.values)) {
+    return false;
+  }
   return matches(control.when, resolved.values);
 }
 
@@ -450,23 +610,25 @@ export type ComposerPayload = {
   controls: Record<string, string>;
 };
 
-/** Every value control is sent with its current value; unset repo and preset are left out. */
+/**
+ * Every shown value control is sent with its current value; unset repo and
+ * preset are left out.
+ */
 export function composerPayload(
   state: ComposerPanelState,
   spec: ComposerSpec,
 ): ComposerPayload {
-  const controls: Record<string, string> = {
-    ...resolvePanel(state, spec).values,
-  };
-  delete controls[IMAGES_KEY];
-  const preset = presetControl(spec);
-  if (
-    preset &&
-    state.preset &&
-    preset.options.some((option) => option.value === state.preset)
-  ) {
-    controls[preset.id] = state.preset;
+  const resolved = resolvePanel(state, spec);
+  const controls: Record<string, string> = {};
+  for (const control of valueControls(spec)) {
+    const value = resolved.values[control.id];
+    if (value !== undefined && controlShown(control, resolved)) {
+      controls[control.id] = value;
+    }
   }
+  const preset = presetControl(spec);
+  const picked = activePreset(state, spec);
+  if (preset && picked) controls[preset.id] = picked;
   const repo = repoControl(spec);
   if (repo && state.repo) controls[repo.id] = state.repo;
   return { v: 1, mode: state.mode, controls };
@@ -484,6 +646,7 @@ export function toSavedState(
   prompt: string,
 ): SavedComposerState {
   return {
+    mode: state.mode,
     picks: state.picks,
     preset: state.preset,
     repo: state.repo,
@@ -516,7 +679,8 @@ export function scaledSize(
 
 /**
  * The agent an image edit goes to: the image's author when it runs on a
- * harness with an image mode, else the first such agent.
+ * harness with an image mode, else one whose model list has the sidecar's
+ * model (a repository file has no author), else the first such agent.
  */
 export function editTargetFor<
   Agent extends {
@@ -528,14 +692,25 @@ export function editTargetFor<
   composers: readonly HarnessComposer[],
   agents: readonly Agent[],
   authorPubkey: string | null,
+  values: Record<string, string> = {},
 ): { agent: Agent; harness: HarnessComposer } | null {
   const targets = agents.flatMap((agent) => {
     const harness = harnessComposerForAgent(composers, agent);
     return harness && takesImages(harness.composer) ? [{ agent, harness }] : [];
   });
   const author = authorPubkey?.toLowerCase();
+  const model = values.model_id;
+  const madeIt = (spec: ComposerSpec) =>
+    spec.controls.some(
+      (control) =>
+        control.sidecarKey === "model_id" &&
+        control.options.some((option) => option.value === model),
+    );
   return (
     targets.find((target) => target.agent.pubkey.toLowerCase() === author) ??
+    (model
+      ? targets.find((target) => madeIt(target.harness.composer))
+      : undefined) ??
     targets[0] ??
     null
   );

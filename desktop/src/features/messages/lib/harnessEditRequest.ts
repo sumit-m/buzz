@@ -7,8 +7,8 @@ import type { ImetaMedia } from "./imetaMediaMarkdown";
  * start an edit request from it: the image attached, the agent mentioned, its
  * prompt, and the panel set from its sidecar. A chat image goes to the
  * composer in its own pane and reuses its upload; a repository image goes to
- * the project's agent chat (a DM with the agent, opened first), or else the
- * repository's channel, as a file to upload, saving back to its own folder.
+ * the project's agent chat (a DM with the agent, opened first) as a file to
+ * upload, saving back to its own folder.
  *
  * A request waits briefly for its composer, so one that mounts after the
  * navigation still takes it.

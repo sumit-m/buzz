@@ -177,31 +177,45 @@ export function ImageInfoSidebar({
       {sources.length > 0 ? (
         <dl className="px-1">
           <dt className="text-sm text-muted-foreground/75">
-            {sources.length === 1 ? "Image" : "Images"}
+            {sourcesLabel(sources, sidecar.origin?.frame ?? null)}
           </dt>
           <dd className="mt-1.5 flex flex-wrap gap-2">
-            {sources.map((source, index) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed, ordered list that may repeat an upload
-              <figure className="space-y-1" key={index}>
-                <img
-                  alt={`Source ${index + 1}`}
-                  className={cn(
-                    "rounded-md object-cover",
-                    sources.length === 1
-                      ? "max-h-48 max-w-[168px]"
-                      : "h-20 w-20",
+            {sources.map((source, index) => {
+              const className = cn(
+                "rounded-md object-cover",
+                sources.length === 1 ? "max-h-48 max-w-[168px]" : "h-20 w-20",
+              );
+              return (
+                // biome-ignore lint/suspicious/noArrayIndexKey: a fixed, ordered list that may repeat an upload
+                <figure className="space-y-1" key={index}>
+                  {source.m?.startsWith("video/") ? (
+                    <video
+                      className={className}
+                      data-testid="image-info-source"
+                      muted
+                      preload="metadata"
+                      src={rewriteRelayUrl(source.url)}
+                    />
+                  ) : (
+                    <img
+                      alt={`Source ${index + 1}`}
+                      className={className}
+                      data-testid="image-info-source"
+                      loading="lazy"
+                      src={rewriteRelayUrl(source.url)}
+                    />
                   )}
-                  data-testid="image-info-source"
-                  loading="lazy"
-                  src={rewriteRelayUrl(source.url)}
-                />
-                {sources.length > 1 ? (
-                  <figcaption className="text-xs text-muted-foreground">
-                    Image {index + 1}
-                  </figcaption>
-                ) : null}
-              </figure>
-            ))}
+                  {sources.length > 1 ? (
+                    <figcaption className="text-xs text-muted-foreground">
+                      Image {index + 1}
+                      {sidecar.origin?.frame === String(index + 1)
+                        ? " · first frame"
+                        : ""}
+                    </figcaption>
+                  ) : null}
+                </figure>
+              );
+            })}
           </dd>
         </dl>
       ) : null}
@@ -268,6 +282,18 @@ function ImageRepoButton({
       </PopoverContent>
     </Popover>
   );
+}
+
+/** "Video", "First frame", "Image" or "Images", for the sources heading. */
+function sourcesLabel(
+  sources: readonly { m?: string }[],
+  frame: string | null,
+): string {
+  if (sources.every((source) => source.m?.startsWith("video/"))) {
+    return "Video";
+  }
+  if (sources.length === 1) return frame === "1" ? "First frame" : "Image";
+  return "Images";
 }
 
 function webLink(value: string | undefined): string | null {

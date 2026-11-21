@@ -57,6 +57,7 @@ import {
 } from "./useRepositoryFileContent";
 import { useRepositoryImagePreview } from "./useRepositoryImagePreview";
 import { RepositoryImageView } from "./RepositoryImageView";
+import { useRepositoryVideoUrl } from "./useRepositoryVideoUrl";
 import {
   RepositoryFileTiles,
   usePrefetchChangedThumbnails,
@@ -558,9 +559,10 @@ function FileContentPanel({
   onOpenPath: (path: string) => void;
 }) {
   const image = useRepositoryImagePreview(file, fileContentSource);
+  const video = useRepositoryVideoUrl(file, fileContentSource);
   const fileContent = useRepositoryFileContent(
     file,
-    image.isImage ? undefined : fileContentSource,
+    image.isImage || video.isVideo ? undefined : fileContentSource,
   );
   const language = languageForPath(file.path);
   const pathSegments = file.path.split("/").filter(Boolean);
@@ -600,15 +602,16 @@ function FileContentPanel({
       <div className="border-border/50 border-b bg-muted/10 px-4 py-2 text-2xs text-muted-foreground sm:hidden">
         Last changed {formatLastChangedAt(file.lastChangedAt)}
       </div>
-      {image.isLoading || fileContent.isLoading ? (
+      {image.isLoading || video.isLoading || fileContent.isLoading ? (
         <BuzzLoadingState label="Loading file" />
-      ) : image.url ? (
+      ) : image.url || video.url ? (
         <RepositoryImageView
           file={file}
           fileContentSource={fileContentSource}
           files={files}
+          isVideo={Boolean(video.url)}
           onOpenPath={onOpenPath}
-          url={image.url}
+          url={image.url ?? video.url ?? ""}
         />
       ) : fileContent.content ? (
         <pre className="overflow-x-auto bg-background/60 p-4">

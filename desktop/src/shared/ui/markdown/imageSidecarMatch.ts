@@ -1,9 +1,14 @@
 import type { ImetaLookup } from "./types";
 
 /**
- * LOCAL DIVERGENCE: matching a message image to its `.json` sidecar attached
- * to the same message (same file name stem, as mage-agent posts them).
+ * LOCAL DIVERGENCE: matching a message image or video to its `.json` sidecar
+ * attached to the same message (same file name stem, as mage-agent and
+ * imagine-agent post them).
  */
+
+function isGenerated(mime: string | undefined) {
+  return Boolean(mime?.startsWith("image/") || mime?.startsWith("video/"));
+}
 
 function stem(filename: string): string {
   const dot = filename.lastIndexOf(".");
@@ -17,13 +22,13 @@ function isJson(filename: string | undefined, mime: string | undefined) {
   );
 }
 
-/** The sidecar URL attached beside image `src`, if any. */
+/** The sidecar URL attached beside image or video `src`, if any. */
 export function findSidecarUrl(
   imetaByUrl: ImetaLookup | undefined,
   src: string,
 ): string | null {
   const image = imetaByUrl?.get(src);
-  if (!imetaByUrl || !image?.filename || !image.m?.startsWith("image/")) {
+  if (!imetaByUrl || !image?.filename || !isGenerated(image.m)) {
     return null;
   }
   const imageStem = stem(image.filename);
@@ -39,7 +44,7 @@ export function findSidecarUrl(
   return null;
 }
 
-/** True when `filename` is the `.json` sidecar of an image in the same message. */
+/** True when `filename` is the `.json` sidecar of an image or video in the same message. */
 export function isImageSidecarFile(
   imetaByUrl: ImetaLookup | undefined,
   filename: string,
@@ -49,7 +54,7 @@ export function isImageSidecarFile(
   for (const entry of imetaByUrl.values()) {
     if (
       entry.filename &&
-      entry.m?.startsWith("image/") &&
+      isGenerated(entry.m) &&
       stem(entry.filename) === sidecarStem
     ) {
       return true;

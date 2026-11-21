@@ -1,19 +1,19 @@
-//! Thumbnails for a folder of repository images, from one checkout, for the
-//! Files tab's tiles view. Files that cannot be thumbnailed are left out; the
-//! renderer shows them as icon tiles.
+//! Thumbnails for a folder of repository images, for the Files tab's tiles
+//! view. A remote repository fetches only the requested images, into a clone
+//! shared with previews (`project_git_clones`). Files that cannot be
+//! thumbnailed are left out; the renderer shows them as icon tiles.
 
 use std::io::Cursor;
 use std::path::Path;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::Serialize;
-use tauri::State;
+use tauri::{Manager, State};
 
-use super::project_git_exec::{
-    build_git_auth_config, clean_branch, clean_target_ref, validate_workspace_clone_url,
-};
+use super::project_git_clones::{Freshness, RemoteRepo, RepoClones};
+use super::project_git_exec::{build_git_auth_config, validate_workspace_clone_url};
 use super::project_git_file_bytes::{read_file_bytes, MAX_PREVIEW_FILE_BYTES};
-use super::project_git_file_content::{checkout_project_repo, validate_repo_file_path};
+use super::project_git_file_content::validate_repo_file_path;
 use super::project_repo_paths::find_local_repo_dir;
 use crate::app_state::AppState;
 
@@ -126,6 +126,7 @@ pub async fn get_project_repo_thumbnails(
     target_commit: Option<String>,
     paths: Vec<String>,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<RepoThumbnail>, String> {
     validate_workspace_clone_url(&clone_url, &state)?;
     let paths = limited(paths);
@@ -133,24 +134,12 @@ pub async fn get_project_repo_thumbnails(
         return Ok(Vec::new());
     }
     let auth = build_git_auth_config(&state)?;
-    let branch = clean_branch(default_branch);
-    let target_ref = clean_target_ref(target_ref);
-    let target_commit = target_commit
-        .map(|value| value.to_ascii_lowercase())
-        .filter(|value| matches!(value.len(), 40 | 64))
-        .filter(|value| value.chars().all(|c| c.is_ascii_hexdigit()));
+    let repo = RemoteRepo::new(clone_url, default_branch, target_ref, target_commit);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let temp_dir = tempfile::tempdir().map_err(|error| format!("create temp dir: {error}"))?;
-        let repo_dir = temp_dir.path().join("repo");
-        checkout_project_repo(
-            &repo_dir,
-            &clone_url,
-            branch.as_deref(),
-            target_ref.as_deref(),
-            target_commit.as_deref(),
-            &auth,
-        )?;
+        let repo_dir = app
+            .state::<RepoClones>()
+            .files(&repo, &paths, Freshness::Latest, &auth)?;
         Ok(thumbnails_from(&repo_dir, &paths))
     })
     .await

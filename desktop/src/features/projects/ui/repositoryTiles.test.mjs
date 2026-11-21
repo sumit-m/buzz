@@ -33,3 +33,20 @@ test("splitTileEntries keeps a folder named like an image's sidecar", () => {
     ["fox.json"],
   );
 });
+
+test("videos join the grid and their sidecars are hidden", () => {
+  const entries = [
+    { name: "6a31.mp4", type: "file" },
+    { name: "6a31.json", type: "file" },
+    { name: "notes.json", type: "file" },
+  ];
+  const { images, others } = splitTileEntries(entries);
+  assert.deepEqual(
+    images.map((e) => e.name),
+    ["6a31.mp4"],
+  );
+  assert.deepEqual(
+    others.map((e) => e.name),
+    ["notes.json"],
+  );
+});

@@ -1,6 +1,5 @@
 import { toast } from "sonner";
 
-import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { normalizeFolder } from "@/features/messages/lib/composerFolderSuggestions";
 import {
   openProjectChat,
@@ -9,6 +8,7 @@ import {
 } from "@/features/messages/lib/harnessEditRequest";
 import { useHarnessEditAvailable } from "@/features/messages/ui/useHarnessEditAvailable";
 import type { ProjectRepoFile } from "@/features/projects/hooks";
+import { VideoPlayer } from "@/shared/ui/VideoPlayer";
 import { ImageInfoSidebar } from "./ImageInfoSidebar";
 import { parseImageSidecar, sidecarPathFor } from "./imageSidecar";
 import {
@@ -17,23 +17,25 @@ import {
 } from "./useRepositoryFileContent";
 
 /**
- * A repository image at full size, with an info sidebar when the folder holds
- * its `.json` sidecar. LOCAL DIVERGENCE: the sidebar's Edit starts an edit
- * request for the image in the project's agent chat (a DM with the agent), or
- * the repository's channel where the screen has no chat, saving back to the
- * image's folder.
+ * A repository image at full size, or a video in Buzz's player, with an info
+ * sidebar when the folder holds its `.json` sidecar. LOCAL DIVERGENCE: the
+ * sidebar's Edit starts an edit request for the file in the project's agent
+ * chat (a DM with the agent), saving back to the file's folder.
  */
 export function RepositoryImageView({
   file,
   fileContentSource,
   files,
+  isVideo = false,
   onOpenPath,
   url,
 }: {
   file: ProjectRepoFile;
   fileContentSource?: RepositoryFileContentSource;
   files: ProjectRepoFile[];
-  /** Follows the image after the sidebar moves it. */
+  /** `url` streams a video rather than holding an image. */
+  isVideo?: boolean;
+  /** Follows the file after the sidebar moves it. */
   onOpenPath?: (path: string) => void;
   url: string;
 }) {
@@ -48,10 +50,8 @@ export function RepositoryImageView({
     ? parseImageSidecar(sidecarContent.content)
     : null;
   const name = file.path.split("/").pop() ?? file.path;
-  const { goChannel } = useAppNavigation();
   const canEdit = useHarnessEditAvailable();
   const repository = fileContentSource?.repository;
-  const channelId = repository?.channelId ?? null;
   const onEdit =
     canEdit && repository && sidecar
       ? async () => {
@@ -59,44 +59,55 @@ export function RepositoryImageView({
           try {
             const blob = await (await fetch(url)).blob();
             image = new File([blob], name, {
-              type: blob.type || "image/jpeg",
+              type: blob.type || (isVideo ? "video/mp4" : "image/jpeg"),
             });
           } catch {
-            toast.error("Could not read this image");
+            toast.error(`Could not read this ${isVideo ? "video" : "image"}`);
             return;
           }
           const folder = normalizeFolder(
             file.path.slice(0, file.path.lastIndexOf("/") + 1),
           );
-          const inProjectChat = openProjectChat();
-          if (!inProjectChat && !channelId) {
-            toast.error("Open the project's agent chat to edit this image");
+          if (!openProjectChat()) {
+            toast.error(
+              `Open the project's agent chat to edit this ${isVideo ? "video" : "image"}`,
+            );
             return;
           }
           requestHarnessEdit({
             authorPubkey: null,
-            draftKey: inProjectChat
-              ? PROJECT_CHAT_DRAFT_KEY_PREFIX
-              : (channelId ?? ""),
+            draftKey: PROJECT_CHAT_DRAFT_KEY_PREFIX,
             image,
             prompt: sidecar.prompt,
             repo: `${repository.owner}/${repository.dtag}:${folder}`,
             repository,
             values: sidecar.values,
           });
-          if (!inProjectChat && channelId) void goChannel(channelId);
         }
       : undefined;
 
   return (
     <div className="flex flex-col gap-4 bg-background/60 p-4 lg:flex-row lg:items-start">
       <div className="flex min-w-0 flex-1 justify-center">
-        <img
-          alt={name}
-          className="max-h-[75vh] max-w-full rounded-md object-contain"
-          data-testid="project-repository-image-preview"
-          src={url}
-        />
+        {isVideo ? (
+          <div
+            className="w-full max-w-3xl"
+            data-testid="project-repository-video-preview"
+          >
+            <VideoPlayer
+              aspectRatio={videoAspect(sidecar?.values)}
+              filename={name}
+              src={url}
+            />
+          </div>
+        ) : (
+          <img
+            alt={name}
+            className="max-h-[75vh] max-w-full rounded-md object-contain"
+            data-testid="project-repository-image-preview"
+            src={url}
+          />
+        )}
       </div>
       {sidecar ? (
         <ImageInfoSidebar
@@ -111,4 +122,11 @@ export function RepositoryImageView({
       ) : null}
     </div>
   );
+}
+
+/** Width over height from a sidecar, for the player's frame before it loads. */
+function videoAspect(values: Record<string, string> | undefined) {
+  const width = Number(values?.width);
+  const height = Number(values?.height);
+  return width > 0 && height > 0 ? width / height : undefined;
 }

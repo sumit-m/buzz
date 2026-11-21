@@ -1,5 +1,6 @@
 import type { ProjectRepoFile } from "@/features/projects/hooks";
 import type { ProjectRepoThumbnail } from "@/shared/api/projectGit";
+import { captureFirstFrame, videoMimeForPath } from "./repositoryVideo";
 import { imageMimeForPath } from "./useRepositoryImagePreview";
 import type { RepositoryFileContentSource } from "./useRepositoryFileContent";
 
@@ -79,18 +80,25 @@ export function thumbnailQuery(
 ) {
   const cacheKey = source?.cacheKey ?? [];
   const load = source?.loadThumbnails;
+  const mediaUrl = source?.mediaUrl;
+  const isVideo = videoMimeForPath(file.path) !== null;
   return {
-    enabled: Boolean(load),
+    enabled: Boolean(isVideo ? mediaUrl : load),
     queryKey: [
       "project-repository-thumbnail",
       ...cacheKey,
       file.path,
       thumbnailVersion(file),
     ],
-    queryFn: () =>
-      load
+    queryFn: async () => {
+      if (isVideo) {
+        const url = mediaUrl ? await mediaUrl(file.path) : null;
+        return url ? captureFirstFrame(file.path, url) : null;
+      }
+      return load
         ? requestThumbnail(JSON.stringify(cacheKey), load, file.path)
-        : Promise.resolve(null),
+        : null;
+    },
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: THUMBNAIL_CACHE_MS,
     retry: 1,
@@ -107,7 +115,8 @@ export function changedImages(
   );
   return next.filter(
     (file) =>
-      imageMimeForPath(file.path) !== null &&
+      (imageMimeForPath(file.path) !== null ||
+        videoMimeForPath(file.path) !== null) &&
       before.get(file.path) !== thumbnailVersion(file),
   );
 }

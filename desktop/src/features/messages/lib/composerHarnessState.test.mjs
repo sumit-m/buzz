@@ -2,24 +2,29 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  activePreset,
   applyPreset,
   composerPayload,
   composerTag,
   controlShown,
   editStateFromSidecar,
+  editTargetFor,
   effectiveValue,
   followAttachments,
   harnessComposerForAgent,
   IMAGES_KEY,
+  VIDEOS_KEY,
   imageRules,
   initialPanelState,
   optionsFor,
   pickValue,
+  presetOptions,
   resolvePanel,
   scaledSize,
   sendBlockReason,
   setMode,
   setRepo,
+  stateFromSidecar,
   takesImages,
   toSavedState,
 } from "./composerHarnessState.ts";
@@ -238,7 +243,7 @@ test("the payload carries every value control and leaves unset preset and repo o
   assert.equal(JSON.parse(json).controls.repo, "bee-garden:assets/");
 });
 
-test("restoring drops stale values and always starts in the default mode", () => {
+test("restoring drops stale values; a mode that follows images starts at the default", () => {
   const saved = toSavedState(
     setRepo(
       pickValue(setMode(initialPanelState(spec), "edit"), spec, "res", "4K"),
@@ -382,10 +387,11 @@ const byModel = {
 };
 const at = (id) => byModel.controls.find((c) => c.id === id);
 const values = (state) => {
-  const { [IMAGES_KEY]: _images, ...controls } = resolvePanel(
-    state,
-    byModel,
-  ).values;
+  const {
+    [IMAGES_KEY]: _images,
+    [VIDEOS_KEY]: _videos,
+    ...controls
+  } = resolvePanel(state, byModel).values;
   return controls;
 };
 
@@ -461,4 +467,257 @@ test("sizes come from the variant for the model and resolution", () => {
 test("a sidecar's resolution matches regardless of case", () => {
   const state = editStateFromSidecar(byModel, { resolution: "2k" }, null);
   assert.equal(state.picks.res, "2K");
+});
+
+const videoSpec = {
+  modes: [
+    { id: "image", label: "Image" },
+    { id: "video", label: "Video" },
+  ],
+  controls: [
+    {
+      id: "model",
+      kind: "list",
+      label: "Model",
+      options: [
+        { value: "img", label: "Image model", modes: ["image"] },
+        {
+          value: "v15",
+          label: "Video 1.5",
+          modes: ["video"],
+          when: { [VIDEOS_KEY]: ["none"] },
+        },
+        { value: "v10", label: "Video 1.0", modes: ["video"] },
+      ],
+    },
+    {
+      id: "action",
+      kind: "segmented",
+      label: "Action",
+      modes: ["video"],
+      when: { [VIDEOS_KEY]: ["attached"] },
+      options: [
+        { value: "extend", label: "Extend" },
+        { value: "edit", label: "Edit" },
+      ],
+    },
+    {
+      id: "frame",
+      kind: "imagePick",
+      label: "Frame",
+      modes: ["video"],
+      default: "1",
+      options: [],
+    },
+    {
+      id: "res",
+      kind: "segmented",
+      label: "Resolution",
+      options: [
+        { value: "720p", label: "720p" },
+        {
+          value: "1080p",
+          label: "1080p",
+          when: { [IMAGES_KEY]: ["none", "one"], frame: ["1"] },
+        },
+      ],
+    },
+    {
+      id: "count",
+      kind: "number",
+      label: "Images",
+      modes: ["image"],
+      min: 1,
+      max: 10,
+      default: "1",
+      options: [],
+    },
+    {
+      id: "duration",
+      kind: "number",
+      label: "Duration",
+      modes: ["video"],
+      min: 1,
+      max: 15,
+      default: "8",
+      unit: "s",
+      options: [],
+    },
+  ],
+};
+
+test("modes keep their own controls; numbers resolve and clamp to their range", () => {
+  let state = initialPanelState(videoSpec);
+  assert.deepEqual(composerPayload(state, videoSpec).controls, {
+    model: "img",
+    res: "720p",
+    count: "1",
+  });
+  state = pickValue(state, videoSpec, "count", "4");
+  state = setMode(state, "video");
+  assert.deepEqual(composerPayload(state, videoSpec).controls, {
+    model: "v15",
+    res: "720p",
+    duration: "8",
+  });
+  state = pickValue(state, videoSpec, "duration", "12");
+  assert.equal(
+    pickValue(state, videoSpec, "duration", "40").picks.duration,
+    undefined,
+  );
+  state = setMode(state, "image");
+  assert.equal(composerPayload(state, videoSpec).controls.count, "4");
+  assert.equal(
+    initialPanelState(videoSpec, { picks: { duration: "99", count: "3" } })
+      .picks.duration,
+    undefined,
+  );
+});
+
+test("a pick of images follows the attachments and gates other options", () => {
+  let state = setMode(initialPanelState(videoSpec), "video");
+  const offered = (s) =>
+    optionsFor(
+      videoSpec.controls.find((c) => c.id === "res"),
+      s.mode,
+      resolvePanel(s, videoSpec).values,
+      s.images,
+    ).map((o) => o.value);
+  assert.equal("frame" in composerPayload(state, videoSpec).controls, false);
+  assert.deepEqual(offered(state), ["720p", "1080p"]);
+  state = followAttachments(state, videoSpec, 1);
+  assert.equal(composerPayload(state, videoSpec).controls.frame, "1");
+  assert.deepEqual(offered(state), ["720p", "1080p"]);
+  assert.deepEqual(offered(pickValue(state, videoSpec, "frame", "none")), [
+    "720p",
+  ]);
+  state = followAttachments(state, videoSpec, 3);
+  assert.deepEqual(offered(state), ["720p"]);
+  assert.deepEqual(
+    optionsFor(videoSpec.controls[2], "video", {}, 2).map((o) => o.label),
+    ["None", "Image 1", "Image 2"],
+  );
+});
+
+test("a video attached shows its own controls; images with it block send", () => {
+  let state = followAttachments(
+    setMode(initialPanelState(videoSpec), "video"),
+    videoSpec,
+    0,
+    1,
+  );
+  assert.deepEqual(composerPayload(state, videoSpec).controls, {
+    model: "v10",
+    action: "extend",
+    res: "720p",
+    duration: "8",
+  });
+  assert.equal(sendBlockReason(state, videoSpec), null);
+  state = followAttachments(state, videoSpec, 2, 1);
+  assert.equal(
+    sendBlockReason(state, videoSpec),
+    "Attach images or a video, not both",
+  );
+});
+
+test("presets for one mode are offered and sent only in that mode", () => {
+  const spec = {
+    ...videoSpec,
+    controls: [
+      ...videoSpec.controls,
+      {
+        id: "preset",
+        kind: "preset",
+        label: "Preset",
+        options: [
+          { value: "logo", label: "logo", modes: ["image"], sets: {} },
+          { value: "any", label: "any", sets: {} },
+        ],
+      },
+    ],
+  };
+  let state = applyPreset(initialPanelState(spec), spec, "logo");
+  assert.deepEqual(
+    presetOptions(spec, "image").map((o) => o.value),
+    ["logo", "any"],
+  );
+  assert.deepEqual(
+    presetOptions(spec, "video").map((o) => o.value),
+    ["any"],
+  );
+  assert.equal(composerPayload(state, spec).controls.preset, "logo");
+  state = setMode(state, "video");
+  assert.equal(activePreset(state, spec), null);
+  assert.equal("preset" in composerPayload(state, spec).controls, false);
+});
+
+test("a video's sidecar opens Video mode for Edit and Regenerate", () => {
+  const values = { model_id: "v10", duration: "4" };
+  const edit = editStateFromSidecar(videoSpec, values, null, true);
+  assert.equal(edit.mode, "video");
+  assert.equal(edit.videos, 1);
+  assert.equal(composerPayload(edit, videoSpec).controls.action, "extend");
+  const again = stateFromSidecar(videoSpec, { model_id: "v15" }, null, 1, {
+    mode: "video",
+    picks: { frame: "none" },
+  });
+  assert.equal(again.mode, "video");
+  assert.equal(composerPayload(again, videoSpec).controls.frame, "none");
+});
+
+test("restoring brings back a mode that does not follow attachments", () => {
+  const video = pickValue(
+    pickValue(
+      setMode(initialPanelState(videoSpec), "video"),
+      videoSpec,
+      "duration",
+      "3",
+    ),
+    videoSpec,
+    "res",
+    "720p",
+  );
+  const saved = toSavedState(video, "a ship");
+  const restored = initialPanelState(videoSpec, saved);
+  assert.equal(restored.mode, "video");
+  assert.equal(restored.picks.duration, "3");
+  assert.equal(restored.picks.res, "720p");
+  assert.equal(
+    initialPanelState(videoSpec, { ...saved, mode: "gone" }).mode,
+    "image",
+  );
+  assert.equal(initialPanelState(videoSpec, { prompt: "old" }).mode, "image");
+});
+
+test("an edit without an author goes to the agent whose model made the file", () => {
+  const harness = (id, model) => ({
+    harnessId: id,
+    command: id,
+    composer: {
+      modes: [{ id: "edit", label: "Edit", requiresImage: true }],
+      controls: [
+        {
+          id: "model",
+          kind: "list",
+          label: "Model",
+          sidecarKey: "model_id",
+          options: [{ value: model, label: model }],
+        },
+      ],
+    },
+  });
+  const composers = [
+    harness("mage", "mango-v4"),
+    harness("imagine", "grok-imagine-video"),
+  ];
+  const agents = [
+    { pubkey: "AA", runtime: "mage", agentCommand: "" },
+    { pubkey: "BB", runtime: "imagine", agentCommand: "" },
+  ];
+  const pick = (author, values) =>
+    editTargetFor(composers, agents, author, values)?.agent.pubkey;
+  assert.equal(pick(null, { model_id: "grok-imagine-video" }), "BB");
+  assert.equal(pick("aa", { model_id: "grok-imagine-video" }), "AA");
+  assert.equal(pick(null, { model_id: "other" }), "AA");
+  assert.equal(pick(null), "AA");
 });

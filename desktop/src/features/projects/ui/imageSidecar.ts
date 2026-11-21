@@ -18,15 +18,32 @@ export type SidecarSource = {
 };
 
 /**
- * What mage-agent adds as `buzz`: how the image was made, the uploads it was
- * made from (in order), and the repo it was saved to (`<owner>/<repo>`).
- * Older sidecars have none, or a single `source`.
+ * What mage-agent and imagine-agent add as `buzz`: how the image or video was
+ * made, the uploads it was made from (in order), which of them was a video's
+ * first frame, and the repo it was saved to (`<owner>/<repo>`). Older
+ * sidecars have none, or a single `source`.
  */
 export type ImageOrigin = {
-  mode: "generate" | "edit";
+  mode: OriginMode;
   sources: SidecarSource[];
+  /** A video's first frame among `sources` (1-based), or `none`. */
+  frame: string | null;
   repo: string | null;
 };
+
+const ORIGIN_MODES = [
+  "generate",
+  "edit",
+  "video",
+  "video-extend",
+  "video-edit",
+] as const;
+export type OriginMode = (typeof ORIGIN_MODES)[number];
+
+/** Whether the file is a video (made, extended or edited). */
+export function isVideoOrigin(origin: ImageOrigin | null): boolean {
+  return Boolean(origin?.mode.startsWith("video"));
+}
 
 export type ImageSidecar = {
   prompt: string | null;
@@ -47,6 +64,7 @@ const HIDDEN_KEYS = new Set([
   "status",
   "expires_at",
   "history_id",
+  "extend_by",
 ]);
 
 const KNOWN_FIELDS: Array<{
@@ -59,6 +77,19 @@ const KNOWN_FIELDS: Array<{
   { key: "dimensions", label: "Dimensions" },
   { key: "resolution", label: "Resolution" },
   { key: "aspect_ratio", label: "Aspect Ratio" },
+  {
+    key: "duration",
+    label: "Length",
+    format: (value) => (typeof value === "number" ? `${value}s` : null),
+  },
+  {
+    key: "voices",
+    label: "Voices",
+    format: (value) =>
+      Array.isArray(value) && value.every((v) => typeof v === "string")
+        ? value.join(", ") || null
+        : null,
+  },
   {
     key: "duration_sec",
     label: "Duration",
@@ -145,7 +176,8 @@ export function parseImageSidecar(text: string): ImageSidecar | null {
 function parseOrigin(raw: unknown): ImageOrigin | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const origin = raw as Record<string, unknown>;
-  if (origin.mode !== "generate" && origin.mode !== "edit") return null;
+  const mode = ORIGIN_MODES.find((candidate) => candidate === origin.mode);
+  if (!mode) return null;
   const listed = Array.isArray(origin.sources)
     ? origin.sources
     : origin.source
@@ -155,7 +187,12 @@ function parseOrigin(raw: unknown): ImageOrigin | null {
     const source = parseSource(raw);
     return source ? [source] : [];
   });
-  return { mode: origin.mode, sources, repo: scalarText(origin.repo) };
+  return {
+    mode,
+    sources,
+    frame: scalarText(origin.frame),
+    repo: scalarText(origin.repo),
+  };
 }
 
 function parseSource(raw: unknown): SidecarSource | null {

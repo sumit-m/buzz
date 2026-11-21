@@ -23,3 +23,15 @@ test("only an image's sidecar is hidden as a file card", () => {
   assert.equal(isImageSidecarFile(imeta, "339c.txt"), false);
   assert.equal(isImageSidecarFile(undefined, "339c.json"), false);
 });
+
+test("a video finds its sidecar too", () => {
+  const withVideo = new Map([
+    ["https://r/v.mp4", { filename: "6a31.mp4", m: "video/mp4" }],
+    ["https://r/v.json", { filename: "6a31.json", m: "application/json" }],
+  ]);
+  assert.equal(
+    findSidecarUrl(withVideo, "https://r/v.mp4"),
+    "https://r/v.json",
+  );
+  assert.equal(isImageSidecarFile(withVideo, "6a31.json"), true);
+});

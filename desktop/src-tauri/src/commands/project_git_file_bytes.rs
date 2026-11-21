@@ -1,14 +1,14 @@
 //! Raw bytes of a repository file, for previews the text reader cannot show
 //! (images). Replies with `tauri::ipc::Response` so the renderer gets an
-//! ArrayBuffer; an empty reply means the file cannot be previewed.
+//! ArrayBuffer; an empty reply means the file cannot be previewed. A remote
+//! repository fetches only that file, into a shared clone (`project_git_clones`).
 
-use super::project_git_exec::{
-    build_git_auth_config, clean_branch, clean_target_ref, validate_workspace_clone_url,
-};
-use super::project_git_file_content::{checkout_project_repo, validate_repo_file_path};
+use super::project_git_clones::{Freshness, RemoteRepo, RepoClones};
+use super::project_git_exec::{build_git_auth_config, validate_workspace_clone_url};
+use super::project_git_file_content::validate_repo_file_path;
 use super::project_repo_paths::find_local_repo_dir;
 use crate::app_state::AppState;
-use tauri::State;
+use tauri::{Manager, State};
 
 /// Matches the relay's image upload ceiling.
 pub(super) const MAX_PREVIEW_FILE_BYTES: u64 = 50 * 1024 * 1024;
@@ -46,31 +46,21 @@ pub async fn get_project_repo_file_bytes(
     target_commit: Option<String>,
     path: String,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<tauri::ipc::Response, String> {
     validate_workspace_clone_url(&clone_url, &state)?;
     validate_repo_file_path(&path)?;
     let auth = build_git_auth_config(&state)?;
-    let branch = clean_branch(default_branch);
-    let target_ref = clean_target_ref(target_ref);
-    let target_commit = target_commit
-        .map(|value| value.to_ascii_lowercase())
-        .filter(|value| matches!(value.len(), 40 | 64))
-        .filter(|value| value.chars().all(|c| c.is_ascii_hexdigit()));
+    let repo = RemoteRepo::new(clone_url, default_branch, target_ref, target_commit);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let temp_dir = tempfile::tempdir().map_err(|error| format!("create temp dir: {error}"))?;
-        let repo_dir = temp_dir.path().join("repo");
-        checkout_project_repo(
-            &repo_dir,
-            &clone_url,
-            branch.as_deref(),
-            target_ref.as_deref(),
-            target_commit.as_deref(),
-            &auth,
-        )?;
+        let paths = [path];
+        let repo_dir = app
+            .state::<RepoClones>()
+            .files(&repo, &paths, Freshness::Latest, &auth)?;
         Ok(response(read_file_bytes(
             &repo_dir,
-            &path,
+            &paths[0],
             MAX_PREVIEW_FILE_BYTES,
         )))
     })

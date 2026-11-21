@@ -7,8 +7,10 @@
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import { buildOutgoingMessage } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { Repository } from "@/features/projects/projectModels";
+import { VIDEO_MODE } from "@/features/messages/lib/composerHarnessState";
 import {
   type ImageOrigin,
+  isVideoOrigin,
   type SidecarSource,
   sidecarPathFor,
 } from "@/features/projects/ui/imageSidecar";
@@ -226,7 +228,7 @@ export function planRelocation({
 export function canRegenerate(origin: ImageOrigin | null): boolean {
   if (!origin) return false;
   if (origin.sources.length > 0) return origin.sources.every((s) => s.x);
-  return origin.mode === "generate";
+  return origin.mode === "generate" || origin.mode === "video";
 }
 
 export function imetaFromSource(source: SidecarSource): ImetaMedia {
@@ -244,6 +246,29 @@ export function imetaFromSource(source: SidecarSource): ImetaMedia {
 export function repoValueFor(location: ImageLocation): string {
   const { repository, imagePath } = location;
   return `${repository.owner}/${repository.dtag}:${folderOf(imagePath)}`;
+}
+
+/**
+ * The panel Regenerate rebuilds from an origin: how many images and videos
+ * its sources attach, and for a video the mode and the picks the sidecar
+ * keeps in its origin (first frame; Extend or Edit).
+ */
+export function regenerateSetup(origin: ImageOrigin): {
+  images: number;
+  options: {
+    mode?: string;
+    picks: Record<string, string>;
+    videos: number;
+  };
+} {
+  const videos = origin.sources.filter((s) => s.m?.startsWith("video/")).length;
+  const images = origin.sources.length - videos;
+  if (!isVideoOrigin(origin)) return { images, options: { picks: {}, videos } };
+  const picks: Record<string, string> = {};
+  if (origin.frame) picks.frame = origin.frame;
+  if (origin.mode === "video-extend") picks.action = "extend";
+  if (origin.mode === "video-edit") picks.action = "edit";
+  return { images, options: { mode: VIDEO_MODE, picks, videos } };
 }
 
 /** The message Regenerate posts: the mention and prompt, plus every source in order. */

@@ -54,6 +54,7 @@ import {
 import { EntityLinkAnchor, useOpenEntityLink } from "./markdown/entityLinks";
 import { ExternalLinkAnchor } from "./markdown/ExternalLinkAnchor";
 import { FileCard, ImageSidecarFrame } from "./markdown/FileCard";
+import { VIDEO_INSET_CLASS } from "./markdown/imageSidecarAttachment";
 import {
   AuthoredDeepLinkAnchor,
   ChannelDeepLinkAnchor,
@@ -1483,20 +1484,17 @@ export function createMarkdownComponents(
       const resolvedSrc = src ? rewriteRelayUrl(src) : src;
       if (isVideo && src && resolvedSrc) {
         return (
-          <span
-            className={cn(
-              mediaInset && "mx-1.5 block max-w-[calc(100%-0.75rem)]",
-            )}
-            data-block-media=""
-          >
-            <MarkdownVideoPlayer
-              key={src ?? resolvedSrc}
-              alt={alt}
-              entry={entry}
-              resolvedSrc={resolvedSrc}
-              src={src}
-            />
-          </span>
+          <ImageSidecarFrame src={src}>
+            <span className={cn("block", mediaInset && VIDEO_INSET_CLASS)}>
+              <MarkdownVideoPlayer
+                key={src ?? resolvedSrc}
+                alt={alt}
+                entry={entry}
+                resolvedSrc={resolvedSrc}
+                src={src}
+              />
+            </span>
+          </ImageSidecarFrame>
         );
       }
       return (

@@ -11,6 +11,8 @@ export type RepositoryFileContentSource = {
   loadBytes?: (path: string) => Promise<Uint8Array<ArrayBuffer> | null>;
   /** Thumbnails for the tiles view, read from one checkout. */
   loadThumbnails?: (paths: string[]) => Promise<ProjectRepoThumbnail[]>;
+  /** A byte-range URL for a file (videos), or null where there is none. */
+  mediaUrl?: (path: string) => Promise<string | null>;
   /** The repository these files are from, for actions that reach its channel. */
   repository?: Repository;
 };

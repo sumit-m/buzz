@@ -216,6 +216,13 @@ pub fn run() {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
     };
     let app = app_menu::install(builder)
+        // LOCAL DIVERGENCE: repository files by byte range (`project_git_media`).
+        .register_asynchronous_uri_scheme_protocol("buzz-repo", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(commands::handle_buzz_repo(&app, &request));
+            });
+        })
         .register_asynchronous_uri_scheme_protocol("buzz-media", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -225,6 +232,8 @@ pub fn run() {
         })
         .manage(build_app_state())
         .manage(ClipboardState::new())
+        .manage(commands::RepoMediaSessions::default())
+        .manage(commands::RepoClones::default())
         .manage(InstallerDownloads::default())
         .manage(PendingCommunityDeepLinks::default())
         .manage(PendingNavigationDeepLinks::default())
@@ -239,6 +248,8 @@ pub fn run() {
         .manage(channel_head_cache::ChannelHeadCacheStore::default())
         .setup(move |app| {
             let app_handle = app.handle().clone();
+            // LOCAL DIVERGENCE: repo clones a crashed or closed app left behind.
+            std::thread::spawn(commands::remove_stale_repo_clones);
             recover_new_app_installer_downloads(&app_handle);
             #[cfg(target_os = "macos")]
             {
@@ -595,6 +606,8 @@ pub fn run() {
             get_project_local_repo_file_content,
             get_project_local_repo_file_bytes,
             get_project_local_repo_thumbnails,
+            open_project_repo_media,
+            open_project_local_repo_media,
             get_project_repo_sync_status,
             list_project_local_repositories,
             open_project_repository_folder,
@@ -998,6 +1011,7 @@ pub fn run() {
         RunEvent::Exit => {
             shut_down_app(app_handle, &run_shutdown_done);
             app_handle.state::<ClipboardState>().release();
+            app_handle.state::<commands::RepoClones>().clear();
             #[cfg(all(feature = "mesh-llm", target_os = "macos"))]
             if restart_requested.load(Ordering::SeqCst) {
                 relaunch_after_mesh_shutdown(app_handle);

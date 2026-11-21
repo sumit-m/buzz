@@ -1,12 +1,19 @@
 import {
   Check,
+  Clock,
+  ClockPlus,
   GitBranch,
   Image as ImageIcon,
+  ImagePlay,
+  Layers,
   LoaderCircle,
   type LucideIcon,
+  Minus,
+  Plus,
   Shapes,
   SlidersHorizontal,
   Sparkles,
+  Speech,
   UserPlus,
   WandSparkles,
   X,
@@ -14,6 +21,7 @@ import {
 import * as React from "react";
 
 import {
+  activePreset,
   applyPreset,
   type ComposerControl,
   controlShown,
@@ -22,9 +30,9 @@ import {
   optionsFor,
   pickValue,
   presetControl,
+  presetOptions,
   repoControl,
   resolvePanel,
-  scaledSize,
   setMode,
   setRepo,
   valueControls,
@@ -45,10 +53,21 @@ const ICONS: Record<string, LucideIcon> = {
   photo: ImageIcon,
   "user-plus": UserPlus,
   shapes: Shapes,
+  layers: Layers,
+  "image-play": ImagePlay,
+  speech: Speech,
+  clock: Clock,
+  "clock-plus": ClockPlus,
 };
 
 const BUTTON_CLASS =
   "inline-flex h-8 items-center gap-2 rounded-full border border-border/60 px-3 text-sm text-foreground transition-colors hover:bg-muted/60 data-[state=open]:bg-muted/70";
+
+/** `16:9` as a shape to draw, for an option with no pixel size. */
+function ratioOf(value: string): [number, number] | undefined {
+  const match = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(value);
+  return match ? [Number(match[1]), Number(match[2])] : undefined;
+}
 
 function Shape({ size, max }: { size?: [number, number]; max: number }) {
   if (!size) {
@@ -167,6 +186,59 @@ function ListRows({
   );
 }
 
+/** − N +, changed only by its buttons. */
+function NumberStepper({
+  max,
+  min,
+  onChange,
+  unit,
+  value,
+}: {
+  max: number;
+  min: number;
+  onChange: (value: number) => void;
+  unit?: string;
+  value: number;
+}) {
+  const set = (next: number) => {
+    const clamped = Math.min(max, Math.max(min, next));
+    if (clamped !== value) onChange(clamped);
+  };
+  const stepClass =
+    "flex h-8 w-8 items-center justify-center rounded-md border border-border/60 text-foreground hover:bg-muted/60 disabled:opacity-40";
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        aria-label="Fewer"
+        className={stepClass}
+        disabled={value <= min}
+        onClick={() => set(value - 1)}
+        type="button"
+      >
+        <Minus className="h-3.5 w-3.5" />
+      </button>
+      <output
+        aria-live="polite"
+        className="flex h-8 w-12 items-center justify-center rounded-md border border-border/60 text-sm tabular-nums"
+      >
+        {value}
+      </output>
+      <button
+        aria-label="More"
+        className={stepClass}
+        disabled={value >= max}
+        onClick={() => set(value + 1)}
+        type="button"
+      >
+        <Plus className="h-3.5 w-3.5" />
+      </button>
+      {unit ? (
+        <span className="text-sm text-muted-foreground">{unit.trim()}</span>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * LOCAL DIVERGENCE: the message-box panel a custom harness declares — a mode
  * toggle (rendered separately, top right) and a row of popup controls. It
@@ -200,6 +272,7 @@ export function ComposerHarnessControls({
   const openChange = (id: string) => (open: boolean) =>
     setOpenId(open ? id : null);
   const preset = presetControl(spec);
+  const pickedPreset = activePreset(state, spec);
   const repo = repoControl(spec);
   const close = (next: ComposerPanelState) => {
     onChange(next);
@@ -212,7 +285,12 @@ export function ComposerHarnessControls({
   const renderValueControl = (control: ComposerControl) => {
     const current = resolved.options[control.id] ?? null;
     const value = resolved.values[control.id] ?? "";
-    const options = optionsFor(control, state.mode, resolved.values);
+    const options = optionsFor(
+      control,
+      state.mode,
+      resolved.values,
+      state.images,
+    );
     const Icon = control.icon ? ICONS[control.icon] : undefined;
     const testId = `composer-control-${control.id}`;
     const onOpenChange = (open: boolean) => {
@@ -229,35 +307,59 @@ export function ComposerHarnessControls({
           testId={testId}
           trigger={
             <>
-              <Shape max={14} size={current?.size} />
+              <Shape max={14} size={current?.size ?? ratioOf(value)} />
               {current?.label ?? value}
             </>
           }
         >
           <div className="grid grid-cols-3 gap-1.5">
-            {options.map((option) => {
-              const size = scaledSize(option, resolved, spec);
-              return (
-                <button
-                  className={cn(
-                    "flex h-24 w-20 flex-col items-center justify-end gap-1.5 rounded-md pb-2 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                    value === option.value && "bg-muted/70 text-foreground",
-                  )}
-                  key={option.value}
-                  onClick={() => pick(control, option.value)}
-                  type="button"
-                >
-                  <Shape max={30} size={option.size} />
-                  <span>{option.label}</span>
-                  {size ? (
-                    <span className="-mt-1 text-[11px] text-muted-foreground">
-                      {size[0]}×{size[1]}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
+            {options.map((option) => (
+              <button
+                className={cn(
+                  "flex h-24 w-20 flex-col items-center justify-end gap-1.5 rounded-md pb-2 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  value === option.value && "bg-muted/70 text-foreground",
+                )}
+                key={option.value}
+                onClick={() => pick(control, option.value)}
+                type="button"
+              >
+                <Shape max={30} size={option.size ?? ratioOf(option.value)} />
+                <span>{option.label}</span>
+                {option.hint ? (
+                  <span className="-mt-1 text-2xs text-muted-foreground">
+                    {option.hint}
+                  </span>
+                ) : null}
+              </button>
+            ))}
           </div>
+        </ControlPopup>
+      );
+    }
+    if (control.kind === "number") {
+      return (
+        <ControlPopup
+          key={control.id}
+          label={control.label}
+          onOpenChange={onOpenChange}
+          open={openId === control.id}
+          testId={testId}
+          trigger={
+            <>
+              {Icon ? <Icon className="h-4 w-4" /> : null}
+              {current?.label ?? value}
+            </>
+          }
+        >
+          <NumberStepper
+            max={Number(options[options.length - 1]?.value ?? value)}
+            min={Number(options[0]?.value ?? value)}
+            onChange={(next) =>
+              onChange(pickValue(state, spec, control.id, String(next)))
+            }
+            unit={control.unit}
+            value={Number(value)}
+          />
         </ControlPopup>
       );
     }
@@ -332,8 +434,10 @@ export function ComposerHarnessControls({
       data-testid="composer-harness-controls"
     >
       <div className="-ml-2 flex flex-wrap items-center gap-1.5">
-        {valueControls(spec).map(renderValueControl)}
-        {preset ? (
+        {valueControls(spec)
+          .filter((control) => controlShown(control, resolved))
+          .map(renderValueControl)}
+        {preset && presetOptions(spec, state.mode).length > 0 ? (
           <ControlPopup
             label={preset.label}
             onOpenChange={(open) => {
@@ -345,8 +449,8 @@ export function ComposerHarnessControls({
             trigger={
               <>
                 <PresetIcon className="h-4 w-4" />
-                <span className={state.preset ? "" : "text-muted-foreground"}>
-                  {state.preset ?? preset.label}
+                <span className={pickedPreset ? "" : "text-muted-foreground"}>
+                  {pickedPreset ?? preset.label}
                 </span>
               </>
             }
@@ -355,7 +459,7 @@ export function ComposerHarnessControls({
               onPick={(picked) => close(applyPreset(state, spec, picked))}
               options={[
                 { value: "", label: "None" },
-                ...preset.options.map((option) => ({
+                ...presetOptions(spec, state.mode).map((option) => ({
                   value: option.value,
                   label: option.label,
                   hint: Object.entries(option.sets ?? {})
@@ -369,7 +473,7 @@ export function ComposerHarnessControls({
                     .join(" · "),
                 })),
               ]}
-              selected={state.preset ?? ""}
+              selected={pickedPreset ?? ""}
             />
           </ControlPopup>
         ) : null}

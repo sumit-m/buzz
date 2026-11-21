@@ -1,3 +1,4 @@
+import { videoMimeForPath } from "./repositoryVideo";
 import { imageMimeForPath } from "./useRepositoryImagePreview";
 
 export type RepositoryViewMode = "details" | "tiles";
@@ -30,12 +31,14 @@ function stem(name: string): string {
 }
 
 /**
- * Images for the masonry grid and everything else for icon tiles, minus each
- * image's `.json` sidecar (same name, `.json` extension, same folder).
+ * Images and videos for the masonry grid and everything else for icon tiles,
+ * minus each one's `.json` sidecar (same name, `.json` extension, same folder).
  */
 export function splitTileEntries<T extends TileEntryShape>(entries: T[]) {
   const isImage = (entry: T) =>
-    entry.type === "file" && imageMimeForPath(entry.name) !== null;
+    entry.type === "file" &&
+    (imageMimeForPath(entry.name) !== null ||
+      videoMimeForPath(entry.name) !== null);
   const imageStems = new Set(
     entries.filter(isImage).map((entry) => stem(entry.name)),
   );

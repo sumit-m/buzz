@@ -87,6 +87,7 @@ test("parseImageSidecar reads mage-agent's origin block", () => {
         dim: "896x1152",
       },
     ],
+    frame: null,
     repo: "owner/site",
   });
   assert.equal(sidecar.fields.length, 0);
@@ -121,4 +122,41 @@ test("parseImageSidecar lists every source in order, ahead of the single one", (
     origin.sources.map((source) => source.url),
     ["https://relay/media/a.png", "https://relay/media/b.png"],
   );
+});
+
+test("a video sidecar keeps its mode, frame, length and voices", () => {
+  const sidecar = parseImageSidecar(
+    JSON.stringify({
+      prompt: "@eve waves",
+      type: "video",
+      duration: 8,
+      voices: ["eve"],
+      buzz: {
+        mode: "video",
+        frame: "2",
+        sources: [{ url: "https://r/a.jpg", m: "image/jpeg" }],
+      },
+    }),
+  );
+  assert.equal(sidecar.origin.mode, "video");
+  assert.equal(sidecar.origin.frame, "2");
+  const fields = Object.fromEntries(
+    sidecar.fields.map((f) => [f.label, f.value]),
+  );
+  assert.equal(fields.Length, "8s");
+  assert.equal(fields.Voices, "eve");
+});
+
+test("an extension shows its length; its added seconds are kept but hidden", () => {
+  const now = parseImageSidecar(
+    JSON.stringify({ type: "video-extend", duration: 6, extend_by: 3 }),
+  );
+  assert.deepEqual(
+    now.fields.map((f) => [f.label, f.value]),
+    [
+      ["Length", "6s"],
+      ["Type", "video-extend"],
+    ],
+  );
+  assert.equal(now.values.extend_by, "3");
 });

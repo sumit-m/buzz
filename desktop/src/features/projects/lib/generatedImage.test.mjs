@@ -10,6 +10,7 @@ import {
   parseRepoValue,
   planRelocation,
   regenerateMessage,
+  regenerateSetup,
   repoValueFor,
 } from "./generatedImage.ts";
 
@@ -211,4 +212,43 @@ test("regenerate needs an origin, and each source's upload", () => {
     ["imeta", "url https://r/media/a.png", "m image/png", "x ab", "dim 9x9"],
     ["imeta", "url https://r/media/b.png", "m image/png", "x cd"],
   ]);
+});
+
+test("a video's Regenerate rebuilds Video mode with its frame or action", () => {
+  const image = { url: "https://r/a.jpg", m: "image/jpeg", x: "a" };
+  const video = { url: "https://r/v.mp4", m: "video/mp4", x: "v" };
+  assert.deepEqual(
+    regenerateSetup({
+      mode: "video",
+      sources: [image],
+      frame: "1",
+      repo: null,
+    }),
+    { images: 1, options: { mode: "video", picks: { frame: "1" }, videos: 0 } },
+  );
+  assert.deepEqual(
+    regenerateSetup({
+      mode: "video-extend",
+      sources: [video],
+      frame: null,
+      repo: null,
+    }),
+    {
+      images: 0,
+      options: { mode: "video", picks: { action: "extend" }, videos: 1 },
+    },
+  );
+  assert.deepEqual(
+    regenerateSetup({
+      mode: "edit",
+      sources: [image, image],
+      frame: null,
+      repo: null,
+    }),
+    { images: 2, options: { picks: {}, videos: 0 } },
+  );
+  assert.equal(
+    canRegenerate({ mode: "video", sources: [], frame: null, repo: null }),
+    true,
+  );
 });

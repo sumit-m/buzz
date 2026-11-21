@@ -9,6 +9,11 @@ import {
   getProjectRepoFileContent,
   getProjectRepoThumbnails,
 } from "@/shared/api/projectGit";
+import {
+  openProjectLocalRepoMedia,
+  openProjectRepoMedia,
+  repoMediaUrl,
+} from "@/shared/api/projectRepoMedia";
 import type { RepositoryFileContentSource } from "./useRepositoryFileContent";
 
 type RepositoryFileContentSourceInput = {
@@ -63,6 +68,14 @@ export function useRepositoryFileContentSource({
             cloneUrl: repository.cloneUrls[0] ?? null,
             paths,
           }),
+        mediaUrl: async (path) => {
+          const token = await openProjectLocalRepoMedia({
+            reposDir,
+            projectDtag: repository.dtag,
+            cloneUrl: repository.cloneUrls[0] ?? null,
+          });
+          return token ? repoMediaUrl(token, path) : null;
+        },
         repository,
       };
     }
@@ -110,6 +123,16 @@ export function useRepositoryFileContentSource({
           targetCommit,
           paths,
         }),
+      mediaUrl: async (path) =>
+        repoMediaUrl(
+          await openProjectRepoMedia({
+            cloneUrl,
+            defaultBranch: activeBranch ?? repository.defaultBranch,
+            targetRef,
+            targetCommit,
+          }),
+          path,
+        ),
       repository,
     };
   }, [

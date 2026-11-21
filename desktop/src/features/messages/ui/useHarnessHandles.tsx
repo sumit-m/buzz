@@ -231,11 +231,15 @@ export function useHarnessHandles({
     editor.commands.focus();
   };
 
-  // Image references show inline, so they get no chip above the prompt.
+  // Image references show inline, so they get no tile. An unknown handle
+  // gets a "Not found" tile when it could name something: an attachment
+  // (`@image4`), or an asset while the panel has asset menus.
   const handles = enabled
-    ? uniqueHandles(findHandles(text, mentionNames)).filter(
-        (handle) => index.get(handle.toLowerCase())?.control !== IMAGES_CONTROL,
-      )
+    ? uniqueHandles(findHandles(text, mentionNames)).filter((handle) => {
+        const entry = index.get(handle.toLowerCase());
+        if (entry) return entry.control !== IMAGES_CONTROL;
+        return menus.length > 0 || /^image\d+$/i.test(handle);
+      })
     : [];
 
   return {

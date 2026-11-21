@@ -78,6 +78,7 @@ export function useHarnessComposerPanel({
   mentionNames,
   mentionPubkeys,
   text,
+  videoCount,
 }: {
   addressedPubkeys: readonly string[];
   channelId: string | null;
@@ -98,6 +99,7 @@ export function useHarnessComposerPanel({
   mentionNames: readonly string[];
   mentionPubkeys: readonly string[];
   text: string;
+  videoCount: number;
 }) {
   const composers = useQuery({
     queryKey: ["harness-composers"],
@@ -144,6 +146,7 @@ export function useHarnessComposerPanel({
   const [state, setStateRaw] = React.useState<ComposerPanelState | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const imageCountRef = React.useRef(imageCount);
+  const videoCountRef = React.useRef(videoCount);
 
   const setState = React.useCallback(
     (next: ComposerPanelState) => {
@@ -173,6 +176,7 @@ export function useHarnessComposerPanel({
       initialPanelState(spec, saved),
       spec,
       imageCountRef.current,
+      videoCountRef.current,
     );
     statesRef.current.set(panelKey, initial);
     setStateRaw(initial);
@@ -199,6 +203,7 @@ export function useHarnessComposerPanel({
       composers.data ?? [],
       agents.data ?? [],
       request.authorPubkey,
+      request.values,
     );
     if (!target) return;
     const { agent, harness } = target;
@@ -207,7 +212,12 @@ export function useHarnessComposerPanel({
       request.repo !== undefined
         ? request.repo
         : (loadComposerMemory(channelId, harness.harnessId)?.repo ?? null);
-    const next = editStateFromSidecar(harness.composer, request.values, repo);
+    const next = editStateFromSidecar(
+      harness.composer,
+      request.values,
+      repo,
+      request.image.type.startsWith("video/"),
+    );
     statesRef.current.set(key, next);
     editKeysRef.current.add(key);
     const offered = request.repository;
@@ -254,10 +264,12 @@ export function useHarnessComposerPanel({
 
   // Attachments drive Auto, the image limit and (in a file with one) the mode.
   imageCountRef.current = imageCount;
+  videoCountRef.current = videoCount;
   React.useEffect(() => {
-    if (!spec || !state || state.images === imageCount) return;
-    setState(followAttachments(state, spec, imageCount));
-  }, [imageCount, setState, spec, state]);
+    if (!spec || !state) return;
+    if (state.images === imageCount && state.videos === videoCount) return;
+    setState(followAttachments(state, spec, imageCount, videoCount));
+  }, [imageCount, setState, spec, state, videoCount]);
 
   const extraAddressKey = (extraRepositoryAddresses ?? []).join(" ");
   const repositories = React.useMemo(() => {
@@ -300,11 +312,31 @@ export function useHarnessComposerPanel({
       ),
     };
   }, [spec, state]);
+  // An image a shown `imagePick` control picked shows that control's label.
+  const imageTags = React.useMemo(() => {
+    const tags = new Map<string, string>();
+    if (!spec || !state) return tags;
+    const resolved = resolvePanel(state, spec);
+    for (const control of spec.controls) {
+      if (control.kind !== "imagePick" || !controlShown(control, resolved)) {
+        continue;
+      }
+      const picked = images[Number(resolved.values[control.id]) - 1];
+      if (picked) tags.set(picked.url, control.label);
+    }
+    return tags;
+  }, [images, spec, state]);
+  // The addressed agent is never a handle, even typed out rather than picked.
+  const agentName = active?.agent.name;
+  const handleSkipNames = React.useMemo(
+    () => (agentName ? [...mentionNames, agentName] : mentionNames),
+    [agentName, mentionNames],
+  );
   const handles = useHarnessHandles({
     editor,
     harnessId,
     images: imageRefsOn ? images : [],
-    mentionNames,
+    mentionNames: handleSkipNames,
     spec: visible ? shownSpec : null,
     text,
   });
@@ -356,6 +388,8 @@ export function useHarnessComposerPanel({
     promptExtras: handles.autocomplete,
     /** Tiles for the prompt's `@handles`, beside the attachment thumbnails. */
     handleTiles: handles.tiles,
+    /** The picked role of an attached image (a video's first frame), by URL. */
+    imageTag: (url: string): string | undefined => imageTags.get(url),
     /** Inserts an attached image's reference; null when the model takes none. */
     insertImage: imageRefsOn ? insertImage : null,
     /** False (with the reason shown in the panel) when the request can't go. */

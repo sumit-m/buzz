@@ -109,6 +109,8 @@ type ComposerAttachmentsProps = {
   onEditSave?: (url: string, bytes: Uint8Array) => Promise<void>;
   /** Puts an image's reference in the prompt, by its original URL. */
   onInsertImage?: (url: string) => void;
+  /** A role to show on an image, by its original URL. */
+  imageTag?: (url: string) => string | undefined;
   onRemove: (url: string) => void;
   /** Restore the pre-edit original for an annotated attachment. */
   onRevert?: (url: string) => void;
@@ -248,6 +250,8 @@ type MediaAttachmentItemProps = {
   onToggleSpoiler?: (url: string) => void;
   /** Set when this attachment is an annotated replacement of an original. */
   originalUrl?: string;
+  /** A role shown on the thumbnail (a video's first frame). */
+  tag?: string;
 };
 
 /**
@@ -273,6 +277,7 @@ const MediaAttachmentItem = React.forwardRef<
     onRevert,
     onToggleSpoiler,
     originalUrl,
+    tag,
   },
   ref,
 ) {
@@ -557,6 +562,14 @@ const MediaAttachmentItem = React.forwardRef<
           </TooltipTrigger>
           <TooltipContent>Remove attachment</TooltipContent>
         </Tooltip>
+        {tag ? (
+          <span
+            className="pointer-events-none absolute left-1 top-1 z-10 rounded bg-background/85 px-1 text-3xs font-medium text-foreground"
+            data-testid="composer-attachment-tag"
+          >
+            {tag}
+          </span>
+        ) : null}
         {onInsert && !isVideo ? (
           <Tooltip disableHoverableContent>
             <TooltipTrigger asChild>
@@ -631,6 +644,7 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
   queuedPreviews = [],
   onEditSave,
   onInsertImage,
+  imageTag,
   onRemove,
   onRevert,
   originalUrlByUrl,
@@ -782,6 +796,7 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
                 onRevert={onRevert}
                 onToggleSpoiler={onToggleSpoiler}
                 originalUrl={originalUrl}
+                tag={imageTag?.(originalUrl ?? attachment.url)}
               />
             );
           })}

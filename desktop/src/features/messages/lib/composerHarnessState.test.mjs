@@ -23,6 +23,7 @@ import {
   scaledSize,
   sendBlockReason,
   setMode,
+  shortestDuration,
   setRepo,
   stateFromSidecar,
   takesImages,
@@ -720,4 +721,38 @@ test("an edit without an author goes to the agent whose model made the file", ()
   assert.equal(pick("aa", { model_id: "grok-imagine-video" }), "AA");
   assert.equal(pick(null, { model_id: "other" }), "AA");
   assert.equal(pick(null), "AA");
+});
+
+test("Extend is blocked on a video shorter than its minimum", () => {
+  const spec = structuredClone(videoSpec);
+  spec.controls.find((c) => c.id === "action").options[0].minVideoSeconds = 2;
+  const attached = followAttachments(
+    setMode(initialPanelState(spec), "video"),
+    spec,
+    0,
+    1,
+  );
+  assert.equal(
+    sendBlockReason(attached, spec, 1.04),
+    "Input video must be at least 2s long, the attached video length is 1s",
+  );
+  assert.equal(sendBlockReason(attached, spec, 2), null);
+  assert.equal(sendBlockReason(attached, spec, null), null);
+  assert.equal(
+    sendBlockReason(pickValue(attached, spec, "action", "edit"), spec, 1),
+    null,
+  );
+});
+
+test("shortestDuration reads only videos with a known length", () => {
+  assert.equal(
+    shortestDuration([
+      { type: "video/mp4", duration: 6 },
+      { type: "image/png", duration: 0.5 },
+      { type: "video/mp4", duration: 1.5 },
+      { type: "video/mp4" },
+    ]),
+    1.5,
+  );
+  assert.equal(shortestDuration([{ type: "video/mp4" }]), null);
 });

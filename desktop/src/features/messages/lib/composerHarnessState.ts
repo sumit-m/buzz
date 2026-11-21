@@ -26,6 +26,8 @@ export type ComposerOption = {
   maxImages?: number;
   /** While picked, attached images can be inserted into the prompt. */
   imageRefs?: boolean;
+  /** While picked, sending is blocked when an attached video is shorter. */
+  minVideoSeconds?: number;
 };
 
 export type ComposerControl = {
@@ -559,10 +561,25 @@ export function imageRules(
   return { refs, max };
 }
 
-/** Why sending is blocked, or null. */
+/** The shortest length among attached videos, or null when none is known. */
+export function shortestDuration(
+  media: readonly { type: string; duration?: number }[],
+): number | null {
+  const lengths = media
+    .filter((item) => item.type.startsWith("video/"))
+    .map((item) => item.duration)
+    .filter((seconds): seconds is number => Number.isFinite(seconds));
+  return lengths.length > 0 ? Math.min(...lengths) : null;
+}
+
+/**
+ * Why sending is blocked, or null. `shortestVideo` is the shortest attached
+ * video's length in seconds, when known.
+ */
 export function sendBlockReason(
   state: ComposerPanelState,
   spec: ComposerSpec,
+  shortestVideo: number | null = null,
 ): string | null {
   const mode = spec.modes.find((candidate) => candidate.id === state.mode);
   if (mode?.requiresImage && state.images === 0) {
@@ -575,6 +592,17 @@ export function sendBlockReason(
   if (max && state.images > max.count) {
     const images = max.count === 1 ? "1 image" : `${max.count} images`;
     return `${max.label} takes up to ${images}; remove ${state.images - max.count}`;
+  }
+  if (state.videos > 0 && shortestVideo !== null) {
+    const picked = Object.values(resolvePanel(state, spec).options);
+    const tooShort = picked.find(
+      (option) =>
+        option?.minVideoSeconds && shortestVideo < option.minVideoSeconds,
+    );
+    if (tooShort?.minVideoSeconds) {
+      const seconds = Math.round(shortestVideo * 10) / 10;
+      return `Input video must be at least ${tooShort.minVideoSeconds}s long, the attached video length is ${seconds}s`;
+    }
   }
   return null;
 }

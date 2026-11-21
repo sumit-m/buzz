@@ -155,6 +155,10 @@ pub struct ComposerOption {
     /// While picked, attached images can be inserted into the prompt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub image_refs: bool,
+    /// While picked, sending is blocked when an attached video is shorter
+    /// than this many seconds (Extend's 2s minimum).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_video_seconds: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -196,6 +200,8 @@ enum RawOption {
         max_images: Option<u32>,
         #[serde(default, rename = "imageRefs")]
         image_refs: bool,
+        #[serde(default, rename = "minVideoSeconds")]
+        min_video_seconds: Option<u32>,
     },
 }
 
@@ -216,6 +222,7 @@ impl From<RawOption> for ComposerOption {
                 defaults: BTreeMap::new(),
                 max_images: None,
                 image_refs: false,
+                min_video_seconds: None,
             },
             RawOption::Full {
                 value,
@@ -231,6 +238,7 @@ impl From<RawOption> for ComposerOption {
                 defaults,
                 max_images,
                 image_refs,
+                min_video_seconds,
             } => ComposerOption {
                 label: label.unwrap_or_else(|| value.clone()),
                 value,
@@ -245,6 +253,7 @@ impl From<RawOption> for ComposerOption {
                 defaults,
                 max_images,
                 image_refs,
+                min_video_seconds,
             },
         }
     }
@@ -282,6 +291,8 @@ const ATTACHMENT_KEYS: [(&str, &[&str]); 2] = [
 ];
 /// The most images one request may declare (`maxImages`).
 const MAX_IMAGES: u32 = 50;
+/// The relay's longest video, the most `minVideoSeconds` may ask for.
+const MAX_VIDEO_SECONDS: u32 = 600;
 /// The widest range a `number` control may offer.
 const MAX_NUMBER_SPAN: u32 = 100;
 /// Controls holding one value, which `when` may follow.
@@ -457,6 +468,15 @@ pub(crate) fn validate(spec: &ComposerSpec) -> Result<(), String> {
             check_when(&control.id, &option.when, &earlier)?;
             if option.max_images.is_some_and(|n| n == 0 || n > MAX_IMAGES) {
                 return Err(format!("{}: maxImages must be 1-{MAX_IMAGES}", control.id));
+            }
+            if option
+                .min_video_seconds
+                .is_some_and(|n| n == 0 || n > MAX_VIDEO_SECONDS)
+            {
+                return Err(format!(
+                    "{}: minVideoSeconds must be 1-{MAX_VIDEO_SECONDS}",
+                    control.id
+                ));
             }
             if option.sizes.len() > MAX_SIZES {
                 return Err(format!("{}: at most {MAX_SIZES} sizes", control.id));
@@ -992,7 +1012,8 @@ mod tests {
             "modes": [{ "id": "image", "label": "Image" }, { "id": "video", "label": "Video" }],
             "controls": [
                 { "id": "action", "kind": "segmented", "label": "Action", "modes": ["video"],
-                  "when": { "@videos": ["attached"] }, "options": ["extend", "edit"] },
+                  "when": { "@videos": ["attached"] },
+                  "options": [{ "value": "extend", "minVideoSeconds": 2 }, "edit"] },
                 { "id": "frame", "kind": "imagePick", "label": "Frame", "icon": "image-play",
                   "modes": ["video"], "default": "1" },
                 { "id": "res", "kind": "segmented", "label": "Resolution",
@@ -1014,6 +1035,7 @@ mod tests {
         assert!(validate(&parsed).is_ok());
         assert_eq!(parsed.controls[4].unit.as_deref(), Some("s"));
         assert_eq!(parsed.controls[0].modes, ["video"]);
+        assert_eq!(parsed.controls[0].options[0].min_video_seconds, Some(2));
 
         let mut bad_mode = video_composer();
         bad_mode["controls"][0]["modes"] = serde_json::json!(["audio"]);
@@ -1030,6 +1052,10 @@ mod tests {
         let mut wide = video_composer();
         wide["controls"][3]["max"] = serde_json::json!(200);
         assert!(validate(&spec(wide)).is_err());
+
+        let mut no_seconds = video_composer();
+        no_seconds["controls"][0]["options"][0]["minVideoSeconds"] = 0.into();
+        assert!(validate(&spec(no_seconds)).is_err());
 
         let mut outside = video_composer();
         outside["controls"][4]["default"] = "20".into();

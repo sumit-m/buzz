@@ -69,6 +69,7 @@ import { useComposerLinkPreviews } from "./useComposerLinkPreviews";
 import { useAddressedAgentMentionRestore } from "./useAddressedAgentMentionRestore";
 import { scheduleSettleGatedAutoSubmit } from "./messageComposerAutoSubmit";
 import type { MessageComposerProps } from "./MessageComposer.types";
+import { shortestDuration } from "@/features/messages/lib/composerHarnessState";
 function MessageComposerImpl({
   audienceContext = null,
   channelId = null,
@@ -368,6 +369,7 @@ function MessageComposerImpl({
     },
     mentionNames: mentions.knownNames,
     mentionPubkeys: mentions.extractMentionPubkeys(previewContent),
+    shortestVideo: shortestDuration(media.pendingImeta),
     videoCount: [
       ...media.pendingImeta.map((m) => m.type),
       ...media.queuedAttachments.map((a) => a.file.type),

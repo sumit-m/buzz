@@ -77,6 +77,7 @@ export function useHarnessComposerPanel({
   loadDraft,
   mentionNames,
   mentionPubkeys,
+  shortestVideo = null,
   text,
   videoCount,
 }: {
@@ -98,6 +99,8 @@ export function useHarnessComposerPanel({
   /** Names Buzz highlights as mentions; never prompt handles. */
   mentionNames: readonly string[];
   mentionPubkeys: readonly string[];
+  /** The shortest attached video's length in seconds, when known. */
+  shortestVideo?: number | null;
   text: string;
   videoCount: number;
 }) {
@@ -395,7 +398,7 @@ export function useHarnessComposerPanel({
     /** False (with the reason shown in the panel) when the request can't go. */
     checkSend: () => {
       if (!spec || !state) return true;
-      const reason = sendBlockReason(state, spec);
+      const reason = sendBlockReason(state, spec, shortestVideo);
       setError(reason);
       return reason === null;
     },

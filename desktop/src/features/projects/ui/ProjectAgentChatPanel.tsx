@@ -346,6 +346,7 @@ export function ProjectAgentChatPanel({
               channel={activeConversation.channel}
               currentPubkey={identityQuery.data?.pubkey ?? null}
               selfAvatarUrl={profileQuery.data?.avatarUrl ?? null}
+              selfName={profileQuery.data?.displayName ?? null}
               opener={activeConversation.opener}
             />
           ) : (

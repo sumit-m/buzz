@@ -224,6 +224,7 @@ export function ConversationThread({
   agentAvatarUrl,
   currentPubkey,
   selfAvatarUrl,
+  selfName = null,
   opener,
 }: {
   channel: Channel;
@@ -231,6 +232,8 @@ export function ConversationThread({
   agentAvatarUrl: string | null;
   currentPubkey: string | null;
   selfAvatarUrl: string | null;
+  /** LOCAL DIVERGENCE: the viewer's own name, so an agent's `@name` tag resolves. */
+  selfName?: string | null;
   opener: ProjectsConversationOpener;
 }) {
   useChannelSubscription(channel);
@@ -255,6 +258,9 @@ export function ConversationThread({
   const normalizedCurrent = currentPubkey
     ? normalizePubkey(currentPubkey)
     : null;
+  // LOCAL DIVERGENCE (drop once upstream fixes it): a managed agent is the
+  // viewer's, so its replies read "managed by you", and the viewer keeps
+  // their name beside "You" for mention tags.
   const profiles = React.useMemo(
     () => ({
       [normalizePubkey(agent.pubkey)]: {
@@ -263,7 +269,7 @@ export function ConversationThread({
         isAgent: true,
         name: agent.name,
         nip05Handle: null,
-        ownerPubkey: null,
+        ownerPubkey: agent.isManaged ? normalizedCurrent : null,
       },
       ...(normalizedCurrent
         ? {
@@ -271,7 +277,7 @@ export function ConversationThread({
               avatarUrl: selfAvatarUrl,
               displayName: "You",
               isAgent: false,
-              name: null,
+              name: selfName,
               nip05Handle: null,
               ownerPubkey: null,
             },
@@ -279,11 +285,13 @@ export function ConversationThread({
         : {}),
     }),
     [
+      agent.isManaged,
       agent.name,
       agent.pubkey,
       agentAvatarUrl,
       normalizedCurrent,
       selfAvatarUrl,
+      selfName,
     ],
   );
   const conversationMessages = React.useMemo(() => {
@@ -780,6 +788,7 @@ export function ProjectsAgentPromptPage({
               channel={conversation.channel}
               currentPubkey={identityQuery.data?.pubkey ?? null}
               selfAvatarUrl={profileQuery.data?.avatarUrl ?? null}
+              selfName={profileQuery.data?.displayName ?? null}
               opener={conversation.opener}
             />
           </div>

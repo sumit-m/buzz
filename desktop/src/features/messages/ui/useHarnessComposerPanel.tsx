@@ -12,7 +12,6 @@ import {
   composerPayload,
   composerTag,
   controlShown,
-  editStateFromSidecar,
   editTargetFor,
   followAttachments,
   harnessComposerForAgent,
@@ -21,10 +20,12 @@ import {
   resolvePanel,
   sendBlockReason,
   toSavedState,
+  stateFromSidecar,
 } from "@/features/messages/lib/composerHarnessState";
 import {
   type HarnessEditRequest,
   onHarnessEditRequest,
+  setHarnessEditAgent,
   takeHarnessEditRequest,
 } from "@/features/messages/lib/harnessEditRequest";
 import {
@@ -91,11 +92,8 @@ export function useHarnessComposerPanel({
   imageCount: number;
   /** The draft's uploaded images, in attachment order, by original URL. */
   images: readonly AttachedImage[];
-  /** Mentions this agent and attaches this image in place of the draft's. */
-  loadDraft: (draft: {
-    image: ImetaMedia | File;
-    mention: DraftMentionRef;
-  }) => void;
+  /** Mentions this agent and attaches these files in place of the draft's. */
+  loadDraft: (draft: { media: ImetaMedia[]; mention: DraftMentionRef }) => void;
   /** Names Buzz highlights as mentions; never prompt handles. */
   mentionNames: readonly string[];
   mentionPubkeys: readonly string[];
@@ -215,11 +213,12 @@ export function useHarnessComposerPanel({
       request.repo !== undefined
         ? request.repo
         : (loadComposerMemory(channelId, harness.harnessId)?.repo ?? null);
-    const next = editStateFromSidecar(
+    const next = stateFromSidecar(
       harness.composer,
       request.values,
       repo,
-      request.image.type.startsWith("video/"),
+      request.setup.images,
+      request.setup.options,
     );
     statesRef.current.set(key, next);
     editKeysRef.current.add(key);
@@ -234,8 +233,9 @@ export function useHarnessComposerPanel({
       setStateRaw(next);
       setError(null);
     }
+    if (draftKey) setHarnessEditAgent(draftKey, agent.pubkey);
     loadDraftRef.current({
-      image: request.image,
+      media: request.media,
       mention: { displayName: agent.name, isAgent: true, pubkey: agent.pubkey },
     });
     const prompt = (request.prompt ?? "").replace(/\s+/g, " ").trim();

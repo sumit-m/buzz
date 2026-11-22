@@ -1,14 +1,13 @@
 import type { Repository } from "@/features/projects/projectModels";
-import type { ImetaEntry } from "@/shared/ui/markdown/types";
 import type { ImetaMedia } from "./imetaMediaMarkdown";
 
 /**
- * LOCAL DIVERGENCE: "Edit" on a generated image asks a message composer to
- * start an edit request from it: the image attached, the agent mentioned, its
- * prompt, and the panel set from its sidecar. A chat image goes to the
- * composer in its own pane and reuses its upload; a repository image goes to
- * the project's agent chat (a DM with the agent, opened first) as a file to
- * upload, saving back to its own folder.
+ * LOCAL DIVERGENCE: "Edit" on a generated image or video loads the request
+ * that made it into a message composer, unsent: Regenerate's request, open
+ * for changes. Its sources are attached (reusing their uploads), the agent
+ * mentioned with the prompt, and the panel set from the sidecar. A chat file
+ * goes to the composer in its own pane; a repository file to the project's
+ * agent chat (a DM with the agent, opened first).
  *
  * A request waits briefly for its composer, so one that mounts after the
  * navigation still takes it.
@@ -19,10 +18,16 @@ export type HarnessEditRequest = {
    * one ending in `:` is taken by any composer whose key starts with it.
    */
   draftKey: string;
-  /** Who posted the image; preferred as the agent to mention. */
+  /** The agent that made the file; preferred as the agent to mention. */
   authorPubkey: string | null;
-  image: ImetaMedia | File;
+  /** The request's own attachments, its sources in order. */
+  media: ImetaMedia[];
   prompt: string | null;
+  /** What the sources attach, and the mode and picks the sidecar's origin keeps. */
+  setup: {
+    images: number;
+    options: { mode?: string; picks: Record<string, string>; videos: number };
+  };
   /** Where to save (`<owner>/<repo>:<folder>`); left out, the channel's last. */
   repo?: string | null;
   /** Offered in the repo picker even when not bound to the composer's channel. */
@@ -51,6 +56,26 @@ export function openProjectChat(): boolean {
   if (!projectChatOpener) return false;
   projectChatOpener();
   return true;
+}
+
+const AGENT_EVENT = "buzz:harness-edit-agent";
+/** The agent each composer's loaded edit mentions, by draft key. */
+const editAgents = new Map<string, string>();
+
+/** Records (or with null, clears) the agent an edit loaded into `draftKey`'s composer. */
+export function setHarnessEditAgent(draftKey: string, pubkey: string | null) {
+  if (pubkey) editAgents.set(draftKey, pubkey);
+  else editAgents.delete(draftKey);
+  window.dispatchEvent(new Event(AGENT_EVENT));
+}
+
+export function harnessEditAgentFor(draftKey: string): string | null {
+  return editAgents.get(draftKey) ?? null;
+}
+
+export function onHarnessEditAgentChange(handler: () => void): () => void {
+  window.addEventListener(AGENT_EVENT, handler);
+  return () => window.removeEventListener(AGENT_EVENT, handler);
 }
 
 const DRAFT_KEY_ATTRIBUTE = "data-composer-draft-key";
@@ -103,22 +128,4 @@ export function messageAuthorNear(element: Element): string | null {
     element.closest(`[${AUTHOR_ATTRIBUTE}]`)?.getAttribute(AUTHOR_ATTRIBUTE) ??
     null
   );
-}
-
-/** A message attachment as composer media, reusing its upload. */
-export function imetaMediaFromEntry(
-  url: string,
-  entry: ImetaEntry | undefined,
-): ImetaMedia {
-  return {
-    url,
-    type: entry?.m ?? "image/jpeg",
-    sha256: entry?.x ?? "",
-    size: entry?.size ?? 0,
-    uploaded: 0,
-    ...(entry?.dim ? { dim: entry.dim } : {}),
-    ...(entry?.thumb ? { thumb: entry.thumb } : {}),
-    ...(entry?.image ? { image: entry.image } : {}),
-    ...(entry?.filename ? { filename: entry.filename } : {}),
-  };
 }

@@ -102,7 +102,6 @@ function MessageComposerImpl({
   showTopBorder = false,
   toolbarExtraActions,
   harnessRepositoryAddresses,
-  onHarnessEditAgent,
   typingParentEventId = null,
   typingRootEventId = null,
 }: MessageComposerProps) {
@@ -360,12 +359,10 @@ function MessageComposerImpl({
       ...media.queuedAttachments.map((a) => a.file.type),
     ].filter((type) => type.startsWith("image/")).length,
     images: attachedImages,
-    loadDraft: ({ image, mention }) => {
-      onHarnessEditAgent?.(mention.pubkey);
+    loadDraft: ({ media: attached, mention }) => {
       mentions.restoreDraftMentionRefs([mention]);
-      media.setPendingImeta(image instanceof File ? [] : [image]);
+      media.setPendingImeta(attached);
       media.clearQueuedAttachments();
-      if (image instanceof File) void media.uploadFile(image);
     },
     mentionNames: mentions.knownNames,
     mentionPubkeys: mentions.extractMentionPubkeys(previewContent),

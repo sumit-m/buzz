@@ -34,20 +34,19 @@ import {
 } from "./useGeneratedImageActions";
 
 /**
- * An image's prompt (with Copy Prompt, Edit where the caller supports it, and
- * a globe opening the generator's link to the image) and labelled fields from
- * its sidecar. Characters and references the prompt names (`@handle`) show
- * above it while a harness lists assets. With a `context`, it also offers
- * Regenerate and the repo button (where the image is saved; picking another
- * folder moves or copies it), and an edit shows the image it started from.
+ * An image's prompt (with Copy Prompt and a globe opening the generator's
+ * link to the image) and labelled fields from its sidecar. Characters and
+ * references the prompt names (`@handle`) show above it while a harness lists
+ * assets. With a `context`, it also offers Edit and Regenerate (the request
+ * that made it, opened in the composer or sent again) and the repo button
+ * (where the image is saved; picking another folder moves or copies it), and
+ * an edit shows the image it started from.
  */
 export function ImageInfoSidebar({
   context,
-  onEdit,
   sidecar,
 }: {
   context?: GeneratedImageContext;
-  onEdit?: (button: HTMLElement) => void;
   sidecar: ImageSidecar;
 }) {
   const { prompt } = sidecar;
@@ -101,10 +100,10 @@ export function ImageInfoSidebar({
               <Copy />
               Copy Prompt
             </Button>
-            {onEdit ? (
+            {actions.edit ? (
               <Button
                 data-testid="image-info-edit"
-                onClick={(event) => onEdit(event.currentTarget)}
+                onClick={(event) => void actions.edit?.(event.currentTarget)}
                 size="sm"
                 type="button"
                 variant="outline"

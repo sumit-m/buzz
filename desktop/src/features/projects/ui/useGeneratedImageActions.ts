@@ -10,6 +10,12 @@ import {
   editTargetFor,
   stateFromSidecar,
 } from "@/features/messages/lib/composerHarnessState";
+import {
+  composerDraftKeyNear,
+  openProjectChat,
+  PROJECT_CHAT_DRAFT_KEY_PREFIX,
+  requestHarnessEdit,
+} from "@/features/messages/lib/harnessEditRequest";
 import { useSendMessageMutation } from "@/features/messages/hooks";
 import { useProjectsQuery } from "@/features/projects/hooks";
 import {
@@ -19,6 +25,7 @@ import {
   regenerateSetup,
   fileName,
   folderLabel,
+  imetaFromSource,
   folderOf,
   type ImageLocation,
   locationFromMatches,
@@ -80,7 +87,8 @@ async function resolveAdd(add: CommitAdd): Promise<RepoFileAdd> {
  * LOCAL DIVERGENCE: the image info sidebar's repo button and Regenerate. The
  * image's repo location is looked up by file name in the repos it may be in
  * (only when asked), so a move made anywhere is still found. Regenerate goes
- * to the message's channel, or for a repository file to a DM with the agent.
+ * to the message's channel, or for a repository file to a DM with the agent;
+ * Edit loads that same request into the composer there, unsent.
  */
 export function useGeneratedImageActions({
   context,
@@ -358,7 +366,37 @@ export function useGeneratedImageActions({
     }
   };
 
+  /** Regenerate's request in the composer: the chat's own, or the project's agent chat. */
+  const edit = async (button: HTMLElement) => {
+    if (!origin || !target || !sidecar.prompt) return;
+    const draftKey = inDm
+      ? PROJECT_CHAT_DRAFT_KEY_PREFIX
+      : composerDraftKeyNear(button);
+    if (!draftKey || (inDm && !openProjectChat())) {
+      toast.error(
+        inDm
+          ? "Open the project's agent chat to edit this"
+          : "Open the message box to edit this",
+      );
+      return;
+    }
+    const saved = await fetchLocation().catch(() => null);
+    requestHarnessEdit({
+      authorPubkey: target.agent.pubkey,
+      draftKey,
+      media: origin.sources.map(imetaFromSource),
+      prompt: sidecar.prompt,
+      repo: saved ? repoValueFor(saved) : null,
+      repository: saved?.repository ?? current ?? undefined,
+      setup: regenerateSetup(origin),
+      values: sidecar.values,
+    });
+  };
+  const available =
+    context && canRegenerate(origin) && target && sidecar.prompt;
+
   return {
+    edit: available ? edit : null,
     location: {
       data: location.data,
       folder: location.data ? folderOf(location.data.imagePath) : null,
@@ -366,10 +404,9 @@ export function useGeneratedImageActions({
       isError: location.isError,
     },
     moving,
-    regenerate:
-      context && canRegenerate(origin) && target && sidecar.prompt
-        ? { blocked: regenerateBlocked, regenerating, run: regenerate }
-        : null,
+    regenerate: available
+      ? { blocked: regenerateBlocked, regenerating, run: regenerate }
+      : null,
     relocate,
     repositories,
     requestLocation: () => setLocationWanted(true),

@@ -7,7 +7,6 @@ import {
   composerPayload,
   composerTag,
   controlShown,
-  editStateFromSidecar,
   editTargetFor,
   effectiveValue,
   followAttachments,
@@ -309,11 +308,12 @@ test("an agent matches its harness by id or resolved command", () => {
   );
 });
 
-test("editStateFromSidecar starts the image mode from the image's settings", () => {
-  const state = editStateFromSidecar(
+test("a sidecar with an image attached starts the image mode from its settings", () => {
+  const state = stateFromSidecar(
     spec,
     { model_id: "mango-v2", aspect_ratio: "Square", resolution: "4K" },
     "site:img/",
+    1,
   );
   assert.equal(state.mode, "edit");
   assert.deepEqual(state.picks, { model: "mango-v2", aspect: "square" });
@@ -466,7 +466,7 @@ test("sizes come from the variant for the model and resolution", () => {
 });
 
 test("a sidecar's resolution matches regardless of case", () => {
-  const state = editStateFromSidecar(byModel, { resolution: "2k" }, null);
+  const state = stateFromSidecar(byModel, { resolution: "2k" }, null, 1);
   assert.equal(state.picks.res, "2K");
 });
 
@@ -654,7 +654,10 @@ test("presets for one mode are offered and sent only in that mode", () => {
 
 test("a video's sidecar opens Video mode for Edit and Regenerate", () => {
   const values = { model_id: "v10", duration: "4" };
-  const edit = editStateFromSidecar(videoSpec, values, null, true);
+  const edit = stateFromSidecar(videoSpec, values, null, 0, {
+    mode: "video",
+    videos: 1,
+  });
   assert.equal(edit.mode, "video");
   assert.equal(edit.videos, 1);
   assert.equal(composerPayload(edit, videoSpec).controls.action, "extend");

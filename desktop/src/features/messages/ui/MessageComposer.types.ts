@@ -113,8 +113,6 @@ export type MessageComposerProps = {
   toolbarExtraActions?: ReactNode;
   /** LOCAL DIVERGENCE: repos (by address) the harness repo picker also lists. */
   harnessRepositoryAddresses?: readonly string[];
-  /** LOCAL DIVERGENCE: an image edit loaded a request for this agent. */
-  onHarnessEditAgent?: (pubkey: string) => void;
   typingParentEventId?: string | null;
   typingRootEventId?: string | null;
 };

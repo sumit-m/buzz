@@ -28,6 +28,11 @@ import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { addChannelMembers } from "@/shared/api/tauri";
 import { sendChannelMessage } from "@/shared/api/tauriMessages";
+import {
+  harnessEditAgentFor,
+  onHarnessEditAgentChange,
+  setHarnessEditAgent,
+} from "@/features/messages/lib/harnessEditRequest";
 import type { Channel } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -103,12 +108,23 @@ export function ProjectAgentChatPanel({
   const channelsQuery = useChannelsQuery();
   const profileQuery = useProfileQuery();
   const openDmMutation = useOpenDmMutation();
+  const preparedDmRef = React.useRef<{
+    agentPubkey: string;
+    channel: Channel;
+  } | null>(null);
   const startAgentMutation = useStartManagedAgentMutation();
   // LOCAL DIVERGENCE: an image edit names its agent (mage); a different one
-  // than the conversation's starts a new DM with it on send.
-  const [harnessAgentPubkey, setHarnessAgentPubkey] = React.useState<
-    string | null
-  >(null);
+  // than the conversation's starts a new DM with it on send. Kept by draft
+  // key outside this panel, so a remount still knows whose draft it shows.
+  const draftKey = `project-agent:${storageScope ?? "unscoped"}`;
+  const harnessAgentPubkey = React.useSyncExternalStore(
+    onHarnessEditAgentChange,
+    () => harnessEditAgentFor(draftKey),
+  );
+  const clearHarnessAgent = React.useCallback(
+    () => setHarnessEditAgent(draftKey, null),
+    [draftKey],
+  );
   const harnessAgent = harnessAgentPubkey
     ? (candidates.find(
         (candidate) => candidate.pubkey === normalizePubkey(harnessAgentPubkey),
@@ -208,7 +224,15 @@ export function ProjectAgentChatPanel({
           relayScope,
           signerScope: identityQuery.data?.pubkey ?? null,
           startAgent: (input) => startAgentMutation.mutateAsync(input),
-          openDm: (input) => openDmMutation.mutateAsync(input),
+          // The DM the composer opened for this send, if it did: opening it
+          // again in the same second repeats the event, which the relay refuses.
+          openDm: (input) => {
+            const prepared = preparedDmRef.current;
+            preparedDmRef.current = null;
+            return prepared?.agentPubkey === selectedAgent.pubkey
+              ? Promise.resolve(prepared.channel)
+              : openDmMutation.mutateAsync(input);
+          },
           send: (request) =>
             sendChannelMessage(
               request.channelId,
@@ -226,7 +250,7 @@ export function ProjectAgentChatPanel({
             ),
         });
         if (!activeConversation) {
-          setHarnessAgentPubkey(null);
+          clearHarnessAgent();
           // Anchor the conversation to the exact accepted opener event: a
           // bare timestamp cannot isolate it from unrelated same-second DM
           // history.
@@ -258,6 +282,7 @@ export function ProjectAgentChatPanel({
     },
     [
       activeConversation,
+      clearHarnessAgent,
       contextPayload,
       homeChannel,
       identityQuery.data?.pubkey,
@@ -271,12 +296,26 @@ export function ProjectAgentChatPanel({
     ],
   );
 
+  // LOCAL DIVERGENCE: with no conversation (an image edit naming another
+  // agent), the composer sends into the DM with the selected agent, opened
+  // first so mentioning that agent doesn't try to add it to another DM.
+  const prepareAgentDm = React.useCallback(async () => {
+    if (!selectedAgent) return null;
+    const dm = await openDmMutation.mutateAsync({
+      pubkeys: [selectedAgent.pubkey],
+      expectedRelayUrl: relayScope ?? undefined,
+      expectedSignerPubkey: signerScope ?? undefined,
+    });
+    preparedDmRef.current = { agentPubkey: selectedAgent.pubkey, channel: dm };
+    return dm.id;
+  }, [openDmMutation, relayScope, selectedAgent, signerScope]);
+
   const handleClear = React.useCallback(() => {
     clearStoredProjectsAgentConversation(storageScope);
     setStoredConversation(null);
     setConversation(null);
-    setHarnessAgentPubkey(null);
-  }, [storageScope]);
+    clearHarnessAgent();
+  }, [clearHarnessAgent, storageScope]);
 
   const conversationBody = (
     <div
@@ -328,16 +367,18 @@ export function ProjectAgentChatPanel({
           <ProjectAgentSelectionComposerBanner items={context.selection} />
         ) : null}
         <MessageComposer
-          channelId={conversation?.channel.id ?? homeChannel?.id ?? null}
+          channelId={activeConversation?.channel.id ?? homeChannel?.id ?? null}
           channelName={selectedAgent?.name ?? "project agent"}
           channelType={homeChannel?.channelType ?? "dm"}
           containerClassName="px-3 pb-3"
           disabled={!selectedAgent || isSending}
-          draftKey={`project-agent:${storageScope ?? "unscoped"}`}
+          draftKey={draftKey}
           isSending={isSending}
           layoutMode="standalone"
           harnessRepositoryAddresses={[context.repoAddress]}
-          onHarnessEditAgent={setHarnessAgentPubkey}
+          onPrepareSendChannel={
+            activeConversation || homeChannel ? undefined : prepareAgentDm
+          }
           onSend={handleSubmit}
           placeholder={
             selectedAgent

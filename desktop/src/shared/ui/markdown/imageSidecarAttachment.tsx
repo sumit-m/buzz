@@ -1,14 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import type * as React from "react";
-import { toast } from "sonner";
 
-import {
-  composerDraftKeyNear,
-  imetaMediaFromEntry,
-  messageAuthorNear,
-  requestHarnessEdit,
-} from "@/features/messages/lib/harnessEditRequest";
-import { useHarnessEditAvailable } from "@/features/messages/ui/useHarnessEditAvailable";
 import { parseImageSidecar } from "@/features/projects/ui/imageSidecar";
 import { ImageInfoSidebar } from "@/features/projects/ui/ImageInfoSidebar";
 import { fetchMediaBytes } from "@/shared/api/tauriMedia";
@@ -20,8 +12,7 @@ import { useMarkdownRuntime } from "./runtimeContext";
 /**
  * LOCAL DIVERGENCE: a message image whose `.json` sidecar is attached to the
  * same message (same file name stem, as mage-agent posts them) shows an info
- * sidebar beside it, and the sidecar's own file card is hidden. Its Edit
- * button starts an edit of the image in the nearest message composer.
+ * sidebar beside it, and the sidecar's own file card is hidden.
  */
 
 /** A message video's inset, matching the other inset media. */
@@ -51,25 +42,6 @@ export function ImageSidecarFrame({
       ),
     staleTime: Number.POSITIVE_INFINITY,
   });
-  const canEdit = useHarnessEditAvailable();
-  const data = sidecar.data;
-  const onEdit =
-    canEdit && src && data
-      ? (button: HTMLElement) => {
-          const draftKey = composerDraftKeyNear(button);
-          if (!draftKey) {
-            toast.error("Open the message box to edit this image");
-            return;
-          }
-          requestHarnessEdit({
-            authorPubkey: messageAuthorNear(button),
-            draftKey,
-            image: imetaMediaFromEntry(src, imetaByUrl?.get(src)),
-            prompt: data.prompt,
-            values: data.values,
-          });
-        }
-      : undefined;
 
   if (sidecarUrl === null) {
     return (
@@ -92,7 +64,6 @@ export function ImageSidecarFrame({
               context={
                 src ? { kind: "chat", imageUrl: src, sidecarUrl } : undefined
               }
-              onEdit={onEdit}
               sidecar={sidecar.data}
             />
           </span>

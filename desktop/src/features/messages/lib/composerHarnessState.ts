@@ -409,23 +409,6 @@ export function initialPanelState(
   };
 }
 
-/**
- * "Edit" on a generated image or video: the file (attached to the draft) with
- * each control set from its sidecar where it names an offered option, saving
- * to `repo`. No preset, since the values already came from one. A video opens
- * in Video mode, where an attached video is extended or edited.
- */
-export function editStateFromSidecar(
-  spec: ComposerSpec,
-  values: Record<string, string>,
-  repo: string | null,
-  video = false,
-): ComposerPanelState {
-  return video
-    ? stateFromSidecar(spec, values, repo, 0, { mode: VIDEO_MODE, videos: 1 })
-    : stateFromSidecar(spec, values, repo, 1);
-}
-
 /** The mode a harness makes videos in. */
 export const VIDEO_MODE = "video";
 

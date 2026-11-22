@@ -107,6 +107,18 @@ pub async fn purge_channel_locally(db: &ArchiveDb, channel_id: String) {
     }
 }
 
+/// Drop a cleared channel's saved messages from the local archive, best-effort.
+pub async fn purge_channel_messages_locally(db: &ArchiveDb, channel_id: String) {
+    let purged = db
+        .with_conn(move |conn| store::purge_channel_messages(conn, &channel_id))
+        .await;
+    match purged {
+        Ok(0) => {}
+        Ok(rows) => eprintln!("buzz-desktop: purged {rows} archived row(s) for cleared channel"),
+        Err(error) => eprintln!("buzz-desktop: local archive purge failed: {error}"),
+    }
+}
+
 // ── Scope type ───────────────────────────────────────────────────────────────
 
 /// The three supported archive scope discriminants.

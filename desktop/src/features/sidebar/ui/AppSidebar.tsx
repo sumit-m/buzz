@@ -32,6 +32,7 @@ import {
   useLeaveChannelDialog,
   type SectionDialogValue,
 } from "@/features/sidebar/ui/ChannelSectionDialogs";
+import { ClearChannelDialogHost } from "@/features/sidebar/ui/ClearChannelDialog";
 import {
   AppSidebarPinnedHeader,
   AppSidebarPrimaryMenu,
@@ -957,6 +958,7 @@ export function AppSidebar({
       />
       {deleteChannelDialog}
       {leaveChannelDialog}
+      <ClearChannelDialogHost />
       <SidebarRail />
     </Sidebar>
   );

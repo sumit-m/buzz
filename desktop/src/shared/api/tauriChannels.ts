@@ -279,6 +279,11 @@ export async function deleteChannel(channelId: string): Promise<void> {
   await invokeTauri("delete_channel", { channelId });
 }
 
+/** LOCAL DIVERGENCE: destroys every message in the channel, keeping it. */
+export async function clearChannel(channelId: string): Promise<void> {
+  await invokeTauri("clear_channel", { channelId });
+}
+
 type RawChannelMessagesPageResponse = {
   events: ChannelMessagesPageResponse["events"];
   next_cursor: { created_at: number; event_id: string } | null;

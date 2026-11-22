@@ -940,6 +940,28 @@ fn test_purge_channel_removes_events_scopes_observers_and_subscription() {
 }
 
 #[test]
+fn test_purge_channel_messages_keeps_subscription_and_observers() {
+    let conn = in_memory();
+    let (pk, relay) = ("pk", "wss://r");
+    upsert_archived_event(&conn, pk, relay, "a1", 1, "author", 100, "{}", 0).unwrap();
+    upsert_event_scope(&conn, pk, relay, "a1", "channel_h", "cleared", 0).unwrap();
+    upsert_archived_event(&conn, pk, relay, "obs", 24200, "agent", 100, "{}", 0).unwrap();
+    upsert_event_scope(&conn, pk, relay, "obs", "owner_p", "agent", 0).unwrap();
+    upsert_observer_channel_index(&conn, pk, relay, "obs", Some("cleared"), 100).unwrap();
+    upsert_save_subscription(&conn, pk, relay, "channel_h", "cleared", "[1]", 0).unwrap();
+
+    assert_eq!(purge_channel_messages(&conn, "cleared").unwrap(), 1);
+
+    assert_eq!(
+        count(&conn, "archived_events"),
+        1,
+        "only the observer frame survives"
+    );
+    assert_eq!(count(&conn, "observer_channel_index"), 1);
+    assert_eq!(count(&conn, "save_subscriptions"), 1);
+}
+
+#[test]
 fn test_purge_channel_keeps_events_still_scoped_elsewhere() {
     // An event saved under two scopes must survive losing only one of them —
     // otherwise deleting one channel would silently strip a message the user

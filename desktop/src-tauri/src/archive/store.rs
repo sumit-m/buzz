@@ -992,6 +992,41 @@ pub fn purge_channel(conn: &Connection, channel_id: &str) -> Result<usize, Strin
     }
 }
 
+/// LOCAL DIVERGENCE: drop the events saved under a channel's `channel_h` scope
+/// after the channel was cleared, keeping its save subscription and observer
+/// frames. Events still saved under another scope survive. Returns the raw rows
+/// destroyed.
+pub fn purge_channel_messages(conn: &Connection, channel_id: &str) -> Result<usize, String> {
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("failed to begin purge_channel_messages: {e}"))?;
+
+    let result = (|| -> Result<usize, String> {
+        conn.execute(
+            "DELETE FROM archived_event_scopes              WHERE scope_type = 'channel_h' AND scope_value = ?1",
+            params![channel_id],
+        )
+        .map_err(|e| format!("failed to purge channel scope rows: {e}"))?;
+        conn.execute(
+            "DELETE FROM archived_events
+             WHERE id NOT IN (SELECT id FROM archived_event_scopes)",
+            params![],
+        )
+        .map_err(|e| format!("failed to gc scope-less events: {e}"))
+    })();
+
+    match result {
+        Ok(affected) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| format!("failed to commit purge_channel_messages: {e}"))?;
+            Ok(affected)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

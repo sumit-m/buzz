@@ -210,6 +210,12 @@ pub fn build_unarchive(channel_id: Uuid) -> Result<EventBuilder, String> {
     Ok(EventBuilder::new(Kind::Custom(9002), "").tags(tags))
 }
 
+/// Kind 9010 — clear every message in a channel (LOCAL DIVERGENCE).
+pub fn build_clear_channel(channel_id: Uuid) -> Result<EventBuilder, String> {
+    let tags = vec![tag(vec!["h", &channel_id.to_string()])?];
+    Ok(EventBuilder::new(Kind::Custom(9010), "").tags(tags))
+}
+
 /// Kind 9008 — delete channel.
 pub fn build_delete_channel(channel_id: Uuid) -> Result<EventBuilder, String> {
     let tags = vec![tag(vec!["h", &channel_id.to_string()])?];

@@ -672,6 +672,7 @@ pub fn run() {
             archive_channel,
             unarchive_channel,
             delete_channel,
+            clear_channel,
             add_channel_members,
             remove_channel_member,
             change_channel_member_role,

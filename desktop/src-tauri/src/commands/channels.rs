@@ -654,6 +654,15 @@ pub async fn delete_channel(channel_id: String, state: State<'_, AppState>) -> R
 }
 
 #[tauri::command]
+pub async fn clear_channel(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let uuid = parse_channel_uuid(&channel_id)?;
+    let builder = events::build_clear_channel(uuid)?;
+    submit_event(builder, &state).await?;
+    crate::archive::purge_channel_messages_locally(&state.archive_db, uuid.to_string()).await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn add_channel_members(
     channel_id: String,
     pubkeys: Vec<String>,

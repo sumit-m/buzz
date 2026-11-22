@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   CircleDot,
+  Eraser,
   Copy,
   LogOut,
   LoaderCircle,
@@ -22,6 +23,7 @@ import {
 } from "@/features/channels/hooks";
 import { useChannelModerationCapabilities } from "@/features/channels/ui/ChannelManagementModerationActions";
 import type { ChannelSection } from "@/features/sidebar/lib/useChannelSections";
+import { requestClearChannel } from "@/features/sidebar/ui/ClearChannelDialog";
 import {
   ContextMenuIconSlot,
   deferMenuAction,
@@ -333,6 +335,18 @@ export function ChannelContextMenuItems({
             <span>Star channel</span>
           </ContextMenuItem>
         )
+      ) : null}
+      {canManageChannel ? (
+        <ContextMenuItem
+          className="text-destructive focus:text-destructive"
+          data-testid={`clear-channel-${channel.name}`}
+          onSelect={() => deferMenuAction(() => requestClearChannel(channel))}
+        >
+          <ContextMenuIconSlot>
+            <Eraser className="h-4 w-4" />
+          </ContextMenuIconSlot>
+          <span>Clear channel</span>
+        </ContextMenuItem>
       ) : null}
       {showChannelActions ? <ContextMenuSeparator /> : null}
       {onLeaveChannel ? (

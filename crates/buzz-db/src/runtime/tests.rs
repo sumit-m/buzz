@@ -3568,11 +3568,14 @@ async fn media_becomes_unused_when_its_messages_go() {
     );
 
     db.forget_media(community, &loose).await.expect("forget");
-    let claims: i64 = sqlx::query_scalar("SELECT count(*) FROM media_uploaders WHERE sha256 = $1")
-        .bind(&loose)
-        .fetch_one(&db.pool)
-        .await
-        .expect("count claims");
+    let claims: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM media_uploaders WHERE sha256 = $1 AND community_id = ANY($2)",
+    )
+    .bind(&loose)
+    .bind([community.as_uuid(), other.as_uuid()])
+    .fetch_one(&db.pool)
+    .await
+    .expect("count claims");
     assert_eq!(claims, 1, "only the other community's claim is left");
     let ids = db.media_community_ids().await.expect("community ids");
     assert!(ids.contains(&community) && ids.contains(&other));

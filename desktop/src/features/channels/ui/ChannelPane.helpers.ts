@@ -99,6 +99,27 @@ export function isChannelCreatedSystemMessage(message: TimelineMessage) {
   }
 }
 
+/**
+ * LOCAL DIVERGENCE: a self-delete leaves a relay tombstone ("removed a
+ * message") in the main timeline, even for thread replies. Moderator removals
+ * carry a `public_reason` and stay visible.
+ */
+export function isSelfDeleteTombstone(message: TimelineMessage) {
+  if (message.kind !== KIND_SYSTEM_MESSAGE) {
+    return false;
+  }
+
+  try {
+    const payload = JSON.parse(message.body) as {
+      type?: string;
+      public_reason?: string;
+    };
+    return payload.type === "message_deleted" && !payload.public_reason;
+  } catch {
+    return false;
+  }
+}
+
 export function mentionsKnownAgent(
   mentionPubkeys: string[],
   knownAgentPubkeys: ReadonlySet<string>,

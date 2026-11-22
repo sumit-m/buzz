@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   getChannelIntroDescription,
   getChannelIntroKind,
+  isSelfDeleteTombstone,
   shouldPrioritizeIdleAuxiliary,
   shouldUseFocusIdleDrawer,
 } from "./ChannelPane.helpers.ts";
@@ -92,4 +93,23 @@ test("idle auxiliary priority does not depend on thread layout mode", () => {
   assert.equal(shouldPrioritizeIdleAuxiliary(true, true), true);
   assert.equal(shouldPrioritizeIdleAuxiliary(true, false), false);
   assert.equal(shouldPrioritizeIdleAuxiliary(false, true), false);
+});
+
+test("hides self-delete tombstones but keeps moderator removals", () => {
+  const system = (body) => ({ kind: 40099, body: JSON.stringify(body) });
+  assert.equal(
+    isSelfDeleteTombstone(system({ type: "message_deleted", actor: "a" })),
+    true,
+  );
+  assert.equal(
+    isSelfDeleteTombstone(
+      system({ type: "message_deleted", public_reason: "Spam" }),
+    ),
+    false,
+  );
+  assert.equal(isSelfDeleteTombstone(system({ type: "member_joined" })), false);
+  assert.equal(
+    isSelfDeleteTombstone({ kind: 9, body: '{"type":"message_deleted"}' }),
+    false,
+  );
 });

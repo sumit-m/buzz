@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   isChannelCreatedSystemMessage,
+  isSelfDeleteTombstone,
   isWelcomeSetupSystemMessage,
 } from "@/features/channels/ui/ChannelPane.helpers";
 import type { ChannelPaneProps } from "@/features/channels/ui/ChannelPane.types";
@@ -23,9 +24,14 @@ export function useChannelPaneMessages({
   threadSummaries,
 }: ChannelPaneMessagesOptions) {
   const visibleMessages = React.useMemo(() => {
+    const withoutTombstones = messages.filter(
+      (message) => !isSelfDeleteTombstone(message),
+    );
     const withoutWelcomeSetup = isWelcomeExperienceChannel(activeChannel)
-      ? messages.filter((message) => !isWelcomeSetupSystemMessage(message))
-      : messages;
+      ? withoutTombstones.filter(
+          (message) => !isWelcomeSetupSystemMessage(message),
+        )
+      : withoutTombstones;
 
     return isHuddleTranscript
       ? withoutWelcomeSetup.filter(

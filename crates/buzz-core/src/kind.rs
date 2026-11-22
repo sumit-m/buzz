@@ -397,6 +397,41 @@ pub const KIND_NIP29_CREATE_GROUP: u32 = 9007;
 pub const KIND_NIP29_DELETE_GROUP: u32 = 9008;
 /// NIP-29: Create an invite to a group.
 pub const KIND_NIP29_CREATE_INVITE: u32 = 9009;
+/// LOCAL DIVERGENCE: clear a group's messages, keeping the group. Owner or
+/// admin only. Destroys every [`CLEARED_CHANNEL_KINDS`] event in the channel
+/// and leaves no tombstone.
+pub const KIND_NIP29_CLEAR_GROUP: u32 = 9010;
+/// What a kind:9010 destroys: every message-shaped event, and the reactions,
+/// edits, pins and deletions that point at them. Channel state (metadata,
+/// membership, canvas, facts, artifacts, workflows) stays.
+pub const CLEARED_CHANNEL_KINDS: &[u32] = &[
+    KIND_DELETION,
+    KIND_REACTION,
+    KIND_STREAM_MESSAGE,
+    KIND_NIP29_DELETE_EVENT,
+    KIND_NIP29_CLEAR_GROUP,
+    KIND_STREAM_MESSAGE_V2,
+    KIND_STREAM_MESSAGE_EDIT,
+    KIND_STREAM_MESSAGE_PINNED,
+    KIND_STREAM_MESSAGE_BOOKMARKED,
+    KIND_STREAM_MESSAGE_SCHEDULED,
+    KIND_STREAM_REMINDER,
+    KIND_STREAM_MESSAGE_DIFF,
+    KIND_SYSTEM_MESSAGE,
+    KIND_JOB_REQUEST,
+    KIND_JOB_ACCEPTED,
+    KIND_JOB_PROGRESS,
+    KIND_JOB_RESULT,
+    KIND_JOB_CANCEL,
+    KIND_JOB_ERROR,
+    KIND_FORUM_POST,
+    KIND_FORUM_VOTE,
+    KIND_FORUM_COMMENT,
+    KIND_HUDDLE_STARTED,
+    KIND_HUDDLE_PARTICIPANT_JOINED,
+    KIND_HUDDLE_PARTICIPANT_LEFT,
+    KIND_HUDDLE_ENDED,
+];
 /// NIP-29: Request to join a group.
 pub const KIND_NIP29_JOIN_REQUEST: u32 = 9021;
 /// NIP-29: Request to leave a group.
@@ -769,6 +804,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_NIP29_CREATE_GROUP,
     KIND_NIP29_DELETE_GROUP,
     KIND_NIP29_CREATE_INVITE,
+    KIND_NIP29_CLEAR_GROUP,
     KIND_NIP29_JOIN_REQUEST,
     KIND_NIP29_LEAVE_REQUEST,
     KIND_SOLO_MEMBER_ROLE,

@@ -406,6 +406,7 @@ pub async fn handle_side_effects(
         9005 => Err(anyhow::anyhow!("kind:9005 requires persist_deletion")),
         9007 => handle_create_group(tenant, event, state).await,
         9008 => handle_delete_group(tenant, event, state).await,
+        9010 => handle_clear_group(tenant, event, state).await,
         9009 => {
             warn!(
                 kind = kind,
@@ -1039,6 +1040,17 @@ pub async fn validate_admin_event(
                     }
                     Err(anyhow::anyhow!("only owner can delete group"))
                 }
+            }
+        }
+        9010 => {
+            // LOCAL DIVERGENCE — CLEAR_GROUP: destroys other people's messages,
+            // so the same authority as kind:9002's privileged changes.
+            if actor_has_channel_authority(state, tenant.community(), channel_id, &actor_bytes)
+                .await?
+            {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("only an owner or admin can clear a group"))
             }
         }
         9022 => {
@@ -3016,6 +3028,38 @@ async fn handle_delete_group(
     Ok(())
 }
 
+/// Most ids one fan-out deletion names, keeping each event a modest size.
+const CLEAR_FANOUT_CHUNK: usize = 500;
+
+/// LOCAL DIVERGENCE: kind:9010 destroys every message in the channel — any
+/// author's, the request itself included — and leaves nothing behind: no
+/// tombstone, no system message. Open clients drop the rows from relay-signed
+/// fan-out deletions.
+async fn handle_clear_group(
+    tenant: &TenantContext,
+    event: &Event,
+    state: &Arc<AppState>,
+) -> anyhow::Result<()> {
+    let channel_id =
+        extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
+    let purged = state
+        .db
+        .clear_channel_events(
+            tenant.community(),
+            channel_id,
+            buzz_core::kind::CLEARED_CHANNEL_KINDS,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("clear_channel_events failed: {e}"))?;
+    let cleared = purged.ids.len();
+    for chunk in purged.ids.chunks(CLEAR_FANOUT_CHUNK) {
+        emit_cascade_deletion(tenant, state, channel_id, chunk.to_vec());
+    }
+    crate::media_gc::reclaim_after_delete(state, tenant.community(), purged.media);
+    info!(channel = %channel_id, cleared_events = cleared, "CLEAR_GROUP processed");
+    Ok(())
+}
+
 /// What [`join_channel_as_self`] did for the member.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelfJoinOutcome {
@@ -3675,10 +3719,12 @@ pub(crate) async fn persist_deletion(
             .purge_deleted_event(tenant.community(), &planned.id, planned.root_id.as_deref())
             .await
         {
-            Ok(destroyed) => {
+            Ok(purged) => {
                 if let Some(channel_id) = planned.target.channel_id {
-                    emit_cascade_deletion(tenant, state, channel_id, destroyed);
+                    emit_cascade_deletion(tenant, state, channel_id, purged.ids);
                 }
+                // LOCAL DIVERGENCE: reclaim attachments nothing else uses.
+                crate::media_gc::reclaim_after_delete(state, tenant.community(), purged.media);
             }
             Err(e) => {
                 error!(target_event = %hex::encode(&planned.id), "hard delete failed: {e}");

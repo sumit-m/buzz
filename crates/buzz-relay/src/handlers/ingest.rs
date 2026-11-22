@@ -648,7 +648,7 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_FORUM_VOTE
         | KIND_FORUM_COMMENT => Ok(Scope::MessagesWrite),
         KIND_NIP29_PUT_USER | KIND_NIP29_REMOVE_USER | KIND_NIP29_DELETE_GROUP
-        | KIND_SOLO_MEMBER_ROLE => {
+        | buzz_core::kind::KIND_NIP29_CLEAR_GROUP | KIND_SOLO_MEMBER_ROLE => {
             Ok(Scope::AdminChannels)
         }
         // NIP-43: relay membership admin commands (9030–9032) + Buzz
@@ -908,6 +908,7 @@ pub(crate) fn requires_h_channel_scope(kind: u32) -> bool {
             | KIND_NIP29_EDIT_METADATA
             | KIND_NIP29_DELETE_EVENT
             | KIND_NIP29_DELETE_GROUP
+            | buzz_core::kind::KIND_NIP29_CLEAR_GROUP
             | KIND_NIP29_LEAVE_REQUEST
             | KIND_SOLO_MEMBER_ROLE
             // Huddle lifecycle events + guidelines
@@ -2956,7 +2957,8 @@ async fn ingest_event_inner(
             || kind_u32 == KIND_STREAM_MESSAGE_EDIT
             || kind_u32 == KIND_NIP29_EDIT_METADATA
             || kind_u32 == KIND_NIP29_DELETE_EVENT
-            || kind_u32 == KIND_NIP29_DELETE_GROUP;
+            || kind_u32 == KIND_NIP29_DELETE_GROUP
+            || kind_u32 == buzz_core::kind::KIND_NIP29_CLEAR_GROUP;
         if !skip_membership {
             // Spec AuthCheck (line 794): emit the verdict at the actual
             // call site. claimed_community comes from the event's h tag

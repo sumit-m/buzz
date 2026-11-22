@@ -1774,8 +1774,11 @@ pub async fn purge_deleted_event(
     community_id: CommunityId,
     event_id: &[u8],
     root_event_id: Option<&[u8]>,
-) -> Result<Vec<Vec<u8>>> {
+) -> Result<PurgedEvents> {
     let mut tx = pool.begin().await?;
+    let mut media =
+        super::media_gc::media_hashes_of_events(&mut tx, community_id, &[event_id.to_vec()])
+            .await?;
 
     let result = sqlx::query("DELETE FROM events WHERE community_id = $1 AND id = $2")
         .bind(community_id.as_uuid())
@@ -1785,7 +1788,7 @@ pub async fn purge_deleted_event(
 
     if result.rows_affected() == 0 {
         tx.commit().await?;
-        return Ok(Vec::new());
+        return Ok(PurgedEvents::default());
     }
 
     // Walk the reply tree. `thread_metadata` still holds the target's row — only
@@ -1819,6 +1822,9 @@ pub async fn purge_deleted_event(
 
     let mut doomed = thread.clone();
     doomed.extend(reaction_events);
+    media.extend(super::media_gc::media_hashes_of_events(&mut tx, community_id, &doomed).await?);
+    media.sort();
+    media.dedup();
 
     // Live descendants only: the target's own count went with its soft delete,
     // and so did that of any reply soft-deleted before.
@@ -1879,7 +1885,17 @@ pub async fn purge_deleted_event(
     }
 
     tx.commit().await?;
-    Ok(doomed)
+    Ok(PurgedEvents { ids: doomed, media })
+}
+
+/// LOCAL DIVERGENCE: what a purge destroyed — every event id, and the media
+/// hashes their `imeta` tags named, for the relay to reclaim once unused.
+#[derive(Debug, Default)]
+pub struct PurgedEvents {
+    /// Every destroyed event id.
+    pub ids: Vec<Vec<u8>>,
+    /// Lowercase media hashes the destroyed events attached.
+    pub media: Vec<String>,
 }
 
 /// Physically delete every event in a channel, the channel row, and all
@@ -1994,6 +2010,62 @@ pub async fn hard_delete_channel_events(
 
     tx.commit().await?;
     Ok(events + notifications)
+}
+
+/// LOCAL DIVERGENCE: physically delete every event of `kinds` in a channel,
+/// any author's, and every row referencing them, keeping the channel itself.
+/// Unrecoverable. Returns the destroyed ids so open clients can drop them.
+///
+/// Reactions are swept by aggregate as well as by kind: one stored outside the
+/// channel would otherwise outlive the message it points at.
+pub async fn clear_channel_events(
+    pool: &PgPool,
+    community_id: CommunityId,
+    channel_id: uuid::Uuid,
+    kinds: &[u32],
+) -> Result<PurgedEvents> {
+    let kinds: Vec<i32> = kinds.iter().map(|&kind| kind as i32).collect();
+    let mut tx = pool.begin().await?;
+
+    let mut doomed: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT id FROM events           WHERE community_id = $1 AND channel_id = $2 AND kind = ANY($3)",
+    )
+    .bind(community_id.as_uuid())
+    .bind(channel_id)
+    .bind(&kinds)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let reaction_events: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT reaction_event_id FROM reactions           WHERE community_id = $1 AND event_id = ANY($2)             AND reaction_event_id IS NOT NULL AND NOT (reaction_event_id = ANY($2))",
+    )
+    .bind(community_id.as_uuid())
+    .bind(&doomed)
+    .fetch_all(&mut *tx)
+    .await?;
+    doomed.extend(reaction_events);
+    let media = super::media_gc::media_hashes_of_events(&mut tx, community_id, &doomed).await?;
+
+    for statement in [
+        "DELETE FROM event_mentions WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM reactions WHERE community_id = $1          AND (event_id = ANY($2) OR reaction_event_id = ANY($2))",
+        "DELETE FROM thread_metadata WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM delivery_log WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM push_wake_outbox WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM push_match_queue WHERE community_id = $1 AND event_id = ANY($2)",
+        "DELETE FROM moderation_reports WHERE community_id = $1 AND target_event_id = ANY($2)",
+        "DELETE FROM moderation_actions WHERE community_id = $1 AND target_event_id = ANY($2)",
+        "DELETE FROM events WHERE community_id = $1 AND id = ANY($2)",
+    ] {
+        sqlx::query(statement)
+            .bind(community_id.as_uuid())
+            .bind(&doomed)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+    Ok(PurgedEvents { ids: doomed, media })
 }
 
 /// Returns the `created_at` timestamp of the most recent non-deleted event in a channel.
@@ -2754,7 +2826,7 @@ impl Db {
         community_id: CommunityId,
         event_id: &[u8],
         root_event_id: Option<&[u8]>,
-    ) -> Result<Vec<Vec<u8>>> {
+    ) -> Result<PurgedEvents> {
         crate::event::purge_deleted_event(&self.pool, community_id, event_id, root_event_id).await
     }
 
@@ -2766,6 +2838,17 @@ impl Db {
         channel_id: Uuid,
     ) -> Result<u64> {
         crate::event::hard_delete_channel_events(&self.pool, community_id, channel_id).await
+    }
+
+    /// Physically delete every event of `kinds` in a channel and the rows
+    /// referencing them, keeping the channel. Returns the destroyed ids.
+    pub async fn clear_channel_events(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        kinds: &[u32],
+    ) -> Result<PurgedEvents> {
+        crate::event::clear_channel_events(&self.pool, community_id, channel_id, kinds).await
     }
 
     /// Soft-delete every event of `kinds` whose `a` tag names `coordinate`.

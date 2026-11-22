@@ -112,6 +112,7 @@ pub use community::{
 };
 pub use concurrency_gate::{ConcurrencyGate, GatePermit};
 pub use error::{DbError, Result};
+pub use event::PurgedEvents;
 pub use event::{ChannelHeadPrecondition, ChannelHeadWriteStatus, DeletionTarget};
 pub use event::{EventQuery, DEFAULT_MAX_PAGE_LIMIT};
 pub use leader_lock::SessionLeader;

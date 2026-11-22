@@ -52,6 +52,8 @@ pub mod invite_token;
 pub mod lifecycle;
 /// Fences cache refills against invalidation.
 mod load_fence;
+/// LOCAL DIVERGENCE: reclaim the storage of uploads nothing uses any more.
+pub mod media_gc;
 mod membership_cache;
 /// Inter-relay mesh startup wiring (`BUZZ_MESH` seam).
 pub mod mesh_boot;

@@ -3414,6 +3414,170 @@ async fn hard_deleting_a_channel_leaves_no_members_or_read_frontiers() {
     }
 }
 
+/// LOCAL DIVERGENCE: clearing a channel destroys its message kinds, any
+/// author's, and keeps the channel, its state kinds, and other channels.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn clearing_a_channel_destroys_only_its_messages() {
+    use crate::channel::{ChannelType, ChannelVisibility};
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    let db = setup_db().await;
+    let community = CommunityId::from_uuid(make_community(&db.pool).await);
+    let keys = Keys::generate();
+    let owner = keys.public_key().to_bytes().to_vec();
+    let mut channels = Vec::new();
+    for name in ["cleared", "spared"] {
+        let channel = db
+            .create_channel(
+                community,
+                name,
+                ChannelType::Stream,
+                ChannelVisibility::Open,
+                None,
+                &owner,
+                None,
+            )
+            .await
+            .expect("create channel")
+            .id;
+        channels.push(channel);
+    }
+    let (cleared, spared) = (channels[0], channels[1]);
+
+    let insert = |kind: u32, channel: uuid::Uuid, content: &'static str| {
+        let event = EventBuilder::new(Kind::Custom(kind as u16), content)
+            .tags(vec![Tag::parse(["h", &channel.to_string()]).expect("h tag")])
+            .sign_with_keys(&Keys::generate())
+            .expect("sign");
+        let db = &db;
+        async move {
+            db.insert_event(community, &event, Some(channel))
+                .await
+                .expect("insert");
+        }
+    };
+    insert(buzz_core::kind::KIND_STREAM_MESSAGE, cleared, "message").await;
+    insert(buzz_core::kind::KIND_REACTION, cleared, "+").await;
+    insert(buzz_core::kind::KIND_SYSTEM_MESSAGE, cleared, "{}").await;
+    insert(buzz_core::kind::KIND_CANVAS, cleared, "canvas").await;
+    insert(buzz_core::kind::KIND_STREAM_MESSAGE, spared, "other").await;
+
+    let destroyed = db
+        .clear_channel_events(community, cleared, buzz_core::kind::CLEARED_CHANNEL_KINDS)
+        .await
+        .expect("clear");
+    assert_eq!(destroyed.ids.len(), 3, "message, reaction and system row");
+
+    let survivors: Vec<String> =
+        sqlx::query_scalar("SELECT content FROM events WHERE community_id = $1 ORDER BY content")
+            .bind(community.as_uuid())
+            .fetch_all(&db.pool)
+            .await
+            .expect("read survivors");
+    assert_eq!(survivors, vec!["canvas", "other"]);
+
+    let channel_left: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM channels WHERE community_id = $1 AND id = $2")
+            .bind(community.as_uuid())
+            .bind(cleared)
+            .fetch_one(&db.pool)
+            .await
+            .expect("count channel");
+    assert_eq!(channel_left, 1, "the channel itself stays");
+}
+
+/// LOCAL DIVERGENCE: an upload is unused once no live event, avatar or icon
+/// in its community mentions it, and a clear reports the hashes it removed.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn media_becomes_unused_when_its_messages_go() {
+    use crate::channel::{ChannelType, ChannelVisibility};
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    let db = setup_db().await;
+    let community = CommunityId::from_uuid(make_community(&db.pool).await);
+    let other = CommunityId::from_uuid(make_community(&db.pool).await);
+    let keys = Keys::generate();
+    let owner = keys.public_key().to_bytes().to_vec();
+    let channel = db
+        .create_channel(
+            community,
+            "media",
+            ChannelType::Stream,
+            ChannelVisibility::Open,
+            None,
+            &owner,
+            None,
+        )
+        .await
+        .expect("create channel")
+        .id;
+    let [attached, loose, profile, foreign] = ["a1", "b2", "c3", "d4"].map(|seed| seed.repeat(32));
+    for sha in [&attached, &loose, &profile] {
+        db.record_media_upload(community, sha, &owner)
+            .await
+            .expect("record upload");
+    }
+    db.record_media_upload(other, &loose, &owner)
+        .await
+        .expect("record upload elsewhere");
+
+    let message = EventBuilder::new(Kind::Custom(9), "look")
+        .tags(vec![
+            Tag::parse(["h", &channel.to_string()]).expect("h tag"),
+            Tag::parse([
+                "imeta",
+                &format!("url https://relay.test/{attached}.png"),
+                &format!("x {attached}"),
+            ])
+            .expect("imeta tag"),
+        ])
+        .sign_with_keys(&keys)
+        .expect("sign message");
+    db.insert_event(community, &message, Some(channel))
+        .await
+        .expect("insert message");
+    let avatar = EventBuilder::new(
+        Kind::Metadata,
+        format!(r#"{{"picture":"https://relay.test/{profile}.jpg"}}"#),
+    )
+    .sign_with_keys(&keys)
+    .expect("sign profile");
+    db.insert_event(community, &avatar, None)
+        .await
+        .expect("insert profile");
+
+    let all = [&attached, &loose, &profile, &foreign].map(|sha| sha.to_string());
+    assert_eq!(
+        db.unused_media(community, &all).await.expect("unused"),
+        vec![loose.clone(), foreign.clone()],
+        "attached and profile media are in use"
+    );
+
+    let purged = db
+        .clear_channel_events(community, channel, buzz_core::kind::CLEARED_CHANNEL_KINDS)
+        .await
+        .expect("clear");
+    assert_eq!(purged.media, vec![attached.clone()]);
+    assert_eq!(
+        db.unused_media(community, &purged.media)
+            .await
+            .expect("unused after clear"),
+        vec![attached.clone()]
+    );
+
+    db.forget_media(community, &loose).await.expect("forget");
+    let claims: i64 = sqlx::query_scalar("SELECT count(*) FROM media_uploaders WHERE sha256 = $1")
+        .bind(&loose)
+        .fetch_one(&db.pool)
+        .await
+        .expect("count claims");
+    assert_eq!(claims, 1, "only the other community's claim is left");
+    let ids = db.media_community_ids().await.expect("community ids");
+    assert!(ids.contains(&community) && ids.contains(&other));
+}
+
 // ---- Statement-deadline cancellation vs. replica fallback ----------------
 //
 // A replica read cancelled by `statement_timeout` (SQLSTATE 57014) must be

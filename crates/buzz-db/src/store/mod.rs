@@ -127,6 +127,9 @@ pub mod verified_profiles;
 /// Live reference authorization and upload possession.
 pub mod media;
 
+/// LOCAL DIVERGENCE: uploads nothing uses any more.
+pub mod media_gc;
+
 #[cfg(test)]
 mod media_postgres_tests;
 #[cfg(test)]

@@ -1115,6 +1115,8 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
     tokio::spawn(buzz_relay::operator_listener::run_reaper(Arc::clone(
         &state,
     )));
+    // LOCAL DIVERGENCE: hourly unused-media sweep; its first pass waits an hour.
+    tokio::spawn(buzz_relay::media_gc::run_sweeper(Arc::clone(&state)));
     if !state.config.operator_listener_delivery_urls.is_empty() {
         tokio::spawn(buzz_relay::operator_listener::run_delivery_worker(
             Arc::clone(&state),

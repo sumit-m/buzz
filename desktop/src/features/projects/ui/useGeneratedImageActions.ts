@@ -33,6 +33,7 @@ import {
   planRelocation,
   regenerateMessage,
   repoValueFor,
+  sourceRepoPath,
 } from "@/features/projects/lib/generatedImage";
 import type { Repository } from "@/features/projects/projectModels";
 import {
@@ -42,8 +43,15 @@ import {
   type RepoFileAdd,
 } from "@/shared/api/harnessComposer";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import { getProjectRepoFileBytes } from "@/shared/api/projectGit";
-import { type ImageSidecar, sidecarPathFor } from "./imageSidecar";
+import {
+  getProjectRepoFileBytes,
+  uploadProjectRepoFile,
+} from "@/shared/api/projectGit";
+import {
+  type ImageSidecar,
+  type SidecarSource,
+  sidecarPathFor,
+} from "./imageSidecar";
 
 /** Where a generated image's sidebar is shown. */
 export type GeneratedImageContext =
@@ -71,7 +79,7 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-async function resolveAdd(add: CommitAdd): Promise<RepoFileAdd> {
+async function resolveAdd(add: CommitAdd): Promise<RepoFileAdd | null> {
   if ("url" in add) return add;
   const { repository, path } = add.from;
   const bytes = await getProjectRepoFileBytes({
@@ -79,8 +87,47 @@ async function resolveAdd(add: CommitAdd): Promise<RepoFileAdd> {
     defaultBranch: repository.defaultBranch || null,
     path,
   });
-  if (!bytes) throw new Error(`Could not read ${path}`);
+  if (!bytes) {
+    if (add.optional) return null;
+    throw new Error(`Could not read ${path}`);
+  }
   return { path: add.path, contentBase64: toBase64(bytes) };
+}
+
+/**
+ * The sources as uploads, each taken from the repo's `.sources/` copy when
+ * it has one, so a request can be made again after the original upload is
+ * gone. A source the repo lacks keeps its own upload.
+ */
+async function sourcesFromRepo(
+  sources: readonly SidecarSource[],
+  repository: Repository | null | undefined,
+): Promise<SidecarSource[]> {
+  const cloneUrl = repository?.cloneUrls[0];
+  if (!repository || !cloneUrl) return [...sources];
+  return Promise.all(
+    sources.map(async (source) => {
+      const path = sourceRepoPath(source);
+      if (!path) return source;
+      try {
+        const blob = await uploadProjectRepoFile({
+          cloneUrl,
+          defaultBranch: repository.defaultBranch || null,
+          path,
+        });
+        return {
+          url: blob.url,
+          m: blob.type,
+          x: blob.sha256,
+          size: String(blob.size),
+          path,
+          ...(blob.dim ? { dim: blob.dim } : {}),
+        };
+      } catch {
+        return source;
+      }
+    }),
+  );
 }
 
 /**
@@ -245,6 +292,7 @@ export function useGeneratedImageActions({
         folder: parsed.folder,
         imageName,
         location: from,
+        sources: sidecar.origin?.sources ?? [],
         target: destination,
       });
       if (!plan) {
@@ -266,7 +314,9 @@ export function useGeneratedImageActions({
           cloneUrl: commit.repository.cloneUrls[0] ?? "",
           branch: commit.repository.defaultBranch || null,
           renames: commit.renames,
-          adds: await Promise.all(commit.adds.map(resolveAdd)),
+          adds: (await Promise.all(commit.adds.map(resolveAdd))).filter(
+            (add): add is RepoFileAdd => add !== null,
+          ),
           deletes: commit.deletes,
           message: commit.message,
         });
@@ -334,7 +384,9 @@ export function useGeneratedImageActions({
       const outgoing = regenerateMessage({
         agentName: agent.name,
         prompt: sidecar.prompt,
-        sources: origin.sources,
+        sources: inDm
+          ? await sourcesFromRepo(origin.sources, saved?.repository ?? current)
+          : origin.sources,
       });
       const destination = inDm
         ? await openDm.mutateAsync({ pubkeys: [agent.pubkey] })
@@ -381,10 +433,13 @@ export function useGeneratedImageActions({
       return;
     }
     const saved = await fetchLocation().catch(() => null);
+    const sources = inDm
+      ? await sourcesFromRepo(origin.sources, saved?.repository ?? current)
+      : origin.sources;
     requestHarnessEdit({
       authorPubkey: target.agent.pubkey,
       draftKey,
-      media: origin.sources.map(imetaFromSource),
+      media: sources.map(imetaFromSource),
       prompt: sidecar.prompt,
       repo: saved ? repoValueFor(saved) : null,
       repository: saved?.repository ?? current ?? undefined,

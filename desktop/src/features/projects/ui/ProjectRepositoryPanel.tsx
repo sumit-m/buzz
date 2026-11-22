@@ -465,6 +465,8 @@ function repositoryEntries(
       : file.path;
     const [name, ...rest] = relativePath.split("/");
     if (!name) continue;
+    // LOCAL DIVERGENCE: generated files' sources, kept for Regenerate and Edit.
+    if (!currentPath && name === ".sources" && rest.length > 0) continue;
 
     if (rest.length > 0) {
       const path = currentPath ? `${currentPath}/${name}` : name;

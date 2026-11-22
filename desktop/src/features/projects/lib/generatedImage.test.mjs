@@ -12,6 +12,7 @@ import {
   regenerateMessage,
   regenerateSetup,
   repoValueFor,
+  sourceRepoPath,
 } from "./generatedImage.ts";
 
 const repo = (id, dtag, owner = "ab", channelId = null) => ({
@@ -251,4 +252,64 @@ test("a video's Regenerate rebuilds Video mode with its frame or action", () => 
     canRegenerate({ mode: "video", sources: [], frame: null, repo: null }),
     true,
   );
+});
+
+const sha = "ab".repeat(32);
+
+test("sourceRepoPath: the sidecar's path, else one from the hash", () => {
+  assert.equal(
+    sourceRepoPath({ url: "u", x: sha, path: `.sources/${sha}.png` }),
+    `.sources/${sha}.png`,
+  );
+  assert.equal(
+    sourceRepoPath({ url: "u", x: sha.toUpperCase(), m: "video/mp4" }),
+    `.sources/${sha}.mp4`,
+  );
+  assert.equal(sourceRepoPath({ url: "u", x: sha }), `.sources/${sha}.jpg`);
+  assert.equal(sourceRepoPath({ url: "u", x: "../x" }), null);
+});
+
+test("planRelocation carries sources to another repo, not within one", () => {
+  const sources = [
+    { url: "https://r/media/a.png", m: "image/png", x: sha },
+    { url: "https://r/media/a.png", m: "image/png", x: sha },
+  ];
+  const across = planRelocation({
+    attachments: null,
+    folder: "",
+    imageName: "h1.jpg",
+    location: at(site, "assets/h1.jpg"),
+    sources,
+    target: art,
+  });
+  assert.deepEqual(across.commits[0].adds.slice(1), [
+    {
+      path: `.sources/${sha}.png`,
+      from: { repository: site, path: `.sources/${sha}.png` },
+      optional: true,
+    },
+  ]);
+  assert.deepEqual(across.commits[1].deletes, ["assets/h1.jpg"]);
+
+  const within = planRelocation({
+    attachments: null,
+    folder: "art/",
+    imageName: "h1.jpg",
+    location: at(site, "assets/h1.jpg"),
+    sources,
+    target: site,
+  });
+  assert.equal(within.commits[0].adds.length, 0);
+
+  const copied = planRelocation({
+    attachments: { imageUrl: "https://r/media/i.jpg", sidecarUrl: null },
+    folder: "",
+    imageName: "h1.jpg",
+    location: null,
+    sources,
+    target: art,
+  });
+  assert.deepEqual(copied.commits[0].adds.slice(1), [
+    { path: `.sources/${sha}.png`, url: "https://r/media/a.png" },
+  ]);
 });

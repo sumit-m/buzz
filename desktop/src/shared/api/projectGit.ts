@@ -11,7 +11,11 @@ import type {
   ProjectRepoSyncStatus,
   RelayEvent,
 } from "@/shared/api/types";
-import { invokeTauri, TauriInvokeError } from "@/shared/api/tauri";
+import {
+  type BlobDescriptor,
+  invokeTauri,
+  TauriInvokeError,
+} from "@/shared/api/tauri";
 
 type RawProjectRepoCommit = {
   hash: string;
@@ -214,6 +218,19 @@ export async function getProjectRepoFileBytes(input: {
     path: input.path,
   });
   return bytes.byteLength > 0 ? new Uint8Array(bytes) : null;
+}
+
+/** LOCAL DIVERGENCE: uploads a repository file (a generated file's saved source). */
+export async function uploadProjectRepoFile(input: {
+  cloneUrl: string;
+  defaultBranch?: string | null;
+  path: string;
+}): Promise<BlobDescriptor> {
+  return invokeTauri<BlobDescriptor>("upload_project_repo_file", {
+    cloneUrl: input.cloneUrl,
+    defaultBranch: input.defaultBranch ?? null,
+    path: input.path,
+  });
 }
 
 export type ProjectRepoThumbnail = {

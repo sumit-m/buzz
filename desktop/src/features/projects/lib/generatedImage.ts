@@ -125,7 +125,44 @@ export function locationFromMatches(
 
 export type CommitAdd =
   | { path: string; url: string }
-  | { path: string; from: { repository: Repository; path: string } };
+  | {
+      path: string;
+      from: { repository: Repository; path: string };
+      /** Skipped when the file isn't there to copy (a source never saved). */
+      optional?: boolean;
+    };
+
+/** The extension a source is saved under; the image agents use the same. */
+export function sourceExtension(mime: string | undefined): string {
+  switch (mime) {
+    case "image/png":
+      return "png";
+    case "image/webp":
+      return "webp";
+    case "image/gif":
+      return "gif";
+    case "video/webm":
+      return "webm";
+    case "video/quicktime":
+      return "mov";
+    default:
+      return mime?.startsWith("video/") ? "mp4" : "jpg";
+  }
+}
+
+/** Where a repo keeps a source: the sidecar's `path`, else `.sources/<sha256>.<ext>`. */
+export function sourceRepoPath(source: SidecarSource): string | null {
+  if (source.path) return source.path;
+  const sha = source.x?.toLowerCase();
+  return sha && /^[0-9a-f]{64}$/.test(sha)
+    ? `.sources/${sha}.${sourceExtension(source.m)}`
+    : null;
+}
+
+function sourcePaths(sources: readonly SidecarSource[]): string[] {
+  const paths = sources.flatMap((source) => sourceRepoPath(source) ?? []);
+  return [...new Set(paths)];
+}
 
 export type CommitPlan = {
   repository: Repository;
@@ -143,14 +180,16 @@ export type Relocation = {
 /**
  * The commits that put the image (and its sidecar) in `folder` of `target`:
  * a rename within one repo, a copy then a removal across repos, or, for a
- * chat image not saved anywhere, a copy of its attachments. `null` when it's
- * already there, or there's nothing to copy from.
+ * chat image not saved anywhere, a copy of its attachments. Sources go to the
+ * target's `.sources/` when it is another repo, and stay in the old one.
+ * `null` when it's already there, or there's nothing to copy from.
  */
 export function planRelocation({
   attachments,
   folder,
   imageName,
   location,
+  sources = [],
   target,
 }: {
   /** The chat message's image and sidecar uploads. */
@@ -158,6 +197,7 @@ export function planRelocation({
   folder: string;
   imageName: string;
   location: ImageLocation | null;
+  sources?: readonly SidecarSource[];
   target: Repository;
 }): Relocation | null {
   const imagePath = `${folder}${imageName}`;
@@ -169,6 +209,12 @@ export function planRelocation({
     const adds: CommitAdd[] = [{ path: imagePath, url: attachments.imageUrl }];
     if (attachments.sidecarUrl) {
       adds.push({ path: sidecarPath, url: attachments.sidecarUrl });
+    }
+    for (const source of sources) {
+      const path = sourceRepoPath(source);
+      if (path && !adds.some((add) => add.path === path)) {
+        adds.push({ path, url: source.url });
+      }
     }
     return {
       commits: [
@@ -205,10 +251,17 @@ export function planRelocation({
       {
         repository: target,
         renames: [],
-        adds: pairs.map(([from, to]) => ({
-          path: to,
-          from: { repository: location.repository, path: from },
-        })),
+        adds: [
+          ...pairs.map(([from, to]) => ({
+            path: to,
+            from: { repository: location.repository, path: from },
+          })),
+          ...sourcePaths(sources).map((path) => ({
+            path,
+            from: { repository: location.repository, path },
+            optional: true,
+          })),
+        ],
         deletes: [],
         message: `Add ${imageName} from ${location.repository.name}`,
       },

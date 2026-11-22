@@ -116,3 +116,37 @@ mod tests {
         assert_eq!(read_file_bytes(&repo, "../secret.png", 10), None);
     }
 }
+
+/// LOCAL DIVERGENCE: a generated file's source, kept in its repo under
+/// `.sources/`, uploaded so Regenerate and Edit can attach it once its own
+/// upload is gone.
+const MAX_SOURCE_FILE_BYTES: u64 = 512 * 1024 * 1024;
+
+#[tauri::command]
+pub async fn upload_project_repo_file(
+    clone_url: String,
+    default_branch: Option<String>,
+    path: String,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<super::media::BlobDescriptor, String> {
+    validate_workspace_clone_url(&clone_url, &state)?;
+    validate_repo_file_path(&path)?;
+    let auth = build_git_auth_config(&state)?;
+    let repo = RemoteRepo::new(clone_url, default_branch, None, None);
+    let clones = app.clone();
+    let wanted = path.clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        let paths = [wanted];
+        let repo_dir =
+            clones
+                .state::<RepoClones>()
+                .files(&repo, &paths, Freshness::Latest, &auth)?;
+        read_file_bytes(&repo_dir, &paths[0], MAX_SOURCE_FILE_BYTES)
+            .ok_or_else(|| format!("{} is not in the repository", paths[0]))
+    })
+    .await
+    .map_err(|error| format!("repo file task failed: {error}"))??;
+    let name = path.rsplit('/').next().map(str::to_string);
+    super::media::upload_media_bytes_inner(bytes, name, None, app, state, None).await
+}

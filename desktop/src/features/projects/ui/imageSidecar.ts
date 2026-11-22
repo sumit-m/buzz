@@ -15,6 +15,8 @@ export type SidecarSource = {
   x?: string;
   size?: string;
   dim?: string;
+  /** Where the repo the file was saved to keeps this source (`.sources/<sha256>.<ext>`). */
+  path?: string;
 };
 
 /**
@@ -205,5 +207,8 @@ function parseSource(raw: unknown): SidecarSource | null {
     const value = scalarText(fields[key]);
     if (value) source[key] = value;
   }
+  const path = scalarText(fields.path);
+  if (path && /^\.sources\/[0-9a-f]{64}\.[a-z0-9]+$/.test(path))
+    source.path = path;
   return source;
 }

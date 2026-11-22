@@ -160,3 +160,22 @@ test("an extension shows its length; its added seconds are kept but hidden", () 
   );
   assert.equal(now.values.extend_by, "3");
 });
+
+test("parseImageSidecar keeps a source's repo path only under .sources/", () => {
+  const sha = "cd".repeat(32);
+  const { origin } = parseImageSidecar(
+    JSON.stringify({
+      buzz: {
+        mode: "edit",
+        sources: [
+          { url: "https://r/a.png", x: sha, path: `.sources/${sha}.png` },
+          { url: "https://r/b.png", x: sha, path: "../escape.png" },
+        ],
+      },
+    }),
+  );
+  assert.deepEqual(
+    origin.sources.map((source) => source.path),
+    [`.sources/${sha}.png`, undefined],
+  );
+});

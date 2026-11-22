@@ -594,6 +594,7 @@ pub fn run() {
             get_project_repo_snapshot,
             get_project_repo_file_content,
             get_project_repo_file_bytes,
+            upload_project_repo_file,
             get_project_repo_thumbnails,
             get_project_repo_folders,
             find_project_repo_files,

@@ -4,6 +4,7 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useRelayOrigin } from "@/shared/lib/useRelayOrigin";
 
 import { VideoPlayer, type VideoReviewContext } from "../VideoPlayer";
+import { ImageBoxContext, MESSAGE_IMAGE_BOX } from "./imageBox";
 import { isRelayDownloadable } from "./mediaEntry";
 import type { ImetaEntry } from "./types";
 import { aspectRatioFromDim } from "./utils";
@@ -32,6 +33,8 @@ export function MarkdownVideoPlayer({
   src?: string;
 }) {
   const videoReviewContext = React.useContext(VideoReviewMarkdownContext);
+  // LOCAL DIVERGENCE: beside an info sidebar, fit a larger box.
+  const box = React.useContext(ImageBoxContext);
   // Download eligibility is independent of rendering as a video: only a
   // relay-hosted `/media/` URL can pass the native `download_file` SSRF gate,
   // so an external video renders and offers Copy Link but omits Download.
@@ -69,6 +72,7 @@ export function MarkdownVideoPlayer({
       reviewContext={resolvedReviewContext}
       downloadUrl={downloadUrl}
       filename={entry?.filename}
+      fitBox={box === MESSAGE_IMAGE_BOX ? undefined : box}
     />
   );
 }

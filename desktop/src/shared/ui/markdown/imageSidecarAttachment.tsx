@@ -53,7 +53,7 @@ export function ImageSidecarFrame({
   return (
     <ImageBoxContext.Provider value={SIDECAR_IMAGE_BOX}>
       <span
-        className="flex min-w-0 max-w-full flex-wrap items-start gap-4"
+        className="mt-2.5 flex min-w-0 max-w-full flex-wrap items-start gap-4"
         data-block-media=""
         data-testid="message-image-with-sidecar"
       >

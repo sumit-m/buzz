@@ -109,6 +109,12 @@ type VideoPlayerProps = {
   downloadUrl?: string;
   /** imeta `filename`, used as the save-dialog name. */
   filename?: string;
+  /**
+   * LOCAL DIVERGENCE: the box the inline surface fits instead of the default
+   * width rule, without the top margin: a video beside its info sidebar, top
+   * aligned with it like the images there.
+   */
+  fitBox?: { height: number; width: number };
 };
 type TimecodedComment = {
   comment: VideoReviewComment;
@@ -680,6 +686,7 @@ export function VideoPlayer({
   reviewContext,
   downloadUrl,
   filename,
+  fitBox,
 }: VideoPlayerProps) {
   const persistedReviewKey = reviewKey ?? src;
   const videoRef = React.useRef<HTMLVideoElement>(null);
@@ -956,13 +963,15 @@ export function VideoPlayer({
     [reviewContext?.comments],
   );
   const inlineAspectRatio = aspectRatio ?? naturalAspectRatio ?? 16 / 9;
-  const inlineSurfaceWidth = getInlineSurfaceWidth(inlineAspectRatio);
+  const inlineSurfaceWidth = fitBox
+    ? Math.round(Math.min(fitBox.width, fitBox.height * inlineAspectRatio))
+    : getInlineSurfaceWidth(inlineAspectRatio);
   const showInlineSpeedControl =
     inlineRenderedWidth !== null &&
     inlineRenderedWidth >= INLINE_SPEED_CONTROL_MIN_WIDTH;
   const inlineSurfaceStyle: React.CSSProperties = {
     aspectRatio: String(inlineAspectRatio),
-    maxHeight: 256,
+    maxHeight: fitBox?.height ?? 256,
     width: inlineSurfaceWidth,
   };
   const hideInlineControls = !started || isPlaying;
@@ -975,7 +984,10 @@ export function VideoPlayer({
   return (
     <>
       <div
-        className="relative mt-3 inline-block max-w-full align-top"
+        className={cn(
+          "relative inline-block max-w-full align-top",
+          !fitBox && "mt-3",
+        )}
         data-testid="video-player"
       >
         <div

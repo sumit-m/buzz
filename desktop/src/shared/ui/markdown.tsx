@@ -54,6 +54,7 @@ import {
 import { EntityLinkAnchor, useOpenEntityLink } from "./markdown/entityLinks";
 import { ExternalLinkAnchor } from "./markdown/ExternalLinkAnchor";
 import { FileCard, ImageSidecarFrame } from "./markdown/FileCard";
+import { ImageBoxContext, MESSAGE_IMAGE_BOX } from "./markdown/imageBox";
 import { VIDEO_INSET_CLASS } from "./markdown/imageSidecarAttachment";
 import {
   AuthoredDeepLinkAnchor,
@@ -997,6 +998,8 @@ function ImageBlock({ alt, dim, resolvedSrc, src, thumbSrc }: ImageBlockProps) {
   const inlineImageRef = React.useRef<HTMLImageElement | null>(null);
   const thumbnailImageRef = React.useRef<HTMLImageElement | null>(null);
   const triggerRef = React.useRef<HTMLButtonElement | null>(null);
+  // LOCAL DIVERGENCE: beside an info sidebar the frame sets the top margin.
+  const besideSidebar = React.useContext(ImageBoxContext) !== MESSAGE_IMAGE_BOX;
   useSmoothCorners(inlineImageRef);
   useSmoothCorners(thumbnailImageRef);
   const [spoilerMediaSize, setSpoilerMediaSize] = React.useState<{
@@ -1155,6 +1158,7 @@ function ImageBlock({ alt, dim, resolvedSrc, src, thumbSrc }: ImageBlockProps) {
         aria-label={alt?.trim() ? `Zoom image: ${alt}` : "Zoom image"}
         className={cn(
           "mt-1 inline-block min-w-0 max-w-full cursor-zoom-in overflow-hidden rounded-2xl border-0 bg-transparent p-0 text-left align-top focus:outline-hidden focus-visible:ring-2 focus-visible:ring-ring/50",
+          besideSidebar && "mt-0",
           lightboxState && "opacity-0",
         )}
         data-image-lightbox-resolved-src={resolvedSrc}
@@ -1811,7 +1815,8 @@ function MarkdownInner({
         [
           "max-w-none wrap-anywhere text-message font-normal tracking-normal text-foreground",
           "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-          "[&>*+*]:mt-3",
+          // LOCAL DIVERGENCE: 10px between blocks (upstream 12px).
+          "[&>*+*]:mt-2.5",
           "[&>p+p]:mt-conversation-paragraph [&>ol]:space-y-conversation-list [&>ul]:space-y-conversation-list",
           "[&>*+h1]:mt-3.5 [&>*+h2]:mt-3.5 [&>*+h3]:mt-3.5 [&>*+h4]:mt-3.5 [&>*+h5]:mt-3.5 [&>*+h6]:mt-3.5",
           "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5 [&>h4+*]:mt-0.5 [&>h5+*]:mt-0.5 [&>h6+*]:mt-0.5",

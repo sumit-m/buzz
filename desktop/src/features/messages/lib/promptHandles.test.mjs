@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  assetGroups,
   assetIndex,
   findHandles,
   handleQueryAtEnd,
@@ -104,4 +105,25 @@ test("image entries name each image in order and join an asset index", () => {
   assert.equal(index.get("image2").control, IMAGES_CONTROL);
   assert.equal(index.get("ryan").control.id, "character");
   assert.equal(withEntries(assets, []), assets);
+});
+
+test("assetGroups lists a menu's tabs in first-seen order", () => {
+  const options = [
+    { value: "altair", label: "Altair", group: "Male" },
+    { value: "ara", label: "Ara", group: "Female" },
+    { value: "atlas", label: "Atlas", group: "Male" },
+  ];
+  assert.deepEqual(
+    assetGroups({ id: "voice", kind: "assets", label: "Voice", options }),
+    ["Male", "Female"],
+  );
+  assert.deepEqual(
+    assetGroups({
+      id: "character",
+      kind: "assets",
+      label: "Character",
+      options: [{ value: "a", label: "A" }],
+    }),
+    [],
+  );
 });

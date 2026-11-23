@@ -37,7 +37,10 @@ import {
   setRepo,
   valueControls,
 } from "@/features/messages/lib/composerHarnessState";
-import { assetControls } from "@/features/messages/lib/promptHandles";
+import {
+  assetControls,
+  assetGroups,
+} from "@/features/messages/lib/promptHandles";
 import { cn } from "@/shared/lib/cn";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import {
@@ -269,6 +272,7 @@ export function ComposerHarnessControls({
   state: ComposerPanelState;
 }) {
   const [openId, setOpenId] = React.useState<string | null>(null);
+  const [assetTab, setAssetTab] = React.useState<Record<string, string>>({});
   const openChange = (id: string) => (open: boolean) =>
     setOpenId(open ? id : null);
   const preset = presetControl(spec);
@@ -481,18 +485,60 @@ export function ComposerHarnessControls({
           .filter((control) => controlShown(control, resolved))
           .map((control) => {
             const Icon = (control.icon && ICONS[control.icon]) || UserPlus;
+            const groups = assetGroups(control);
+            const tab = groups.includes(assetTab[control.id] ?? "")
+              ? assetTab[control.id]
+              : groups[0];
+            const shown = tab
+              ? control.options.filter((option) => option.group === tab)
+              : control.options;
             return (
               <ControlPopup
                 heading={
-                  <>
-                    {control.title ?? control.label}
-                    {refreshingId === control.id ? (
-                      <LoaderCircle
-                        aria-label="Refreshing"
-                        className="h-3 w-3 animate-spin"
-                      />
-                    ) : null}
-                  </>
+                  groups.length > 0 ? (
+                    // Icon centred over the rows' thumbs (row inset + w-11),
+                    // tab text starting where the rows' names do.
+                    <span className="flex w-full items-center">
+                      <span className="ml-1 flex w-11 shrink-0 justify-center">
+                        <Icon
+                          aria-label={control.title ?? control.label}
+                          className="h-6 w-6"
+                        />
+                      </span>
+                      <span className="flex gap-1">
+                        {groups.map((group) => (
+                          <button
+                            aria-pressed={group === tab}
+                            className={cn(
+                              "rounded-md px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                              group === tab && "bg-muted/70 text-foreground",
+                            )}
+                            key={group}
+                            onClick={() =>
+                              setAssetTab((tabs) => ({
+                                ...tabs,
+                                [control.id]: group,
+                              }))
+                            }
+                            onMouseDown={(event) => event.preventDefault()}
+                            type="button"
+                          >
+                            {group}
+                          </button>
+                        ))}
+                      </span>
+                    </span>
+                  ) : (
+                    <>
+                      {control.title ?? control.label}
+                      {refreshingId === control.id ? (
+                        <LoaderCircle
+                          aria-label="Refreshing"
+                          className="h-3 w-3 animate-spin"
+                        />
+                      ) : null}
+                    </>
+                  )
                 }
                 keepEditorFocus
                 key={control.id}
@@ -518,7 +564,7 @@ export function ComposerHarnessControls({
                   </p>
                 ) : (
                   <div className="-mx-1 flex max-h-80 min-w-64 flex-col overflow-y-auto">
-                    {control.options.map((option) => (
+                    {shown.map((option) => (
                       <button
                         className="rounded-lg px-2 py-2 hover:bg-muted/60"
                         key={option.value}

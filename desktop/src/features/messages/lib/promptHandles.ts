@@ -66,6 +66,15 @@ export function assetControls(spec: ComposerSpec): ComposerControl[] {
   return spec.controls.filter((control) => control.kind === "assets");
 }
 
+/** An `assets` menu's tabs, in first-seen order; empty when it has none. */
+export function assetGroups(control: ComposerControl): string[] {
+  const groups: string[] = [];
+  for (const { group } of control.options) {
+    if (group && !groups.includes(group)) groups.push(group);
+  }
+  return groups;
+}
+
 export function assetIndex(specs: readonly ComposerSpec[]): AssetIndex {
   const index = new Map<string, AssetEntry>();
   for (const spec of specs) {

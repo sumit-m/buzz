@@ -16,6 +16,8 @@ export type ComposerOption = {
   /** `https` thumbnail of an `assets` option. */
   image?: string;
   hint?: string;
+  /** The `assets` menu tab this option is listed under (a voice's gender). */
+  group?: string;
   /** Offered only while each named earlier control has one of these values. */
   when?: Record<string, string[]>;
   /** The size shown for the first variant whose `when` matches. */

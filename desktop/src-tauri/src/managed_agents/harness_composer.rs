@@ -137,6 +137,9 @@ pub struct ComposerOption {
     /// Secondary text shown beside the label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// The `assets` menu tab this option is listed under (a voice's gender).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     /// Offered only while each named earlier control has one of these values
     /// (Resolution's 4K only for the models that have it).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -191,6 +194,8 @@ enum RawOption {
         #[serde(default)]
         hint: Option<String>,
         #[serde(default)]
+        group: Option<String>,
+        #[serde(default)]
         when: BTreeMap<String, Vec<String>>,
         #[serde(default)]
         sizes: Vec<SizeVariant>,
@@ -217,6 +222,7 @@ impl From<RawOption> for ComposerOption {
                 modes: Vec::new(),
                 image: None,
                 hint: None,
+                group: None,
                 when: BTreeMap::new(),
                 sizes: Vec::new(),
                 defaults: BTreeMap::new(),
@@ -233,6 +239,7 @@ impl From<RawOption> for ComposerOption {
                 modes,
                 image,
                 hint,
+                group,
                 when,
                 sizes,
                 defaults,
@@ -248,6 +255,7 @@ impl From<RawOption> for ComposerOption {
                 modes,
                 image,
                 hint,
+                group,
                 when,
                 sizes,
                 defaults,
@@ -451,6 +459,9 @@ pub(crate) fn validate(spec: &ComposerSpec) -> Result<(), String> {
             }
             if let Some(hint) = &option.hint {
                 check_text("option hint", hint)?;
+            }
+            if let Some(group) = &option.group {
+                check_text("option group", group)?;
             }
             if option
                 .image
@@ -865,6 +876,18 @@ mod tests {
         let mut long_hint = with_assets_menu();
         long_hint["controls"][5]["options"][0]["hint"] = "x".repeat(65).into();
         assert!(validate(&spec(long_hint)).is_err());
+
+        let mut grouped = with_assets_menu();
+        grouped["controls"][5]["options"][0]["group"] = "Female".into();
+        assert_eq!(
+            spec(grouped.clone()).controls[5].options[0]
+                .group
+                .as_deref(),
+            Some("Female")
+        );
+        assert!(validate(&spec(grouped.clone())).is_ok());
+        grouped["controls"][5]["options"][0]["group"] = "x".repeat(65).into();
+        assert!(validate(&spec(grouped)).is_err());
 
         let mut bad_refresh = with_assets_menu();
         bad_refresh["controls"][5]["refresh"] = serde_json::json!([""]);

@@ -108,9 +108,13 @@ export function AssetRow({
   );
 }
 
+/** The Voice menu's id (imagine-agent); only its tiles are round. */
+const VOICE_CONTROL = "voice";
+
 /**
  * A prompt `@handle` as a tile in the composer's attachment row, the size of
- * an attachment thumbnail: the asset's image, or a dashed "Not found".
+ * an attachment thumbnail: the asset's image, or a dashed "Not found". Voices
+ * are round; everything else is a rounded square.
  */
 export function HandleTile({
   entry,
@@ -124,6 +128,7 @@ export function HandleTile({
   const title = entry
     ? `${assetSubtitle(entry.option)} · ${entry.option.label}`
     : `@${handle} · not found`;
+  const round = entry?.control.id === VOICE_CONTROL;
   return (
     <div
       className="group relative h-[64px] w-[64px] shrink-0"
@@ -132,17 +137,28 @@ export function HandleTile({
     >
       <div
         className={cn(
-          "flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-2xl border",
+          "relative flex h-full w-full flex-col items-center justify-center overflow-hidden border",
+          round ? "rounded-full" : "rounded-2xl",
           entry
             ? "border-border/70"
             : "border-dashed border-border bg-muted/40 px-1 text-center",
         )}
       >
         {entry ? (
-          <AssetThumb
-            className="h-full w-full rounded-none"
-            option={entry.option}
-          />
+          <>
+            <AssetThumb
+              className="h-full w-full rounded-none"
+              option={entry.option}
+            />
+            <span
+              className={cn(
+                "absolute inset-x-0 bottom-0 truncate bg-background/80 text-center text-3xs text-foreground",
+                round ? "px-3 pb-1" : "px-1",
+              )}
+            >
+              @{handle}
+            </span>
+          </>
         ) : (
           <>
             <span className="max-w-full truncate text-2xs font-medium text-muted-foreground">
@@ -152,14 +168,9 @@ export function HandleTile({
           </>
         )}
       </div>
-      {entry ? (
-        <span className="absolute inset-x-0 bottom-0 truncate rounded-b-2xl bg-background/80 px-1 text-center text-3xs text-foreground">
-          @{handle}
-        </span>
-      ) : null}
       <button
         aria-label={`Remove @${handle}`}
-        className={COMPOSER_MEDIA_REMOVE_CLASS}
+        className={cn(COMPOSER_MEDIA_REMOVE_CLASS, round && "right-0 top-0")}
         onClick={onRemove}
         onMouseDown={(event) => event.preventDefault()}
         type="button"

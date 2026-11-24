@@ -61,13 +61,16 @@ export function useRepositoryFileContentSource({
             cloneUrl: repository.cloneUrls[0] ?? null,
             path,
           }),
-        loadThumbnails: (paths) =>
-          getProjectLocalRepoThumbnails({
-            reposDir,
-            projectDtag: repository.dtag,
-            cloneUrl: repository.cloneUrls[0] ?? null,
-            paths,
-          }),
+        loadThumbnails: (paths, onThumbnail) =>
+          getProjectLocalRepoThumbnails(
+            {
+              reposDir,
+              projectDtag: repository.dtag,
+              cloneUrl: repository.cloneUrls[0] ?? null,
+              paths,
+            },
+            onThumbnail,
+          ),
         mediaUrl: async (path) => {
           const token = await openProjectLocalRepoMedia({
             reposDir,
@@ -115,14 +118,17 @@ export function useRepositoryFileContentSource({
           targetCommit,
           path,
         }),
-      loadThumbnails: (paths) =>
-        getProjectRepoThumbnails({
-          cloneUrl,
-          defaultBranch: activeBranch ?? repository.defaultBranch,
-          targetRef,
-          targetCommit,
-          paths,
-        }),
+      loadThumbnails: (paths, onThumbnail) =>
+        getProjectRepoThumbnails(
+          {
+            cloneUrl,
+            defaultBranch: activeBranch ?? repository.defaultBranch,
+            targetRef,
+            targetCommit,
+            paths,
+          },
+          onThumbnail,
+        ),
       mediaUrl: async (path) =>
         repoMediaUrl(
           await openProjectRepoMedia({

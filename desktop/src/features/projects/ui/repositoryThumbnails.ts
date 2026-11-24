@@ -2,12 +2,16 @@ import type { ProjectRepoFile } from "@/features/projects/hooks";
 import type { ProjectRepoThumbnail } from "@/shared/api/projectGit";
 import { captureFirstFrame, videoMimeForPath } from "./repositoryVideo";
 import { imageMimeForPath } from "./useRepositoryImagePreview";
-import type { RepositoryFileContentSource } from "./useRepositoryFileContent";
+import type {
+  LoadThumbnails,
+  RepositoryFileContentSource,
+} from "./useRepositoryFileContent";
 
 /**
  * Thumbnails are cached one per image, keyed by the commit that last changed
  * it, so a push only costs thumbnails for the images it added or changed.
- * Requests made in the same tick go to the checkout as one load.
+ * Requests made in the same tick go to the checkout as one load, and each
+ * resolves as soon as its own thumbnail arrives.
  */
 const BATCH_LIMIT = 300;
 const THUMBNAIL_CACHE_MS = 60 * 60_000;
@@ -17,7 +21,7 @@ type Versioned = {
   latestCommit: ProjectRepoFile["latestCommit"];
   lastChangedAt?: number | null;
 };
-type Load = (paths: string[]) => Promise<ProjectRepoThumbnail[]>;
+type Load = LoadThumbnails;
 type Request = {
   path: string;
   resolve: (thumbnail: ProjectRepoThumbnail | null) => void;
@@ -28,16 +32,28 @@ const queues = new Map<string, { load: Load; requests: Request[] }>();
 let flushScheduled = false;
 
 function loadChunk(load: Load, requests: Request[]) {
-  const paths = [...new Set(requests.map((request) => request.path))];
-  load(paths).then(
-    (thumbnails) => {
-      const byPath = new Map(thumbnails.map((thumb) => [thumb.path, thumb]));
-      for (const request of requests) {
-        request.resolve(byPath.get(request.path) ?? null);
+  const waiting = new Map<string, Request[]>();
+  for (const request of requests) {
+    waiting.set(request.path, [...(waiting.get(request.path) ?? []), request]);
+  }
+  const settle = (path: string, finish: (request: Request) => void) => {
+    for (const request of waiting.get(path) ?? []) finish(request);
+    waiting.delete(path);
+  };
+  load([...waiting.keys()], (thumbnail) =>
+    settle(thumbnail.path, (request) => request.resolve(thumbnail)),
+  ).then(
+    (made) => {
+      // A made thumbnail still in flight on the channel resolves on arrival.
+      const coming = new Set(made);
+      for (const path of [...waiting.keys()]) {
+        if (!coming.has(path)) settle(path, (request) => request.resolve(null));
       }
     },
     (error) => {
-      for (const request of requests) request.reject(error);
+      for (const path of [...waiting.keys()]) {
+        settle(path, (request) => request.reject(error));
+      }
     },
   );
 }

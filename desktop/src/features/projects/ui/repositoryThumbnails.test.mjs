@@ -24,9 +24,11 @@ const file = (path, hash = "c1") => ({
 
 function recordingLoad() {
   const calls = [];
-  const load = async (paths) => {
+  const load = async (paths, onThumbnail) => {
     calls.push(paths);
-    return paths.filter((path) => !path.startsWith("bad")).map(thumb);
+    const made = paths.filter((path) => !path.startsWith("bad"));
+    for (const path of made) onThumbnail(thumb(path));
+    return made;
   };
   return { calls, load };
 }
@@ -58,6 +60,36 @@ test("a large batch is split into loads of at most 300", async () => {
     calls.map((chunk) => chunk.length),
     [300, 5],
   );
+});
+
+test("each request resolves as its thumbnail arrives", async () => {
+  let finish;
+  const load = (paths, onThumbnail) => {
+    onThumbnail(thumb(paths[0]));
+    return new Promise((resolve) => {
+      finish = () => {
+        onThumbnail(thumb(paths[1]));
+        resolve(paths);
+      };
+    });
+  };
+  const first = requestThumbnail("stream", load, "first.png");
+  const second = requestThumbnail("stream", load, "second.png");
+  assert.deepEqual(await first, thumb("first.png"));
+  finish();
+  assert.deepEqual(await second, thumb("second.png"));
+});
+
+test("a made thumbnail arriving after the load resolves still counts", async () => {
+  let deliver;
+  const load = async (paths, onThumbnail) => {
+    deliver = () => onThumbnail(thumb(paths[0]));
+    return paths;
+  };
+  const pending = requestThumbnail("late", load, "late.png");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  deliver();
+  assert.deepEqual(await pending, thumb("late.png"));
 });
 
 test("a failed load rejects every request in it", async () => {

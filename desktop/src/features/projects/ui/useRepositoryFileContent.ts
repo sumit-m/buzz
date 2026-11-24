@@ -4,13 +4,22 @@ import { useQuery } from "@tanstack/react-query";
 import type { ProjectRepoFile } from "@/features/projects/hooks";
 import type { ProjectRepoThumbnail } from "@/shared/api/projectGit";
 
+/**
+ * Thumbnails from one checkout, each passed to `onThumbnail` as it is made;
+ * resolves to the paths that got one.
+ */
+export type LoadThumbnails = (
+  paths: string[],
+  onThumbnail: (thumbnail: ProjectRepoThumbnail) => void,
+) => Promise<string[]>;
+
 export type RepositoryFileContentSource = {
   cacheKey: readonly unknown[];
   load: (path: string) => Promise<string | null>;
   /** Raw bytes, for files the text preview cannot show (images). */
   loadBytes?: (path: string) => Promise<Uint8Array<ArrayBuffer> | null>;
-  /** Thumbnails for the tiles view, read from one checkout. */
-  loadThumbnails?: (paths: string[]) => Promise<ProjectRepoThumbnail[]>;
+  /** Thumbnails for the tiles view. */
+  loadThumbnails?: LoadThumbnails;
   /** A byte-range URL for a file (videos), or null where there is none. */
   mediaUrl?: (path: string) => Promise<string | null>;
   /** The repository these files are from, for actions that reach its channel. */

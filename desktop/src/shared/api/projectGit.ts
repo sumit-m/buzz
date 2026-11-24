@@ -1,3 +1,5 @@
+import { Channel } from "@tauri-apps/api/core";
+
 import type {
   ProjectLocalRepository,
   ProjectLocalRepoSnapshot,
@@ -241,38 +243,47 @@ export type ProjectRepoThumbnail = {
   dataUrl: string;
 };
 
-/** Thumbnails for repository images from one checkout; unreadable files are left out. */
-export async function getProjectRepoThumbnails(input: {
-  cloneUrl: string;
-  defaultBranch?: string | null;
-  targetRef?: string | null;
-  targetCommit?: string | null;
-  paths: string[];
-}): Promise<ProjectRepoThumbnail[]> {
-  return invokeTauri<ProjectRepoThumbnail[]>("get_project_repo_thumbnails", {
+/**
+ * Thumbnails for repository images from one checkout, each passed to
+ * `onThumbnail` as it is made; resolves to the paths that got one
+ * (unreadable files are left out).
+ */
+export async function getProjectRepoThumbnails(
+  input: {
+    cloneUrl: string;
+    defaultBranch?: string | null;
+    targetRef?: string | null;
+    targetCommit?: string | null;
+    paths: string[];
+  },
+  onThumbnail: (thumbnail: ProjectRepoThumbnail) => void,
+): Promise<string[]> {
+  return invokeTauri<string[]>("get_project_repo_thumbnails", {
     cloneUrl: input.cloneUrl,
     defaultBranch: input.defaultBranch ?? null,
     targetRef: input.targetRef ?? null,
     targetCommit: input.targetCommit ?? null,
     paths: input.paths,
+    onThumbnail: new Channel<ProjectRepoThumbnail>(onThumbnail),
   });
 }
 
-export async function getProjectLocalRepoThumbnails(input: {
-  reposDir?: string | null;
-  projectDtag: string;
-  cloneUrl?: string | null;
-  paths: string[];
-}): Promise<ProjectRepoThumbnail[]> {
-  return invokeTauri<ProjectRepoThumbnail[]>(
-    "get_project_local_repo_thumbnails",
-    {
-      reposDir: input.reposDir ?? null,
-      projectDtag: input.projectDtag,
-      cloneUrl: input.cloneUrl ?? null,
-      paths: input.paths,
-    },
-  );
+export async function getProjectLocalRepoThumbnails(
+  input: {
+    reposDir?: string | null;
+    projectDtag: string;
+    cloneUrl?: string | null;
+    paths: string[];
+  },
+  onThumbnail: (thumbnail: ProjectRepoThumbnail) => void,
+): Promise<string[]> {
+  return invokeTauri<string[]>("get_project_local_repo_thumbnails", {
+    reposDir: input.reposDir ?? null,
+    projectDtag: input.projectDtag,
+    cloneUrl: input.cloneUrl ?? null,
+    paths: input.paths,
+    onThumbnail: new Channel<ProjectRepoThumbnail>(onThumbnail),
+  });
 }
 
 export async function getProjectRepoDiff(input: {

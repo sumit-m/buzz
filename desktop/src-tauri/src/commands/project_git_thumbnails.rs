@@ -1,13 +1,16 @@
 //! Thumbnails for a folder of repository images, for the Files tab's tiles
 //! view. A remote repository fetches only the requested images, into a clone
 //! shared with previews (`project_git_clones`). Files that cannot be
-//! thumbnailed are left out; the renderer shows them as icon tiles.
+//! thumbnailed are left out; the renderer shows them as icon tiles. Each
+//! thumbnail is sent on `on_thumbnail` as soon as it is made, and the command
+//! returns the paths that got one.
 
 use std::io::Cursor;
 use std::path::Path;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::Serialize;
+use tauri::ipc::Channel;
 use tauri::{Manager, State};
 
 use super::project_git_clones::{Freshness, RemoteRepo, RepoClones};
@@ -23,7 +26,7 @@ const MAX_IMAGE_DIMENSION: u32 = 16_384;
 const MAX_IMAGE_PIXELS: u64 = 64_000_000;
 const MAX_SVG_BYTES: u64 = 1024 * 1024;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoThumbnail {
     path: String,
@@ -105,12 +108,28 @@ fn thumbnail_for(repo_dir: &Path, path: &str) -> Option<RepoThumbnail> {
     })
 }
 
-fn thumbnails_from(repo_dir: &Path, paths: &[String]) -> Vec<RepoThumbnail> {
-    paths
-        .iter()
-        .filter(|path| validate_repo_file_path(path).is_ok())
-        .filter_map(|path| thumbnail_for(repo_dir, path))
-        .collect()
+fn thumbnails_from(
+    repo_dir: &Path,
+    paths: &[String],
+    mut emit: impl FnMut(RepoThumbnail),
+) -> Vec<String> {
+    let mut made = Vec::new();
+    for path in paths {
+        if validate_repo_file_path(path).is_err() {
+            continue;
+        }
+        if let Some(thumbnail) = thumbnail_for(repo_dir, path) {
+            made.push(thumbnail.path.clone());
+            emit(thumbnail);
+        }
+    }
+    made
+}
+
+fn sender(channel: Channel<RepoThumbnail>) -> impl FnMut(RepoThumbnail) {
+    move |thumbnail| {
+        let _ = channel.send(thumbnail);
+    }
 }
 
 fn limited(mut paths: Vec<String>) -> Vec<String> {
@@ -125,9 +144,10 @@ pub async fn get_project_repo_thumbnails(
     target_ref: Option<String>,
     target_commit: Option<String>,
     paths: Vec<String>,
+    on_thumbnail: Channel<RepoThumbnail>,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
-) -> Result<Vec<RepoThumbnail>, String> {
+) -> Result<Vec<String>, String> {
     validate_workspace_clone_url(&clone_url, &state)?;
     let paths = limited(paths);
     if paths.is_empty() {
@@ -140,7 +160,7 @@ pub async fn get_project_repo_thumbnails(
         let repo_dir = app
             .state::<RepoClones>()
             .files(&repo, &paths, Freshness::Latest, &auth)?;
-        Ok(thumbnails_from(&repo_dir, &paths))
+        Ok(thumbnails_from(&repo_dir, &paths, sender(on_thumbnail)))
     })
     .await
     .map_err(|error| format!("repo thumbnails task failed: {error}"))?
@@ -152,13 +172,14 @@ pub async fn get_project_local_repo_thumbnails(
     project_dtag: String,
     clone_url: Option<String>,
     paths: Vec<String>,
-) -> Result<Vec<RepoThumbnail>, String> {
+    on_thumbnail: Channel<RepoThumbnail>,
+) -> Result<Vec<String>, String> {
     let paths = limited(paths);
     tauri::async_runtime::spawn_blocking(move || {
         let repo_dir =
             find_local_repo_dir(repos_dir.as_deref(), &project_dtag, clone_url.as_deref())?;
         Ok(repo_dir
-            .map(|dir| thumbnails_from(&dir, &paths))
+            .map(|dir| thumbnails_from(&dir, &paths, sender(on_thumbnail)))
             .unwrap_or_default())
     })
     .await
@@ -199,7 +220,9 @@ mod tests {
         ]
         .map(String::from)
         .to_vec();
-        let thumbs = thumbnails_from(dir.path(), &paths);
+        let mut thumbs = Vec::new();
+        let made = thumbnails_from(dir.path(), &paths, |thumb| thumbs.push(thumb));
+        assert_eq!(made, ["wide.png", "clear.png", "logo.svg"]);
 
         let found: Vec<_> = thumbs
             .iter()
